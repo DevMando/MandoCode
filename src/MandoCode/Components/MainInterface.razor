@@ -1,0 +1,78 @@
+@using MandoCode.Services
+@using Spectre.Console
+@inject AIService AI
+
+<Panel Header="[bold cyan]MandoCode - Local AI Coding Assistant[/]" Border="Rounded">
+    <Rows>
+        <Markup Content="[dim]Powered by Semantic Kernel and Ollama[/]" />
+        <Markup Content="[dim]Type 'exit' to quit, 'clear' to reset conversation[/]" />
+        <Rule />
+
+        @if (!string.IsNullOrEmpty(_currentResponse))
+        {
+            <Panel Header="[green]Assistant[/]" Border="Rounded">
+                <Markup Content="@_currentResponse" />
+            </Panel>
+        }
+
+        @if (_isProcessing)
+        {
+            <Markup Content="[yellow]⏳ Processing...[/]" />
+        }
+    </Rows>
+</Panel>
+
+@code {
+    private string _currentResponse = string.Empty;
+    private bool _isProcessing = false;
+
+    protected override void OnInitialized()
+    {
+        _currentResponse = "[bold green]MandoCode is ready![/]\n\n" +
+                          "[dim]I can help you with:\n" +
+                          "• Reading and analyzing code\n" +
+                          "• Refactoring and improving code\n" +
+                          "• Writing new features\n" +
+                          "• Understanding project structure\n" +
+                          "• Git operations\n\n" +
+                          "What would you like me to help with?[/]";
+    }
+
+    public async Task ProcessUserInput(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return;
+
+        _isProcessing = true;
+        StateHasChanged();
+
+        try
+        {
+            if (input.Trim().ToLower() == "clear")
+            {
+                AI.ClearHistory();
+                _currentResponse = "[green]Conversation cleared. How can I help you?[/]";
+            }
+            else
+            {
+                var response = await AI.ChatAsync(input);
+                _currentResponse = EscapeMarkup(response);
+            }
+        }
+        catch (Exception ex)
+        {
+            _currentResponse = $"[red]Error: {EscapeMarkup(ex.Message)}[/]";
+        }
+        finally
+        {
+            _isProcessing = false;
+            StateHasChanged();
+        }
+    }
+
+    private string EscapeMarkup(string text)
+    {
+        // Escape special characters for Spectre.Console markup
+        return text.Replace("[", "[[").Replace("]", "]]");
+    }
+}
