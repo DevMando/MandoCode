@@ -1,0 +1,194 @@
+@using MandoCode.Models
+@using MandoCode.Services
+@using Spectre.Console
+@inject AIService AI
+@inject MandoCodeConfig Config
+
+<Banner />
+
+<Rows>
+    <Markup Content="@($"Project Root: {_projectRoot}")" Background="Color.Black" />
+    <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
+    <Markup Content="@($"Model: {Config.GetEffectiveModelName()}")" />
+    <Markup Content="" />
+
+    @if (!_isConnected)
+    {
+        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Red">
+            <Rows>
+                <Markup Content="Error: Could not connect to Ollama!" />
+                <Markup Content="Please ensure:" />
+                <Markup Content="  1. Ollama is installed: https://ollama.ai" />
+                <Markup Content="  2. Ollama is running: ollama serve" />
+                <Markup Content="@($"  3. Model is installed: ollama pull {Config.GetEffectiveModelName()}")" />
+                <Markup Content="" />
+                <Markup Content="Or run: mandocode config --help" />
+            </Rows>
+        </Panel>
+    }
+    else
+    {
+        <Markup Content="✓ MandoCode is ready!" />        
+        <HelpDisplay />
+    }
+</Rows>
+
+@code {
+    private string _projectRoot = Environment.CurrentDirectory;
+    protected bool _isConnected { get; set; } = false;
+
+    protected override void OnInitialized()
+    {
+        // Get project root from command line args if available
+        var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+        if (args.Length > 0 && !args[0].StartsWith("config"))
+        {
+            _projectRoot = args[0];
+        }
+
+        // Check Ollama connection synchronously to ensure UI is correct
+        _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
+
+        // If connected, start the interactive loop
+        if (_isConnected)
+        {
+            _ = Task.Run(async () => await RunInteractiveLoopAsync());
+        }
+    }
+
+    private async Task<bool> CheckOllamaConnectionAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var response = await client.GetAsync($"{Config.OllamaEndpoint}/api/tags");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task RunInteractiveLoopAsync()
+    {
+        while (true)
+        {
+            AnsiConsole.Markup("You: ");
+            var input = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(input))
+                continue;
+
+            var command = input.Trim().ToLower();
+
+            // Handle special commands
+            if (command == "exit" || command == "quit")
+            {
+                AnsiConsole.WriteLine("Goodbye!");
+                Environment.Exit(0);
+                return;
+            }
+
+            if (command == "clear")
+            {
+                AI.ClearHistory();
+                Console.Clear();
+                AnsiConsole.WriteLine("Conversation cleared.");
+                continue;
+            }
+
+            if (command == "help")
+            {
+                Console.WriteLine();
+                // Display help (we'll use direct Spectre.Console since HelpDisplay is a component)
+                var table = new Spectre.Console.Table()
+                {
+                    Border = TableBorder.Rounded
+                };
+                table.AddColumn("Command");
+                table.AddColumn("Description");
+                table.AddRow("help", "Show this help message");
+                table.AddRow("config", "Open configuration menu");
+                table.AddRow("clear", "Clear conversation history");
+                table.AddRow("exit, quit", "Exit MandoCode");
+                table.AddRow("anything else", "Chat with the AI assistant");
+                AnsiConsole.Write(table);
+                AnsiConsole.WriteLine();
+                AnsiConsole.WriteLine("Examples:");
+                AnsiConsole.WriteLine("  • What files are in this project?");
+                AnsiConsole.WriteLine("  • Show me the contents of Program.cs");
+                AnsiConsole.WriteLine("  • Refactor the Main method to use async/await");
+                AnsiConsole.WriteLine("  • What's the current git status?");
+                AnsiConsole.WriteLine();
+                continue;
+            }
+
+            if (command == "config")
+            {
+                await HandleConfigCommandAsync();
+                continue;
+            }
+
+            // Process AI request
+            AnsiConsole.WriteLine();
+            await AnsiConsole.Status()
+                .Spinner(Spectre.Console.Spinner.Known.Moon)
+                .StartAsync("Thinking...", async ctx =>
+                {
+                    try
+                    {
+                        var response = await AI.ChatAsync(input);
+
+                        ctx.Status("Done!");
+                        AnsiConsole.WriteLine();
+
+                        var panel = new Spectre.Console.Panel(response)
+                        {
+                            Header = new PanelHeader("MandoCode"),
+                            Border = BoxBorder.Rounded,
+                            BorderStyle = new Style(Color.Green)
+                        };
+
+                        AnsiConsole.Write(panel);
+                        AnsiConsole.WriteLine();
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.WriteLine($"Error: {ex.Message}");
+                        AnsiConsole.WriteLine();
+                    }
+                });
+        }
+    }
+
+    private async Task HandleConfigCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Configuration Options:")
+                .AddChoices(new[]
+                {
+                    "Run configuration wizard",
+                    "View current configuration",
+                    "Cancel"
+                })
+        );
+
+        switch (choice)
+        {
+            case "Run configuration wizard":
+                var updatedConfig = await ConfigurationWizard.RunAsync(Config);
+                AnsiConsole.Clear();
+                AnsiConsole.WriteLine("✓ Configuration updated and applied!\n");
+                break;
+
+            case "View current configuration":
+                AnsiConsole.WriteLine();
+                Config.Display();
+                AnsiConsole.WriteLine();
+                break;
+        }
+    }
+}

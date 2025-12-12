@@ -1,0 +1,75 @@
+@using MandoCode.Models
+@using MandoCode.Services
+@using Spectre.Console
+@inject MandoCodeConfig Config
+
+<Markup Content="" />
+<Panel Title="Configuration Options" Border="@BoxBorder.Rounded">
+    <Rows>
+        <Markup Content="1. Run configuration wizard" />
+        <Markup Content="2. View current configuration" />
+        <Markup Content="3. Cancel" />
+    </Rows>
+</Panel>
+
+@if (_showingConfig)
+{
+    <Markup Content="" />
+    <Panel Title="Current Configuration" Border="@BoxBorder.Rounded">
+        <Rows>
+            <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
+            <Markup Content="@($"Model Name: {Config.ModelName}")" />
+            @if (!string.IsNullOrEmpty(Config.ModelPath))
+            {
+                <Markup Content="@($"Model Path: {Config.ModelPath}")" />
+            }
+            <Markup Content="@($"Temperature: {Config.Temperature}")" />
+            <Markup Content="@($"Max Tokens: {Config.MaxTokens}")" />
+            @if (Config.IgnoreDirectories.Any())
+            {
+                <Markup Content="Ignored Directories:" />
+                foreach (var dir in Config.IgnoreDirectories)
+                {
+                    <Markup Content="@($"  • {dir}")" />
+                }
+            }
+        </Rows>
+    </Panel>
+}
+
+<Prompt Text="Select option (1-3): " OnSubmit="HandleMenuChoice" />
+
+@code {
+    [Parameter]
+    public EventCallback OnComplete { get; set; }
+
+    private bool _showingConfig = false;
+
+    private async Task HandleMenuChoice(string choice)
+    {
+        switch (choice.Trim())
+        {
+            case "1":
+                await RunConfigurationWizardAsync();
+                await OnComplete.InvokeAsync();
+                break;
+
+            case "2":
+                _showingConfig = true;
+                StateHasChanged();
+                break;
+
+            case "3":
+            default:
+                await OnComplete.InvokeAsync();
+                break;
+        }
+    }
+
+    private async Task RunConfigurationWizardAsync()
+    {
+        var updatedConfig = await ConfigurationWizard.RunAsync(Config);
+        // The wizard updates the config in place
+        // No need to reassign, but we could trigger a reload if needed
+    }
+}

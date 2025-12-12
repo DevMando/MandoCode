@@ -2,22 +2,23 @@
 @using Spectre.Console
 @inject AIService AI
 
-<Panel Header="[bold cyan]MandoCode - Local AI Coding Assistant[/]" Border="Rounded">
+
+<Panel Title="MandoCode - Local AI Coding Assistant" Border="@BoxBorder.Rounded">
     <Rows>
-        <Markup Content="[dim]Powered by Semantic Kernel and Ollama[/]" />
-        <Markup Content="[dim]Type 'exit' to quit, 'clear' to reset conversation[/]" />
-        <Rule />
+        <Markup Content="Powered by Semantic Kernel and Ollama" />
+        <Markup Content="Type 'exit' to quit, 'clear' to reset conversation" />
+ @*        <Rule /> *@
 
         @if (!string.IsNullOrEmpty(_currentResponse))
         {
-            <Panel Header="[green]Assistant[/]" Border="Rounded">
+            <Panel Title="Assistant" Border="@BoxBorder.Rounded">
                 <Markup Content="@_currentResponse" />
             </Panel>
         }
 
         @if (_isProcessing)
         {
-            <Markup Content="[yellow]⏳ Processing...[/]" />
+            <Markup Content="⏳ Processing..." />
         }
     </Rows>
 </Panel>
@@ -28,14 +29,14 @@
 
     protected override void OnInitialized()
     {
-        _currentResponse = "[bold green]MandoCode is ready![/]\n\n" +
-                          "[dim]I can help you with:\n" +
+        _currentResponse = "MandoCode is ready!\n\n" +
+                          "I can help you with:\n" +
                           "• Reading and analyzing code\n" +
                           "• Refactoring and improving code\n" +
                           "• Writing new features\n" +
                           "• Understanding project structure\n" +
                           "• Git operations\n\n" +
-                          "What would you like me to help with?[/]";
+                          "What would you like me to help with?";
     }
 
     public async Task ProcessUserInput(string input)
@@ -51,28 +52,22 @@
             if (input.Trim().ToLower() == "clear")
             {
                 AI.ClearHistory();
-                _currentResponse = "[green]Conversation cleared. How can I help you?[/]";
+                _currentResponse = "Conversation context cleared. How can I help you?";
             }
             else
             {
                 var response = await AI.ChatAsync(input);
-                _currentResponse = EscapeMarkup(response);
+                _currentResponse = response;
             }
         }
         catch (Exception ex)
         {
-            _currentResponse = $"[red]Error: {EscapeMarkup(ex.Message)}[/]";
+            _currentResponse = $"Error: {ex.Message}";
         }
         finally
         {
             _isProcessing = false;
             StateHasChanged();
         }
-    }
-
-    private string EscapeMarkup(string text)
-    {
-        // Escape special characters for Spectre.Console markup
-        return text.Replace("[", "[[").Replace("]", "]]");
     }
 }
