@@ -52,7 +52,6 @@ public class AIService
         }
 
         builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
-        builder.Plugins.AddFromObject(new GitPlugin(projectRoot), "Git");
 
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
@@ -91,14 +90,15 @@ public class AIService
             if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
             {
                 return $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
-                       $"MandoCode requires a model with function calling support to use FileSystem and Git plugins.\n\n" +
+                       $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
                        $"Recommended models with tool support:\n" +
+                       $"  • ollama pull qwen2.5-coder:14b\n" +
                        $"  • ollama pull qwen2.5-coder:7b\n" +
                        $"  • ollama pull mistral\n" +
                        $"  • ollama pull llama3.1\n\n" +
                        $"Then update your configuration:\n" +
                        $"  Type 'config' and select 'Run configuration wizard'\n" +
-                       $"  Or run: dotnet run -- config set model qwen2.5-coder:7b";
+                       $"  Or run: dotnet run -- config set model qwen2.5-coder:14b";
             }
 
             return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";

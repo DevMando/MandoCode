@@ -1,0 +1,12 @@
+﻿@using Microsoft.AspNetCore.Components.Web
+@using RazorConsole;
+@using Spectre.Console;
+@using Spectre.Console.Rendering;
+
+<Border BorderColor="Color.Teal">
+<RazorConsole.Components.Figlet Content="MANDOCODE" Color="Color.Green" Justify="Justify.Center" />
+</Border>
+
+@code {
+    public static CancellationTokenSource CancellationTokenSource = new CancellationTokenSource();
+}

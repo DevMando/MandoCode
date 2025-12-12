@@ -1,0 +1,28 @@
+@using Spectre.Console
+
+@code {
+    [Parameter]
+    public string Text { get; set; } = "> ";
+
+    [Parameter]
+    public EventCallback<string> OnSubmit { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await GetInputAsync();
+        }
+    }
+
+    private async Task GetInputAsync()
+    {
+        AnsiConsole.Markup(Text);
+        var input = Console.ReadLine();
+
+        if (!string.IsNullOrEmpty(input))
+        {
+            await OnSubmit.InvokeAsync(input);
+        }
+    }
+}
