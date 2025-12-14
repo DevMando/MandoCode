@@ -130,35 +130,25 @@
                 continue;
             }
 
-            // Process AI request
+            // Process AI request with streaming
             AnsiConsole.WriteLine();
-            await AnsiConsole.Status()
-                .Spinner(Spectre.Console.Spinner.Known.Moon)
-                .StartAsync("Thinking...", async ctx =>
+            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+            AnsiConsole.WriteLine();
+
+            try
+            {
+                await foreach (var chunk in AI.ChatStreamAsync(input))
                 {
-                    try
-                    {
-                        var response = await AI.ChatAsync(input);
-
-                        ctx.Status("Done!");
-                        AnsiConsole.WriteLine();
-
-                        var panel = new Spectre.Console.Panel(response)
-                        {
-                            Header = new PanelHeader("MandoCode"),
-                            Border = BoxBorder.Rounded,
-                            BorderStyle = new Style(Color.Green)
-                        };
-
-                        AnsiConsole.Write(panel);
-                        AnsiConsole.WriteLine();
-                    }
-                    catch (Exception ex)
-                    {
-                        AnsiConsole.WriteLine($"Error: {ex.Message}");
-                        AnsiConsole.WriteLine();
-                    }
-                });
+                    AnsiConsole.Markup(chunk);
+                }
+                AnsiConsole.WriteLine();
+                AnsiConsole.WriteLine();
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.WriteLine($"Error: {ex.Message}");
+                AnsiConsole.WriteLine();
+            }
         }
     }
 
