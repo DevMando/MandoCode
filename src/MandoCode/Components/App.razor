@@ -10,7 +10,6 @@
     <Markup Content="@($"Project Root: {_projectRoot}")" Background="Color.Black" />
     <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
     <Markup Content="@($"Model: {Config.GetEffectiveModelName()}")" />
-    <Markup Content="" />
 
     @if (!_isConnected)
     {
@@ -36,6 +35,7 @@
 @code {
     private string _projectRoot = Environment.CurrentDirectory;
     protected bool _isConnected { get; set; } = false;
+    private bool _hasRendered = false;
 
     protected override void OnInitialized()
     {
@@ -48,10 +48,15 @@
 
         // Check Ollama connection synchronously to ensure UI is correct
         _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
+    }
 
-        // If connected, start the interactive loop
-        if (_isConnected)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _isConnected && !_hasRendered)
         {
+            _hasRendered = true;
+            // Add a small delay to ensure UI is fully rendered
+            await Task.Delay(100);
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
         }
     }
