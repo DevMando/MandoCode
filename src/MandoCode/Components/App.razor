@@ -152,10 +152,39 @@
 
             try
             {
-                await foreach (var chunk in AI.ChatStreamAsync(input))
+                var receivedFirstChunk = false;
+                var enumerator = AI.ChatStreamAsync(input).GetAsyncEnumerator();
+
+                try
                 {
-                    AnsiConsole.Markup(chunk);
+                    // Show loading spinner with fun message until first chunk arrives
+                    await AnsiConsole.Status()
+                        .Spinner(Spectre.Console.Spinner.Known.Dots)
+                        .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                        {
+                            // Wait for first chunk
+                            if (await enumerator.MoveNextAsync())
+                            {
+                                receivedFirstChunk = true;
+                            }
+                        });
+
+                    // Output first chunk and continue streaming
+                    if (receivedFirstChunk)
+                    {
+                        AnsiConsole.Markup(enumerator.Current);
+
+                        while (await enumerator.MoveNextAsync())
+                        {
+                            AnsiConsole.Markup(enumerator.Current);
+                        }
+                    }
                 }
+                finally
+                {
+                    await enumerator.DisposeAsync();
+                }
+
                 AnsiConsole.WriteLine();
                 AnsiConsole.WriteLine();
             }
