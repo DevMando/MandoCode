@@ -75,62 +75,72 @@
         while (true)
         {
             AnsiConsole.Markup("You: ");
-            var input = Console.ReadLine();
+            var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
 
-            var command = input.Trim().ToLower();
-
-            // Handle special commands
-            if (command == "exit" || command == "quit")
+            // Check if this is a command (starts with /)
+            if (CommandAutocomplete.IsCommand(input))
             {
-                AnsiConsole.WriteLine("Goodbye!");
-                Environment.Exit(0);
-                return;
-            }
+                var command = CommandAutocomplete.GetCommandName(input);
 
-            if (command == "clear")
-            {
-                AI.ClearHistory();
-                Console.Clear();
-                AnsiConsole.WriteLine("Conversation cleared.");
-                continue;
-            }
-
-            if (command == "help")
-            {
-                Console.WriteLine();
-                // Display help (we'll use direct Spectre.Console since HelpDisplay is a component)
-                var table = new Spectre.Console.Table()
+                // Handle special commands
+                if (command == "exit" || command == "quit")
                 {
-                    Border = TableBorder.Rounded
-                };
-                table.AddColumn("Command");
-                table.AddColumn("Description");
-                table.AddRow("help", "Show this help message");
-                table.AddRow("config", "Open configuration menu");
-                table.AddRow("clear", "Clear conversation history");
-                table.AddRow("exit, quit", "Exit MandoCode");
-                table.AddRow("anything else", "Chat with the AI assistant");
-                AnsiConsole.Write(table);
-                AnsiConsole.WriteLine();
-                AnsiConsole.WriteLine("Examples:");
-                AnsiConsole.WriteLine("  • What files are in this project?");
-                AnsiConsole.WriteLine("  • Show me the contents of Program.cs");
-                AnsiConsole.WriteLine("  • Refactor the Main method to use async/await");
-                AnsiConsole.WriteLine("  • What's the current git status?");
+                    AnsiConsole.WriteLine("Goodbye!");
+                    Environment.Exit(0);
+                    return;
+                }
+
+                if (command == "clear")
+                {
+                    AI.ClearHistory();
+                    Console.Clear();
+                    AnsiConsole.WriteLine("Conversation cleared.");
+                    continue;
+                }
+
+                if (command == "help")
+                {
+                    Console.WriteLine();
+                    // Display help (we'll use direct Spectre.Console since HelpDisplay is a component)
+                    var table = new Spectre.Console.Table()
+                    {
+                        Border = TableBorder.Rounded
+                    };
+                    table.AddColumn("Command");
+                    table.AddColumn("Description");
+                    table.AddRow("/help", "Show this help message");
+                    table.AddRow("/config", "Open configuration menu");
+                    table.AddRow("/clear", "Clear conversation history");
+                    table.AddRow("/exit, /quit", "Exit MandoCode");
+                    table.AddRow("anything else", "Chat with the AI assistant");
+                    AnsiConsole.Write(table);
+                    AnsiConsole.WriteLine();
+                    AnsiConsole.WriteLine("Examples:");
+                    AnsiConsole.WriteLine("  • What files are in this project?");
+                    AnsiConsole.WriteLine("  • Show me the contents of Program.cs");
+                    AnsiConsole.WriteLine("  • Refactor the Main method to use async/await");
+                    AnsiConsole.WriteLine("  • What's the current git status?");
+                    AnsiConsole.WriteLine();
+                    continue;
+                }
+
+                if (command == "config")
+                {
+                    await HandleConfigCommandAsync();
+                    continue;
+                }
+
+                // Unknown command
+                AnsiConsole.MarkupLine($"[red]Unknown command: {input}[/]");
+                AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
                 AnsiConsole.WriteLine();
                 continue;
             }
 
-            if (command == "config")
-            {
-                await HandleConfigCommandAsync();
-                continue;
-            }
-
-            // Process AI request with streaming
+            // Process AI request with streaming (non-command input)
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[green]MandoCode:[/]");
             AnsiConsole.WriteLine();
