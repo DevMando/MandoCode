@@ -17,7 +17,7 @@
 
     private async Task GetInputAsync()
     {
-        AnsiConsole.Markup(Text);
+        AnsiConsole.Write(Text);
         var input = Console.ReadLine();
 
         if (!string.IsNullOrEmpty(input))
