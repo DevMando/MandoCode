@@ -24,17 +24,11 @@ public class AIService
     private readonly ChatHistory _chatHistory;
     private readonly string _systemPrompt;
     private readonly MandoCodeConfig _config;
-    private readonly OllamaPromptExecutionSettings _settings;
 
     public AIService(string projectRoot, MandoCodeConfig config)
     {
         _config = config;
         _systemPrompt = SystemPrompts.MandoCodeAssistant;
-        _settings = new()
-        {
-            Temperature = (float)_config.Temperature,
-            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
-        };
 
         // Build the kernel with Ollama as the AI service
         var builder = Kernel.CreateBuilder();
@@ -69,20 +63,82 @@ public class AIService
 
         try
         {
-            // Get the response with automatic function calling
-            var response = await _chatService.GetChatMessageContentAsync(
-                _chatHistory,
-                _settings,
-                _kernel
-            );
-
-            // Add the final response to history
-            if (!string.IsNullOrEmpty(response.Content))
+            // Create settings for this request
+            OllamaPromptExecutionSettings settings = new()
             {
-                _chatHistory.AddAssistantMessage(response.Content);
+                Temperature = (float)_config.Temperature,
+                FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
+            };
+
+            // Manual function calling loop to handle Ollama connector issues
+            const int maxIterations = 10;
+            int iteration = 0;
+
+            while (iteration < maxIterations)
+            {
+                iteration++;
+
+                // Get the response with function calling enabled
+                var response = await _chatService.GetChatMessageContentAsync(
+                    _chatHistory,
+                    settings,
+                    _kernel
+                );
+
+                // Add the assistant's response to history
+                _chatHistory.Add(response);
+
+                // Check if there are any function calls to process
+                var functionCalls = response.Items.OfType<FunctionCallContent>().ToList();
+
+                if (!functionCalls.Any())
+                {
+                    // No function calls, return the final response
+                    return response.Content ?? "No response from AI.";
+                }
+
+                // Process each function call
+                foreach (var functionCall in functionCalls)
+                {
+                    try
+                    {
+                        // Get the function from the kernel
+                        var function = _kernel.Plugins.GetFunction(functionCall.PluginName, functionCall.FunctionName);
+
+                        // Invoke the function
+                        var result = await function.InvokeAsync(_kernel, functionCall.Arguments);
+
+                        // Add the function result to chat history
+                        _chatHistory.Add(new ChatMessageContent(
+                            AuthorRole.Tool,
+                            [
+                                new FunctionResultContent(
+                                    functionCall,
+                                    result.ToString()
+                                )
+                            ]
+                        ));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Add error result to history
+                        _chatHistory.Add(new ChatMessageContent(
+                            AuthorRole.Tool,
+                            [
+                                new FunctionResultContent(
+                                    functionCall,
+                                    $"Error executing function: {ex.Message}"
+                                )
+                            ]
+                        ));
+                    }
+                }
+
+                // Continue the loop to get the next response from the model
             }
 
-            return response.Content ?? "No response from AI.";
+            // If we've hit max iterations, return the last response
+            return "Maximum function call iterations reached. Please try rephrasing your request.";
         }
         catch (Exception ex)
         {
@@ -102,76 +158,6 @@ public class AIService
             }
 
             return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
-        }
-    }
-
-    /// <summary>
-    /// Sends a message to the AI and streams the response chunk by chunk.
-    /// </summary>
-    public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage)
-    {
-        _chatHistory.AddUserMessage(userMessage);
-        var fullResponse = string.Empty;
-        var hasError = false;
-        var errorMessage = string.Empty;
-
-        IAsyncEnumerable<StreamingChatMessageContent>? streamingResponse = null;
-
-        // Attempt to get the streaming response
-        try
-        {
-            streamingResponse = _chatService.GetStreamingChatMessageContentsAsync(
-                _chatHistory,
-                _settings,
-                _kernel
-            );
-        }
-        catch (Exception ex)
-        {
-            hasError = true;
-            // Check if the error is about tool support
-            if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
-            {
-                errorMessage = $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
-                       $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
-                       $"Recommended models with tool support:\n" +
-                       $"  • ollama pull qwen2.5-coder:14b\n" +
-                       $"  • ollama pull qwen2.5-coder:7b\n" +
-                       $"  • ollama pull mistral\n" +
-                       $"  • ollama pull llama3.1\n\n" +
-                       $"Then update your configuration:\n" +
-                       $"  Type 'config' and select 'Run configuration wizard'\n" +
-                       $"  Or run: dotnet run -- config set model qwen2.5-coder:14b";
-            }
-            else
-            {
-                errorMessage = $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
-            }
-        }
-
-        if (hasError)
-        {
-            yield return errorMessage;
-            yield break;
-        }
-
-        // Stream the response chunks
-        if (streamingResponse != null)
-        {
-            await foreach (var chunk in streamingResponse)
-            {
-                if (!string.IsNullOrEmpty(chunk.Content))
-                {
-                    fullResponse += chunk.Content;
-                    yield return chunk.Content;
-                }
-            }
-
-            // Add the complete response to history
-            if (!string.IsNullOrEmpty(fullResponse))
-            {
-                _chatHistory.AddAssistantMessage(fullResponse);
-            }
         }
     }
 
