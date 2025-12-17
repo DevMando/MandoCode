@@ -101,7 +101,15 @@
                 if (command == "clear")
                 {
                     AI.ClearHistory();
-                    Console.Clear();
+                    try
+                    {
+                        Console.Clear();
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Console.Clear can fail with large buffers, just continue
+                        AnsiConsole.WriteLine(new string('\n', 3));
+                    }
                     AnsiConsole.WriteLine("Conversation cleared.");
                     continue;
                 }
@@ -194,7 +202,15 @@
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(Config);
-                AnsiConsole.Clear();
+                try
+                {
+                    AnsiConsole.Clear();
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // AnsiConsole.Clear can fail with large buffers
+                    Console.WriteLine(new string('\n', 3));
+                }
                 AnsiConsole.WriteLine("✓ Configuration updated and applied!\n");
                 break;
 
