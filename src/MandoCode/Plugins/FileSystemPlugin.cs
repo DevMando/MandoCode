@@ -34,8 +34,8 @@ public class FileSystemPlugin
     /// <summary>
     /// Lists all project files recursively, excluding ignored directories.
     /// </summary>
-    [KernelFunction("list_all_project_files")]
-    [Description("Lists all project files recursively, excluding ignored directories like .git, node_modules, bin, obj, etc.")]
+    [KernelFunction("list_all_files")]
+    [Description("Lists ALL project files recursively (excluding .git, node_modules, bin, obj, etc.). Use this when the user asks 'what files are in the project', 'show all files', or 'list files'.")]
     public async Task<string> ListAllProjectFiles()
     {
         try
@@ -59,10 +59,10 @@ public class FileSystemPlugin
     /// <summary>
     /// Lists files matching a specific glob pattern.
     /// </summary>
-    [KernelFunction("list_files_match_glob_pattern")]
-    [Description("Lists files matching a glob pattern. Examples: '*.cs', '*.js', 'src/**/*.ts', '*.*'")]
+    [KernelFunction("list_files_by_pattern")]
+    [Description("Lists files matching a specific glob pattern or extension. Use when the user wants to find files of a certain type (e.g., 'find all .js files', 'list C# files').")]
     public async Task<string> ListFiles(
-        [Description("Glob pattern to match files (e.g., '*.cs', '*.js', 'src/**/*.ts')")] string pattern)
+        [Description("Glob pattern (e.g., '*.cs' for C# files, '*.js' for JavaScript, 'src/**/*.ts' for TypeScript in src folder)")] string pattern)
     {
         try
         {
@@ -88,10 +88,10 @@ public class FileSystemPlugin
     /// <summary>
     /// Reads the contents of a file.
     /// </summary>
-    [KernelFunction("read_file_contents")]
-    [Description("Reads the complete contents of a file. Use relative path from project root.")]
+    [KernelFunction("read_file")]
+    [Description("Reads and returns the complete contents of a file. Always use this when the user asks to 'show', 'read', 'view', or 'display' a file's contents.")]
     public async Task<string> ReadFile(
-        [Description("Relative path to the file from project root")] string relativePath)
+        [Description("Relative path to the file from project root (e.g., 'app.js', 'src/Program.cs')")] string relativePath)
     {
         try
         {
@@ -119,10 +119,10 @@ public class FileSystemPlugin
     /// Writes content to a file, creating it if it doesn't exist.
     /// </summary>
     [KernelFunction("write_file")]
-    [Description("Writes content to a file. Creates the file and directories if they don't exist. Overwrites existing files.")]
+    [Description("IMPORTANT: Use this function to CREATE or UPDATE a file with content. This is the PRIMARY function for writing files. Creates the file and all parent directories automatically. Overwrites existing files. Always use this when the user asks to 'create a file', 'write a file', or 'save content to a file'.")]
     public async Task<string> WriteFile(
-        [Description("Relative path to the file from project root")] string relativePath,
-        [Description("Content to write to the file")] string content)
+        [Description("Relative path to the file from project root (e.g., 'test.txt', 'src/app.js', 'docs/readme.md')")] string relativePath,
+        [Description("The complete content to write to the file")] string content)
     {
         try
         {
@@ -148,13 +148,26 @@ public class FileSystemPlugin
     }
 
     /// <summary>
+    /// Creates or updates a file with content, with verbose confirmation.
+    /// </summary>
+    [KernelFunction("create_file")]
+    [Description("Creates a NEW file or updates an EXISTING file. This is an alias for write_file with the same behavior - use either one. Automatically creates parent directories. Use this when user says 'create', 'make', or 'generate' a file.")]
+    public async Task<string> CreateFile(
+        [Description("Relative path to the file (e.g., 'config.json', 'src/utils/helper.js')")] string relativePath,
+        [Description("The content to write into the file")] string content)
+    {
+        // Delegate to WriteFile - this is just a semantic alias for LLMs
+        return await WriteFile(relativePath, content);
+    }
+
+    /// <summary>
     /// Searches for text within files.
     /// </summary>
-    [KernelFunction("search_text_in_files")]
-    [Description("Searches for text within files matching a pattern. Returns file paths and line numbers where text is found.")]
+    [KernelFunction("search_in_files")]
+    [Description("Searches for specific text within files. Returns file paths and line numbers where matches are found. Use when the user asks to 'find', 'search for', or 'locate' text in the codebase.")]
     public async Task<string> FindInFiles(
-        [Description("Glob pattern to match files (e.g., '*.cs', '*.js')")] string pattern,
-        [Description("Text to search for")] string searchText)
+        [Description("Glob pattern to filter files (e.g., '*.cs' for C# files, '*.*' for all files)")] string pattern,
+        [Description("The text or code snippet to search for")] string searchText)
     {
         try
         {
