@@ -159,7 +159,7 @@
                 {
                     // Show loading spinner with fun message until first chunk arrives
                     await AnsiConsole.Status()
-                        .Spinner(LoadingSpinners.GetRandom())
+                        .Spinner(Spectre.Console.Spinner.Known.Dots)
                         .StartAsync(LoadingMessages.GetRandom(), async ctx =>
                         {
                             // Wait for first chunk
