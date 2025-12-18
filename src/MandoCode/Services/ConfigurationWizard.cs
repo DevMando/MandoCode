@@ -16,8 +16,7 @@ public class ConfigurationWizard
     {
         var config = existingConfig ?? MandoCodeConfig.CreateDefault();
 
-        // Safe clear: Fall back to Console.Clear if AnsiConsole.Clear fails
-        SafeClearConsole();
+        AnsiConsole.Clear();
         DisplayWizardHeader();
 
         // Step 1: Ollama Endpoint
@@ -49,43 +48,9 @@ public class ConfigurationWizard
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
-
-        try
-        {
-            Console.ReadKey(true);
-        }
-        catch (InvalidOperationException)
-        {
-            // Handle case where input is redirected or not available
-            await Task.Delay(1000);
-        }
+        Console.ReadKey(true);
 
         return config;
-    }
-
-    /// <summary>
-    /// Safely clears the console, falling back to Console.Clear if AnsiConsole fails.
-    /// </summary>
-    private static void SafeClearConsole()
-    {
-        try
-        {
-            AnsiConsole.Clear();
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            // AnsiConsole.Clear() can fail with large console buffers
-            // Fall back to standard Console.Clear()
-            try
-            {
-                Console.Clear();
-            }
-            catch
-            {
-                // If both fail, just add some spacing
-                Console.WriteLine(new string('\n', 3));
-            }
-        }
     }
 
     private static void DisplayWizardHeader()
@@ -121,11 +86,11 @@ public class ConfigurationWizard
         );
 
         // Test connection
-        await AnsiConsole.Status()
+        AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync("[yellow]Testing connection to Ollama...[/]", async ctx =>
+            .Start("[yellow]Testing connection to Ollama...[/]", ctx =>
             {
-                var isConnected = await TestOllamaConnection(endpoint);
+                var isConnected = TestOllamaConnection(endpoint).GetAwaiter().GetResult();
                 if (isConnected)
                 {
                     AnsiConsole.MarkupLine("[green]✓ Connected successfully![/]");
@@ -141,7 +106,7 @@ public class ConfigurationWizard
         return endpoint;
     }
 
-    private static async Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
+    private static Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
     {
         AnsiConsole.Write(new Rule("[yellow]2. Model Selection[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -161,7 +126,7 @@ public class ConfigurationWizard
         switch (modelChoice)
         {
             case "Select from available Ollama models":
-                var availableModels = await GetAvailableOllamaModels(config.OllamaEndpoint);
+                var availableModels = GetAvailableOllamaModels(config.OllamaEndpoint).GetAwaiter().GetResult();
                 if (availableModels.Any())
                 {
                     var selectedModel = AnsiConsole.Prompt(
@@ -203,7 +168,7 @@ public class ConfigurationWizard
         }
 
         AnsiConsole.WriteLine();
-        return config;
+        return Task.FromResult(config);
     }
 
     private static double ConfigureTemperature(double currentTemperature)
