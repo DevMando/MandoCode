@@ -79,7 +79,7 @@
     {
         while (true)
         {
-            AnsiConsole.Write("You: ");
+            AnsiConsole.Markup("You: ");
             var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
             if (string.IsNullOrWhiteSpace(input))
@@ -139,39 +139,59 @@
                 }
 
                 // Unknown command
-                AnsiConsole.WriteLine($"Unknown command: {input}");
-                AnsiConsole.WriteLine("Type /help for available commands");
+                AnsiConsole.MarkupLine($"[red]Unknown command: {input}[/]");
+                AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
                 AnsiConsole.WriteLine();
                 continue;
             }
 
-            // Process AI request with auto-invocation (non-command input)
+            // Process AI request with streaming (non-command input)
             AnsiConsole.WriteLine();
-            AnsiConsole.WriteLine("MandoCode:");
+            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
             AnsiConsole.WriteLine();
 
             try
             {
-                string response = string.Empty;
+                var receivedFirstChunk = false;
+                var enumerator = AI.ChatStreamAsync(input).GetAsyncEnumerator();
 
-                // Show loading spinner during AI processing (including function calls)
-                await AnsiConsole.Status()
-                    .Spinner(LoadingSpinners.GetRandom())
-                    .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                try
+                {
+                    // Show loading spinner with fun message until first chunk arrives
+                    await AnsiConsole.Status()
+                        .Spinner(LoadingSpinners.GetRandom())
+                        .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                        {
+                            // Wait for first chunk
+                            if (await enumerator.MoveNextAsync())
+                            {
+                                receivedFirstChunk = true;
+                            }
+                        });
+
+                    // Output first chunk and continue streaming
+                    if (receivedFirstChunk)
                     {
-                        // Use non-streaming API for proper auto-invocation
-                        response = await AI.ChatAsync(input);
-                    });
+                        AnsiConsole.Markup(enumerator.Current);
 
-                // Output the final response after all function calls complete
-                // Use Console.WriteLine to completely avoid any Spectre.Console markup parsing
-                Console.WriteLine(response);
-                Console.WriteLine();
+                        while (await enumerator.MoveNextAsync())
+                        {
+                            AnsiConsole.Markup(enumerator.Current);
+                        }
+                    }
+                }
+                finally
+                {
+                    await enumerator.DisposeAsync();
+                }
+
+                AnsiConsole.WriteLine();
+                AnsiConsole.WriteLine();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error: {ex.Message}");
-                Console.WriteLine();
+                AnsiConsole.WriteLine($"Error: {ex.Message}");
+                AnsiConsole.WriteLine();
             }
         }
     }
