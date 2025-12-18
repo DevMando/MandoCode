@@ -102,17 +102,11 @@ public class AIService
                 {
                     try
                     {
-                        // Log function execution for debugging
-                        Console.WriteLine($"[Function Call] {functionCall.PluginName}.{functionCall.FunctionName}");
-
                         // Get the function from the kernel
                         var function = _kernel.Plugins.GetFunction(functionCall.PluginName, functionCall.FunctionName);
 
                         // Invoke the function
                         var result = await function.InvokeAsync(_kernel, functionCall.Arguments);
-
-                        // Log success
-                        Console.WriteLine($"[Function Success] {functionCall.FunctionName} executed");
 
                         // Add the function result to chat history
                         _chatHistory.Add(new ChatMessageContent(
@@ -127,9 +121,6 @@ public class AIService
                     }
                     catch (Exception ex)
                     {
-                        // Log error
-                        Console.WriteLine($"[Function Error] {functionCall.FunctionName}: {ex.Message}");
-
                         // Add error result to history
                         _chatHistory.Add(new ChatMessageContent(
                             AuthorRole.Tool,
