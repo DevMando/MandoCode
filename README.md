@@ -61,11 +61,52 @@ MandoCode provides project-wide intelligence across **any file type**, including
 
 The model can:
 
-- Discover files using listing tools  
-- Read any file via `fs.ReadFile()`  
-- Modify multiple files per request  
-- Produce separate diffs per file  
-- Plan changes across multiple languages  
+- Discover files using listing tools
+- Read any file via `fs.ReadFile()`
+- Modify multiple files per request
+- Produce separate diffs per file
+- Plan changes across multiple languages
+
+---
+
+## 📋 Task Planner
+
+MandoCode includes an intelligent **Task Planner** for handling complex, multi-step requests:
+
+### How It Works
+
+1. **Complexity Detection** - Automatically identifies complex requests that need planning
+2. **Plan Generation** - AI creates a step-by-step execution plan
+3. **User Approval** - Review and approve before execution
+4. **Sequential Execution** - Each step runs with progress tracking and error handling
+
+### Smart Detection
+
+The planner triggers for requests like:
+- "Create a tic-tac-toe game with HTML, CSS, and JavaScript"
+- "Build an API endpoint with authentication"
+- Numbered lists with multiple tasks
+
+Questions and simple requests bypass planning automatically.
+
+### Key Features
+
+- **Event-based completion tracking** - Ensures each step fully completes before proceeding
+- **Retry with exponential backoff** - Automatic recovery from transient connection errors
+- **Intelligent deduplication** - Prevents duplicate operations (2s for reads, 5s for writes)
+- **Fallback function parsing** - Handles models that output function calls as text
+
+### Configuration
+
+```json
+{
+  "enableTaskPlanning": true,
+  "functionDeduplicationWindowSeconds": 5,
+  "maxRetryAttempts": 2
+}
+```
+
+See [Task Planner Documentation](src/MandoCode/docs/TaskPlannerFeature.md) for details.
 
 ---
 

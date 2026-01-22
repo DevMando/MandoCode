@@ -29,7 +29,7 @@ public class FunctionCall : StreamEvent
 /// <summary>
 /// Result of a function call execution.
 /// </summary>
-public class FunctionResult : StreamEvent
+public class FunctionExecutionResult : StreamEvent
 {
     public string FunctionName { get; set; } = string.Empty;
     public string Result { get; set; } = string.Empty;
