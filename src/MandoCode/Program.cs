@@ -58,6 +58,14 @@ class Program
                 return new AIService(projectRoot, cfg);
             });
 
+            // Register TaskPlannerService as singleton
+            services.AddSingleton(provider =>
+            {
+                var aiService = provider.GetRequiredService<AIService>();
+                var cfg = provider.GetRequiredService<MandoCodeConfig>();
+                return new TaskPlannerService(aiService, cfg);
+            });
+
             // Configure console options
             services.Configure<ConsoleAppOptions>(options =>
             {
@@ -130,6 +138,7 @@ class Program
         Console.WriteLine("  • modelPath       - Path to local model file");
         Console.WriteLine("  • temperature     - Temperature (0.0-1.0)");
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
+        Console.WriteLine("  • taskPlanning    - Enable/disable task planning (true/false)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode config show");
@@ -183,6 +192,20 @@ class Program
                 else
                 {
                     Console.WriteLine("Error: Max tokens must be a positive integer");
+                    return;
+                }
+                break;
+
+            case "taskplanning":
+            case "enabletaskplanning":
+                if (bool.TryParse(value, out var enablePlanning))
+                {
+                    config.EnableTaskPlanning = enablePlanning;
+                    Console.WriteLine($"✓ Task planning {(enablePlanning ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
                     return;
                 }
                 break;

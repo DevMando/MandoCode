@@ -47,6 +47,33 @@ public class MandoCodeConfig
     public List<string> IgnoreDirectories { get; set; } = new();
 
     /// <summary>
+    /// Enable task planning for complex requests.
+    /// When enabled, complex requests are broken down into multiple steps.
+    /// </summary>
+    [JsonPropertyName("enableTaskPlanning")]
+    public bool EnableTaskPlanning { get; set; } = true;
+
+    /// <summary>
+    /// Enable fallback parsing for function calls output as JSON text.
+    /// Some local models output function calls as text instead of proper tool calls.
+    /// </summary>
+    [JsonPropertyName("enableFallbackFunctionParsing")]
+    public bool EnableFallbackFunctionParsing { get; set; } = true;
+
+    /// <summary>
+    /// Default deduplication window in seconds for function calls.
+    /// Prevents duplicate function invocations within this time window.
+    /// </summary>
+    [JsonPropertyName("functionDeduplicationWindowSeconds")]
+    public int FunctionDeduplicationWindowSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Maximum number of retry attempts for transient errors.
+    /// </summary>
+    [JsonPropertyName("maxRetryAttempts")]
+    public int MaxRetryAttempts { get; set; } = 2;
+
+    /// <summary>
     /// Loads configuration from file, or creates a default one if it doesn't exist.
     /// </summary>
     public static MandoCodeConfig Load(string? configPath = null)
@@ -149,7 +176,8 @@ public class MandoCodeConfig
             {
                 ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
                 "packages", "dist", "build", "__pycache__", ".idea"
-            }
+            },
+            EnableTaskPlanning = true
         };
     }
 
@@ -171,6 +199,10 @@ public class MandoCodeConfig
         {
             Console.WriteLine($"  Ignore Directories: {string.Join(", ", IgnoreDirectories)}");
         }
+        Console.WriteLine($"  Task Planning: {(EnableTaskPlanning ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  Fallback Function Parsing: {(EnableFallbackFunctionParsing ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
+        Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");
     }
 }
