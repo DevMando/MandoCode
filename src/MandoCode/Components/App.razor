@@ -444,6 +444,10 @@
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(Config);
+                // Reconfigure the AI service to use the new model/endpoint
+                AI.Reconfigure(updatedConfig);
+                // Update connection status
+                _isConnected = await CheckOllamaConnectionAsync();
                 AnsiConsole.Clear();
                 AnsiConsole.WriteLine("✓ Configuration updated and applied!\n");
                 break;

@@ -21,14 +21,15 @@ namespace MandoCode.Services;
 /// </summary>
 public class AIService
 {
-    private readonly Kernel _kernel;
-    private readonly IChatCompletionService _chatService;
+    private Kernel _kernel = null!;
+    private IChatCompletionService _chatService = null!;
     private readonly ChatHistory _chatHistory;
     private readonly string _systemPrompt;
     private readonly MandoCodeConfig _config;
-    private readonly OllamaPromptExecutionSettings _settings;
+    private OllamaPromptExecutionSettings _settings = null!;
     private readonly FunctionInvocationFilter _functionFilter;
     private readonly FunctionCompletionTracker _completionTracker;
+    private readonly string _projectRoot;
 
     /// <summary>
     /// Event raised when a function is about to be invoked.
@@ -47,33 +48,9 @@ public class AIService
 
     public AIService(string projectRoot, MandoCodeConfig config)
     {
+        _projectRoot = projectRoot;
         _config = config;
         _systemPrompt = SystemPrompts.MandoCodeAssistant;
-        _settings = new()
-        {
-            Temperature = (float)_config.Temperature,
-            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
-        };
-
-        // Build the kernel with Ollama as the AI service
-        var builder = Kernel.CreateBuilder();
-
-        builder.AddOllamaChatCompletion(
-            modelId: config.GetEffectiveModelName(),
-            endpoint: new Uri(config.OllamaEndpoint)
-        );
-
-        // Add plugins with custom ignore directories if configured
-        var fileSystemPlugin = new FileSystemPlugin(projectRoot);
-        if (config.IgnoreDirectories.Any())
-        {
-            fileSystemPlugin.AddIgnoreDirectories(config.IgnoreDirectories);
-        }
-
-        builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
-
-        _kernel = builder.Build();
-        _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
         // Initialize completion tracker for event-based completion detection
         _completionTracker = new FunctionCompletionTracker();
@@ -87,10 +64,68 @@ public class AIService
         _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
         _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
 
-        _kernel.FunctionInvocationFilters.Add(_functionFilter);
+        // Build kernel and settings
+        RebuildKernel();
 
         // Initialize chat history with system prompt
         _chatHistory = new ChatHistory(_systemPrompt);
+    }
+
+    /// <summary>
+    /// Reconfigures the AI service with updated configuration.
+    /// Call this when the model or endpoint changes.
+    /// </summary>
+    public void Reconfigure(MandoCodeConfig newConfig)
+    {
+        // Update config reference
+        _config.OllamaEndpoint = newConfig.OllamaEndpoint;
+        _config.ModelName = newConfig.ModelName;
+        _config.ModelPath = newConfig.ModelPath;
+        _config.Temperature = newConfig.Temperature;
+        _config.MaxTokens = newConfig.MaxTokens;
+        _config.IgnoreDirectories = newConfig.IgnoreDirectories;
+
+        // Rebuild kernel with new settings
+        RebuildKernel();
+
+        // Clear history to start fresh with new model
+        _chatHistory.Clear();
+        _chatHistory.AddSystemMessage(_systemPrompt);
+        _functionFilter.ClearCache();
+    }
+
+    /// <summary>
+    /// Rebuilds the kernel and chat service with current configuration.
+    /// </summary>
+    private void RebuildKernel()
+    {
+        _settings = new()
+        {
+            Temperature = (float)_config.Temperature,
+            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
+        };
+
+        // Build the kernel with Ollama as the AI service
+        var builder = Kernel.CreateBuilder();
+
+        builder.AddOllamaChatCompletion(
+            modelId: _config.GetEffectiveModelName(),
+            endpoint: new Uri(_config.OllamaEndpoint)
+        );
+
+        // Add plugins with custom ignore directories if configured
+        var fileSystemPlugin = new FileSystemPlugin(_projectRoot);
+        if (_config.IgnoreDirectories.Any())
+        {
+            fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);
+        }
+
+        builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
+
+        _kernel = builder.Build();
+        _chatService = _kernel.GetRequiredService<IChatCompletionService>();
+
+        _kernel.FunctionInvocationFilters.Add(_functionFilter);
     }
 
     /// <summary>
