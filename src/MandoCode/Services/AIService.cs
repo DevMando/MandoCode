@@ -21,76 +21,62 @@ namespace MandoCode.Services;
 /// </summary>
 public class AIService
 {
-    private readonly Kernel _kernel;
-    private readonly IChatCompletionService _chatService;
+    private Kernel _kernel;
+    private IChatCompletionService _chatService;
     private readonly ChatHistory _chatHistory;
     private readonly string _systemPrompt;
-    private readonly MandoCodeConfig _config;
-    private readonly OllamaPromptExecutionSettings _settings;
-    private readonly FunctionInvocationFilter _functionFilter;
-    private readonly FunctionCompletionTracker _completionTracker;
-
-    /// <summary>
-    /// Event raised when a function is about to be invoked.
-    /// </summary>
-    public event Action<FunctionCall>? OnFunctionInvoked;
-
-    /// <summary>
-    /// Event raised when a function completes execution.
-    /// </summary>
-    public event Action<FunctionExecutionResult>? OnFunctionCompleted;
-
-    /// <summary>
-    /// Gets the function completion tracker for waiting on function completions.
-    /// </summary>
-    public FunctionCompletionTracker CompletionTracker => _completionTracker;
+    private MandoCodeConfig _config;
+    private OllamaPromptExecutionSettings _settings;
+    private readonly string _projectRoot;
 
     public AIService(string projectRoot, MandoCodeConfig config)
     {
+        _projectRoot = projectRoot;
         _config = config;
         _systemPrompt = SystemPrompts.MandoCodeAssistant;
+
+        BuildKernel();
+
+        // Initialize chat history with system prompt
+        _chatHistory = new ChatHistory(_systemPrompt);
+    }
+
+    /// <summary>
+    /// Reinitializes the AI service with a new configuration.
+    /// Rebuilds the kernel with the updated model and settings.
+    /// </summary>
+    public void Reinitialize(MandoCodeConfig config)
+    {
+        _config = config;
+        BuildKernel();
+        ClearHistory();
+    }
+
+    private void BuildKernel()
+    {
         _settings = new()
         {
             Temperature = (float)_config.Temperature,
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
         };
 
-        // Build the kernel with Ollama as the AI service
         var builder = Kernel.CreateBuilder();
 
         builder.AddOllamaChatCompletion(
-            modelId: config.GetEffectiveModelName(),
-            endpoint: new Uri(config.OllamaEndpoint)
+            modelId: _config.GetEffectiveModelName(),
+            endpoint: new Uri(_config.OllamaEndpoint)
         );
 
-        // Add plugins with custom ignore directories if configured
-        var fileSystemPlugin = new FileSystemPlugin(projectRoot);
-        if (config.IgnoreDirectories.Any())
+        var fileSystemPlugin = new FileSystemPlugin(_projectRoot);
+        if (_config.IgnoreDirectories.Any())
         {
-            fileSystemPlugin.AddIgnoreDirectories(config.IgnoreDirectories);
+            fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);
         }
 
         builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
 
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
-
-        // Initialize completion tracker for event-based completion detection
-        _completionTracker = new FunctionCompletionTracker();
-
-        // Register the function invocation filter to track function calls
-        _functionFilter = new FunctionInvocationFilter(config.FunctionDeduplicationWindowSeconds);
-        _functionFilter.OnFunctionInvoked += (call) => OnFunctionInvoked?.Invoke(call);
-        _functionFilter.OnFunctionCompleted += (result) => OnFunctionCompleted?.Invoke(result);
-
-        // Wire up completion tracker to filter events
-        _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
-        _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
-
-        _kernel.FunctionInvocationFilters.Add(_functionFilter);
-
-        // Initialize chat history with system prompt
-        _chatHistory = new ChatHistory(_systemPrompt);
     }
 
     /// <summary>
@@ -200,13 +186,13 @@ public class AIService
                 return $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
                        $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
                        $"Recommended models with tool support:\n" +
+                       $"  • ollama pull minimax-m2.5:cloud\n" +
                        $"  • ollama pull qwen2.5-coder:14b\n" +
-                       $"  • ollama pull qwen2.5-coder:7b\n" +
                        $"  • ollama pull mistral\n" +
                        $"  • ollama pull llama3.1\n\n" +
                        $"Then update your configuration:\n" +
                        $"  Type 'config' and select 'Run configuration wizard'\n" +
-                       $"  Or run: dotnet run -- config set model qwen2.5-coder:14b";
+                       $"  Or run: dotnet run -- config set model minimax-m2.5:cloud";
             }
 
             return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
@@ -308,52 +294,16 @@ public class AIService
             // Use a simpler settings without function calling for faster planning
             var planSettings = new OllamaPromptExecutionSettings
             {
-                Temperature = 0.3f, // Lower temperature for more consistent planning
-            };
-
-            var result = await _chatService.GetChatMessageContentAsync(
-                planningHistory,
-                planSettings,
-                _kernel,
-                cts.Token
-            );
-
-            return result.Content ?? string.Empty;
-        }
-        catch (OperationCanceledException)
-        {
-            throw new Exception("Planning request timed out. The model took too long to respond.");
-        }
-    }
-
-    /// <summary>
-    /// Executes a single plan step with context from previous results.
-    /// Uses a separate chat history to avoid polluting the main conversation.
-    /// Includes retry logic for transient connection errors.
-    /// </summary>
-    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults)
-    {
-        // Build context from previous results
-        var contextBuilder = new System.Text.StringBuilder();
-        contextBuilder.AppendLine(_systemPrompt);
-
-        // Add explicit instruction to use tools properly
-        contextBuilder.AppendLine(@"
-
-IMPORTANT: You are executing a specific step in a task plan.
-- Use the available FileSystem functions to complete this step
-- DO NOT output JSON or describe function calls - actually invoke the functions
-- After completing the step, provide a brief summary of what you did
-- If you need to create files, use the WriteFile function
-- If you need to read files, use the ReadFile function
-");
-
-        if (previousResults.Any())
-        {
-            contextBuilder.AppendLine("\n--- Previous Steps Completed ---");
-            foreach (var result in previousResults)
-            {
-                contextBuilder.AppendLine(result);
+                errorMessage = $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
+                       $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
+                       $"Recommended models with tool support:\n" +
+                       $"  • ollama pull minimax-m2.5:cloud\n" +
+                       $"  • ollama pull qwen2.5-coder:14b\n" +
+                       $"  • ollama pull mistral\n" +
+                       $"  • ollama pull llama3.1\n\n" +
+                       $"Then update your configuration:\n" +
+                       $"  Type 'config' and select 'Run configuration wizard'\n" +
+                       $"  Or run: dotnet run -- config set model minimax-m2.5:cloud";
             }
             contextBuilder.AppendLine("--- End of Previous Steps ---\n");
         }

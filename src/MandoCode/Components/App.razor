@@ -247,11 +247,67 @@
                 // Output first chunk and continue streaming
                 if (receivedFirstChunk)
                 {
-                    AnsiConsole.Markup(enumerator.Current);
+                    // Show loading spinner with fun message until first chunk arrives
+                    await AnsiConsole.Status()
+                        .Spinner(Spectre.Console.Spinner.Known.Dots)
+                        .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                        {
+                            // Wait for first chunk
+                            if (await enumerator.MoveNextAsync())
+                            {
+                                receivedFirstChunk = true;
+                            }
+                        });
 
-                    while (await enumerator.MoveNextAsync())
+                    // Output first chunk and continue streaming
+                    // Use Console.Write instead of AnsiConsole.Markup to avoid
+                    // Spectre.Console parsing square brackets in AI output as markup tags
+                    if (receivedFirstChunk)
                     {
-                        AnsiConsole.Markup(enumerator.Current);
+                        var lineBuffer = new System.Text.StringBuilder();
+                        var showSpinnerBeforeNextChunk = false;
+
+                        void ProcessChunk(string chunk)
+                        {
+                            Console.Write(chunk);
+                            foreach (char c in chunk)
+                            {
+                                if (c == '\n')
+                                {
+                                    if (lineBuffer.ToString().Contains('\u2699'))
+                                        showSpinnerBeforeNextChunk = true;
+                                    lineBuffer.Clear();
+                                }
+                                else if (c != '\r')
+                                {
+                                    lineBuffer.Append(c);
+                                }
+                            }
+                        }
+
+                        ProcessChunk(enumerator.Current);
+
+                        var hasMore = true;
+                        while (hasMore)
+                        {
+                            if (showSpinnerBeforeNextChunk)
+                            {
+                                showSpinnerBeforeNextChunk = false;
+                                await AnsiConsole.Status()
+                                    .Spinner(Spectre.Console.Spinner.Known.Dots)
+                                    .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                                    {
+                                        hasMore = await enumerator.MoveNextAsync();
+                                    });
+                            }
+                            else
+                            {
+                                hasMore = await enumerator.MoveNextAsync();
+                            }
+
+                            if (hasMore)
+                                ProcessChunk(enumerator.Current);
+                        }
                     }
                 }
             }
@@ -444,8 +500,9 @@
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(Config);
+                AI.Reinitialize(updatedConfig);
                 AnsiConsole.Clear();
-                AnsiConsole.WriteLine("✓ Configuration updated and applied!\n");
+                AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
                 break;
 
             case "View current configuration":

@@ -45,7 +45,7 @@ public static class CommandAutocomplete
                         // Auto-complete with selected command
                         input.Clear();
                         input.Append(filteredCommands[selectedIndex]);
-                        ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
+                        ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
                         Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
@@ -56,7 +56,8 @@ public static class CommandAutocomplete
                     else
                     {
                         // Submit the input
-                        ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
+                        if (showAutocomplete)
+                            ClearAutocompleteDisplay(ref cursorTop);
                         Console.WriteLine();
                         return input.ToString();
                     }
@@ -67,7 +68,7 @@ public static class CommandAutocomplete
                         // Auto-complete with selected command
                         input.Clear();
                         input.Append(filteredCommands[selectedIndex]);
-                        ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
+                        ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
                         Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
@@ -80,7 +81,7 @@ public static class CommandAutocomplete
                     if (showAutocomplete && filteredCommands.Any())
                     {
                         selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredCommands.Count - 1;
-                        DisplayAutocomplete(cursorLeft, cursorTop, filteredCommands, selectedIndex);
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
                     }
                     continue;
 
@@ -88,14 +89,14 @@ public static class CommandAutocomplete
                     if (showAutocomplete && filteredCommands.Any())
                     {
                         selectedIndex = (selectedIndex + 1) % filteredCommands.Count;
-                        DisplayAutocomplete(cursorLeft, cursorTop, filteredCommands, selectedIndex);
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
                     }
                     continue;
 
                 case ConsoleKey.Escape:
                     if (showAutocomplete)
                     {
-                        ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
+                        ClearAutocompleteDisplay(ref cursorTop);
                         showAutocomplete = false;
                         selectedIndex = 0;
                     }
@@ -122,22 +123,23 @@ public static class CommandAutocomplete
                             filteredCommands = FilterCommands(input.ToString());
                             if (filteredCommands.Any())
                             {
+                                if (showAutocomplete)
+                                    ClearAutocompleteDisplay(ref cursorTop);
                                 showAutocomplete = true;
                                 selectedIndex = Math.Min(selectedIndex, filteredCommands.Count - 1);
-                                DisplayAutocomplete(cursorLeft, cursorTop, filteredCommands, selectedIndex);
+                                DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
                             }
                             else
                             {
-                                ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
+                                if (showAutocomplete)
+                                    ClearAutocompleteDisplay(ref cursorTop);
                                 showAutocomplete = false;
                             }
                         }
                         else
                         {
                             if (showAutocomplete)
-                            {
-                                ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
-                            }
+                                ClearAutocompleteDisplay(ref cursorTop);
                             showAutocomplete = false;
                             selectedIndex = 0;
                         }
@@ -156,25 +158,23 @@ public static class CommandAutocomplete
                             filteredCommands = FilterCommands(input.ToString());
                             if (filteredCommands.Any())
                             {
+                                if (showAutocomplete)
+                                    ClearAutocompleteDisplay(ref cursorTop);
                                 showAutocomplete = true;
                                 selectedIndex = 0;
-                                DisplayAutocomplete(cursorLeft, cursorTop, filteredCommands, selectedIndex);
+                                DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
                             }
                             else
                             {
                                 if (showAutocomplete)
-                                {
-                                    ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
-                                }
+                                    ClearAutocompleteDisplay(ref cursorTop);
                                 showAutocomplete = false;
                             }
                         }
                         else
                         {
                             if (showAutocomplete)
-                            {
-                                ClearAutocompleteDisplay(cursorLeft, cursorTop, filteredCommands.Count);
-                            }
+                                ClearAutocompleteDisplay(ref cursorTop);
                             showAutocomplete = false;
                         }
                     }
@@ -198,32 +198,41 @@ public static class CommandAutocomplete
     }
 
     /// <summary>
+    /// Ensures the console buffer has enough rows below cursorTop for the dropdown.
+    /// If not, scrolls the buffer and adjusts cursorTop accordingly.
+    /// </summary>
+    private static void EnsureBufferSpace(ref int cursorTop, int linesNeeded)
+    {
+        var bufferHeight = Console.BufferHeight;
+        var available = bufferHeight - cursorTop - 1;
+        if (available < linesNeeded)
+        {
+            var scrollAmount = linesNeeded - available;
+            Console.SetCursorPosition(0, bufferHeight - 1);
+            for (int i = 0; i < scrollAmount; i++)
+                Console.Write('\n');
+            cursorTop -= scrollAmount;
+        }
+    }
+
+    /// <summary>
     /// Displays the autocomplete dropdown.
     /// </summary>
-    private static void DisplayAutocomplete(int cursorLeft, int cursorTop, List<string> commands, int selectedIndex)
+    private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> commands, int selectedIndex)
     {
-        // Save current position
-        var currentLeft = Console.CursorLeft;
-        var currentTop = Console.CursorTop;
+        var totalLines = commands.Count + 3; // header + commands + footer + help
 
-        // Move to position below input
+        // Ensure enough buffer space so drawing won't cause terminal scrolling
+        EnsureBufferSpace(ref cursorTop, totalLines);
+
+        // Clear everything below the input line
         Console.SetCursorPosition(0, cursorTop + 1);
+        Console.Write("\x1b[J");
 
-        // Clear previous autocomplete area
-        for (int i = 0; i < commands.Count + 2; i++)
-        {
-            Console.Write(new string(' ', Console.WindowWidth - 1));
-            if (i < commands.Count + 1)
-                Console.WriteLine();
-        }
-
-        // Move back to start position
+        // Draw the dropdown
         Console.SetCursorPosition(0, cursorTop + 1);
-
-        // Display header
         AnsiConsole.MarkupLine("[dim]┌─ Commands ─────────────────────────────────────[/]");
 
-        // Display commands
         for (int i = 0; i < commands.Count; i++)
         {
             var cmd = commands[i];
@@ -240,33 +249,24 @@ public static class CommandAutocomplete
         }
 
         AnsiConsole.MarkupLine("[dim]└────────────────────────────────────────────────[/]");
-        AnsiConsole.MarkupLine("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
+        // Use Markup (no trailing newline) on the last line to avoid an extra scroll
+        AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
-        // Restore cursor position
-        Console.SetCursorPosition(currentLeft, currentTop);
+        // Restore cursor to the input line
+        Console.SetCursorPosition(cursorLeft + inputLength, cursorTop);
     }
 
     /// <summary>
-    /// Clears the autocomplete display.
+    /// Clears the autocomplete display below the input line.
     /// </summary>
-    private static void ClearAutocompleteDisplay(int cursorLeft, int cursorTop, int commandCount)
+    private static void ClearAutocompleteDisplay(ref int cursorTop)
     {
-        if (commandCount == 0) return;
-
-        var currentLeft = Console.CursorLeft;
-        var currentTop = Console.CursorTop;
-
-        // Clear the autocomplete area (commands + header + footer + help)
+        // Clear everything below the input line using ANSI escape
         Console.SetCursorPosition(0, cursorTop + 1);
-        for (int i = 0; i < commandCount + 3; i++)
-        {
-            Console.Write(new string(' ', Console.WindowWidth - 1));
-            if (i < commandCount + 2)
-                Console.WriteLine();
-        }
+        Console.Write("\x1b[J");
 
-        // Restore cursor
-        Console.SetCursorPosition(currentLeft, currentTop);
+        // Move cursor back to the input line
+        Console.SetCursorPosition(0, cursorTop);
     }
 
     /// <summary>
