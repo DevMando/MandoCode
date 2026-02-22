@@ -3,6 +3,7 @@
 @using Spectre.Console
 @inject AIService AI
 @inject MandoCodeConfig Config
+@inject TaskPlannerService TaskPlanner
 
 <Banner />
 
@@ -25,9 +26,17 @@
             </Rows>
         </Panel>
     }
+    else if (!string.IsNullOrEmpty(_modelWarning))
+    {
+        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Yellow">
+            <Rows>
+                <Markup Content="@_modelWarning" />
+            </Rows>
+        </Panel>
+    }
     else
     {
-        <Markup Content="✓ MandoCode is ready!" />        
+        <Markup Content="✓ MandoCode is ready!" />
         <HelpDisplay />
     }
 </Rows>
@@ -36,6 +45,7 @@
     private string _projectRoot = Environment.CurrentDirectory;
     protected bool _isConnected { get; set; } = false;
     private bool _hasRendered = false;
+    private string? _modelWarning = null;
 
     protected override void OnInitialized()
     {
@@ -48,6 +58,10 @@
 
         // Check Ollama connection synchronously to ensure UI is correct
         _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
+
+        // Subscribe to function invocation events for UI feedback
+        AI.OnFunctionInvoked += OnFunctionInvoked;
+        AI.OnFunctionCompleted += OnFunctionCompleted;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -55,9 +69,57 @@
         if (firstRender && _isConnected && !_hasRendered)
         {
             _hasRendered = true;
+
+            // Validate that model supports function calling
+            var (isValid, errorMessage) = await AI.ValidateModelAsync();
+            if (!isValid && errorMessage != null)
+            {
+                // Show warning but allow user to continue
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[yellow]Warning:[/]");
+                AnsiConsole.WriteLine(errorMessage);
+                AnsiConsole.WriteLine();
+
+                if (errorMessage.Contains("Continue anyway?"))
+                {
+                    var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
+                    if (!continueAnyway)
+                    {
+                        AnsiConsole.WriteLine("Please configure a supported model:");
+                        AnsiConsole.WriteLine("  mandocode config set model qwen2.5-coder:14b");
+                        AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
+                        Environment.Exit(1);
+                        return;
+                    }
+                }
+                else
+                {
+                    // Hard error (model not found)
+                    _modelWarning = errorMessage;
+                    return;
+                }
+            }
+
             // Add a small delay to ensure UI is fully rendered
             await Task.Delay(100);
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
+        }
+    }
+
+    private void OnFunctionInvoked(FunctionCall call)
+    {
+        AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+    }
+
+    private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
+    {
+        if (result.Success)
+        {
+            AnsiConsole.MarkupLine($"[dim][[Done]][/] [green]✓[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[dim][[Error]][/] [red]{Spectre.Console.Markup.Escape(result.Result)}[/]");
         }
     }
 
@@ -145,17 +207,45 @@
                 continue;
             }
 
+            // Check if this request needs task planning
+            if (TaskPlanner.RequiresPlanning(input))
+            {
+                await HandlePlannedExecutionAsync(input);
+                continue;
+            }
+
             // Process AI request with streaming (non-command input)
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
-            AnsiConsole.WriteLine();
+            await ProcessDirectRequestAsync(input);
+        }
+    }
+
+    private async Task ProcessDirectRequestAsync(string input)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+        AnsiConsole.WriteLine();
+
+        try
+        {
+            var receivedFirstChunk = false;
+            var enumerator = AI.ChatStreamAsync(input).GetAsyncEnumerator();
 
             try
             {
-                var receivedFirstChunk = false;
-                var enumerator = AI.ChatStreamAsync(input).GetAsyncEnumerator();
+                // Show loading spinner with fun message until first chunk arrives
+                await AnsiConsole.Status()
+                    .Spinner(Spectre.Console.Spinner.Known.Dots)
+                    .StartAsync(LoadingMessages.GetRandom(), async ctx =>
+                    {
+                        // Wait for first chunk
+                        if (await enumerator.MoveNextAsync())
+                        {
+                            receivedFirstChunk = true;
+                        }
+                    });
 
-                try
+                // Output first chunk and continue streaming
+                if (receivedFirstChunk)
                 {
                     // Show loading spinner with fun message until first chunk arrives
                     await AnsiConsole.Status()
@@ -220,19 +310,175 @@
                         }
                     }
                 }
-                finally
-                {
-                    await enumerator.DisposeAsync();
-                }
-
-                AnsiConsole.WriteLine();
-                AnsiConsole.WriteLine();
             }
-            catch (Exception ex)
+            finally
             {
-                AnsiConsole.WriteLine($"Error: {ex.Message}");
-                AnsiConsole.WriteLine();
+                await enumerator.DisposeAsync();
             }
+
+            AnsiConsole.WriteLine();
+            AnsiConsole.WriteLine();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.WriteLine($"Error: {ex.Message}");
+            AnsiConsole.WriteLine();
+        }
+    }
+
+    private async Task HandlePlannedExecutionAsync(string input)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[cyan]This looks like a complex request. Creating a plan...[/]");
+        AnsiConsole.WriteLine();
+
+        TaskPlan? plan = null;
+
+        // Create the plan with a spinner
+        await AnsiConsole.Status()
+            .Spinner(Spectre.Console.Spinner.Known.Dots)
+            .StartAsync("Analyzing request and creating plan...", async ctx =>
+            {
+                plan = await TaskPlanner.CreatePlanAsync(input);
+            });
+
+        if (plan == null || plan.Steps.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]Could not create a plan. Falling back to direct execution.[/]");
+            await ProcessDirectRequestAsync(input);
+            return;
+        }
+
+        // Display the plan
+        DisplayPlan(plan);
+
+        // Ask user to confirm
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("What would you like to do?")
+                .AddChoices(new[] { "Execute plan", "Execute directly (skip planning)", "Cancel" })
+        );
+
+        if (choice == "Cancel")
+        {
+            AnsiConsole.MarkupLine("[dim]Request cancelled.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (choice == "Execute directly (skip planning)")
+        {
+            await ProcessDirectRequestAsync(input);
+            return;
+        }
+
+        // Execute the plan
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[green]Executing plan...[/]");
+        AnsiConsole.WriteLine();
+
+        await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan))
+        {
+            await HandleProgressEventAsync(progressEvent, plan);
+        }
+
+        // Show summary
+        AnsiConsole.WriteLine();
+        if (plan.Status == TaskPlanStatus.Completed)
+        {
+            AnsiConsole.MarkupLine("[green]Plan completed successfully![/]");
+        }
+        else if (plan.Status == TaskPlanStatus.Cancelled)
+        {
+            AnsiConsole.MarkupLine("[yellow]Plan was cancelled.[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Plan completed with errors.[/]");
+        }
+
+        if (!string.IsNullOrEmpty(plan.ExecutionSummary))
+        {
+            AnsiConsole.MarkupLine($"[dim]{Spectre.Console.Markup.Escape(plan.ExecutionSummary)}[/]");
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    private void DisplayPlan(TaskPlan plan)
+    {
+        var table = new Spectre.Console.Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn(new TableColumn("Step").Centered())
+            .AddColumn(new TableColumn("Description"));
+
+        foreach (var step in plan.Steps)
+        {
+            table.AddRow(
+                $"[cyan]{step.StepNumber}[/]",
+                Spectre.Console.Markup.Escape(step.Description)
+            );
+        }
+
+        AnsiConsole.MarkupLine("[cyan]Created plan:[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+    }
+
+    private async Task HandleProgressEventAsync(TaskProgressEvent progressEvent, TaskPlan plan)
+    {
+        switch (progressEvent.ProgressType)
+        {
+            case TaskProgressType.StepStarted:
+                AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
+                AnsiConsole.WriteLine();
+                break;
+
+            case TaskProgressType.StepCompleted:
+                if (!string.IsNullOrEmpty(progressEvent.Message))
+                {
+                    // Truncate long results for display
+                    var displayMessage = progressEvent.Message.Length > 500
+                        ? progressEvent.Message[..500] + "..."
+                        : progressEvent.Message;
+                    AnsiConsole.Markup(Spectre.Console.Markup.Escape(displayMessage));
+                    AnsiConsole.WriteLine();
+                }
+                AnsiConsole.MarkupLine($"[green]Step {progressEvent.CurrentStep} completed.[/]");
+                AnsiConsole.WriteLine();
+                break;
+
+            case TaskProgressType.StepFailed:
+                AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
+
+                // Ask user what to do
+                var failChoice = AnsiConsole.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("How would you like to proceed?")
+                        .AddChoices(new[] { "Skip this step and continue", "Cancel the plan" })
+                );
+
+                if (failChoice == "Cancel the plan")
+                {
+                    TaskPlanner.CancelPlan(plan);
+                }
+                else
+                {
+                    var failedStep = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
+                    if (failedStep != null)
+                    {
+                        TaskPlanner.SkipStep(plan, failedStep);
+                    }
+                }
+                break;
+
+            case TaskProgressType.PlanCompleted:
+                // Summary is shown in HandlePlannedExecutionAsync
+                break;
+
+            case TaskProgressType.PlanCancelled:
+                // Summary is shown in HandlePlannedExecutionAsync
+                break;
         }
     }
 

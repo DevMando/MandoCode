@@ -86,11 +86,11 @@ public class ConfigurationWizard
         );
 
         // Test connection
-        AnsiConsole.Status()
+        await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .Start("[yellow]Testing connection to Ollama...[/]", ctx =>
+            .StartAsync("[yellow]Testing connection to Ollama...[/]", async ctx =>
             {
-                var isConnected = TestOllamaConnection(endpoint).GetAwaiter().GetResult();
+                var isConnected = await TestOllamaConnection(endpoint);
                 if (isConnected)
                 {
                     AnsiConsole.MarkupLine("[green]✓ Connected successfully![/]");
@@ -106,7 +106,7 @@ public class ConfigurationWizard
         return endpoint;
     }
 
-    private static Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
+    private static async Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
     {
         AnsiConsole.Write(new Rule("[yellow]2. Model Selection[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -126,7 +126,7 @@ public class ConfigurationWizard
         switch (modelChoice)
         {
             case "Select from available Ollama models":
-                var availableModels = GetAvailableOllamaModels(config.OllamaEndpoint).GetAwaiter().GetResult();
+                var availableModels = await GetAvailableOllamaModels(config.OllamaEndpoint);
                 if (availableModels.Any())
                 {
                     var selectedModel = AnsiConsole.Prompt(
@@ -168,7 +168,7 @@ public class ConfigurationWizard
         }
 
         AnsiConsole.WriteLine();
-        return Task.FromResult(config);
+        return config;
     }
 
     private static double ConfigureTemperature(double currentTemperature)

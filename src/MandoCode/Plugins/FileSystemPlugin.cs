@@ -116,10 +116,37 @@ public class FileSystemPlugin
     }
 
     /// <summary>
+    /// Creates a folder/directory.
+    /// </summary>
+    [KernelFunction("create_folder")]
+    [Description("Creates a new folder/directory. Use this when asked to create a folder, directory, or organize files into a new location.")]
+    public Task<string> CreateFolder(
+        [Description("Relative path to the folder from project root")] string relativePath)
+    {
+        try
+        {
+            var fullPath = GetFullPath(relativePath);
+
+            if (Directory.Exists(fullPath))
+            {
+                return Task.FromResult($"Folder already exists:\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
+            }
+
+            Directory.CreateDirectory(fullPath);
+
+            return Task.FromResult($"Successfully created folder:\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error creating folder '{relativePath}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Writes content to a file, creating it if it doesn't exist.
     /// </summary>
     [KernelFunction("write_file")]
-    [Description("Writes content to a file. Creates the file and directories if they don't exist. Overwrites existing files.")]
+    [Description("Writes content to a file. Creates the file and directories if they don't exist. Overwrites existing files. Do NOT use this to create empty folders - use create_folder instead.")]
     public async Task<string> WriteFile(
         [Description("Relative path to the file from project root")] string relativePath,
         [Description("Content to write to the file")] string content)
