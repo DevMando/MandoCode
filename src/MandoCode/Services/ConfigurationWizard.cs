@@ -142,14 +142,14 @@ public class ConfigurationWizard
                 else
                 {
                     AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
+                    AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.5:cloud[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:7b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", "qwen2.5-coder:14b");
+                    config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", "minimax-m2.5:cloud");
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", config.ModelName ?? "qwen2.5-coder:14b");
+                config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", config.ModelName ?? "minimax-m2.5:cloud");
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;

@@ -134,7 +134,7 @@ class Program
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode config show");
         Console.WriteLine("  mandocode config set endpoint http://localhost:11434");
-        Console.WriteLine("  mandocode config set model qwen2.5-coder:14b");
+        Console.WriteLine("  mandocode config set model minimax-m2.5:cloud");
         Console.WriteLine("  mandocode config set temperature 0.5");
     }
 

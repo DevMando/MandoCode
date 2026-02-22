@@ -114,7 +114,7 @@ public class MandoCodeConfig
         }
 
         // Final fallback to default model with tool support
-        return "qwen2.5-coder:14b";
+        return "minimax-m2.5:cloud";
     }
 
     /// <summary>
@@ -142,7 +142,7 @@ public class MandoCodeConfig
         return new MandoCodeConfig
         {
             OllamaEndpoint = "http://localhost:11434",
-            ModelName = "qwen2.5-coder:14b",
+            ModelName = "minimax-m2.5:cloud",
             Temperature = 0.7,
             MaxTokens = 4096,
             IgnoreDirectories = new List<string>
