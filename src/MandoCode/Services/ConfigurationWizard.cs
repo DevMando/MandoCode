@@ -87,7 +87,7 @@ public class ConfigurationWizard
 
         // Test connection
         await AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots)
+            .Spinner(LoadingMessages.GetRandomSpinner())
             .StartAsync("[yellow]Testing connection to Ollama...[/]", async ctx =>
             {
                 var isConnected = await TestOllamaConnection(endpoint);

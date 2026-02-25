@@ -28,6 +28,23 @@ public class AIService
     private MandoCodeConfig _config;
     private OllamaPromptExecutionSettings _settings;
     private readonly string _projectRoot;
+    private readonly FunctionCompletionTracker _completionTracker = new();
+    private FunctionInvocationFilter _functionFilter;
+
+    /// <summary>
+    /// Event raised when a function is about to be invoked.
+    /// </summary>
+    public event Action<FunctionCall>? OnFunctionInvoked;
+
+    /// <summary>
+    /// Event raised when a function completes (success or failure).
+    /// </summary>
+    public event Action<FunctionExecutionResult>? OnFunctionCompleted;
+
+    /// <summary>
+    /// Exposes the completion tracker for external consumers (e.g., TaskPlannerService).
+    /// </summary>
+    public FunctionCompletionTracker CompletionTracker => _completionTracker;
 
     public AIService(string projectRoot, MandoCodeConfig config)
     {
@@ -77,6 +94,14 @@ public class AIService
 
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
+
+        // Set up function invocation filter for UI events and deduplication
+        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds);
+        _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
+        _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
+        _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
+        _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
+        _kernel.FunctionInvocationFilters.Add(_functionFilter);
     }
 
     /// <summary>
@@ -291,19 +316,51 @@ public class AIService
             // Use a longer timeout for planning (90 seconds) - local models can be slow
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
-            // Use a simpler settings without function calling for faster planning
+            // Use simpler settings without function calling for faster planning
             var planSettings = new OllamaPromptExecutionSettings
             {
-                errorMessage = $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
-                       $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
-                       $"Recommended models with tool support:\n" +
-                       $"  • ollama pull minimax-m2.5:cloud\n" +
-                       $"  • ollama pull qwen2.5-coder:14b\n" +
-                       $"  • ollama pull mistral\n" +
-                       $"  • ollama pull llama3.1\n\n" +
-                       $"Then update your configuration:\n" +
-                       $"  Type 'config' and select 'Run configuration wizard'\n" +
-                       $"  Or run: dotnet run -- config set model minimax-m2.5:cloud";
+                Temperature = (float)_config.Temperature
+            };
+
+            var result = await RetryPolicy.ExecuteWithRetryAsync(
+                async () => await _chatService.GetChatMessageContentAsync(
+                    planningHistory,
+                    planSettings,
+                    _kernel,
+                    cts.Token
+                ),
+                _config.MaxRetryAttempts,
+                "GetPlanAsync"
+            );
+
+            return result.Content ?? "Failed to generate plan.";
+        }
+        catch (OperationCanceledException)
+        {
+            throw new Exception("Planning timed out. The model took too long to generate a plan.");
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new Exception($"Connection to Ollama failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Executes a single step of a task plan with function calling enabled.
+    /// Uses previous step results as context for continuity.
+    /// </summary>
+    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults)
+    {
+        // Build context from previous step results
+        var contextBuilder = new System.Text.StringBuilder();
+        contextBuilder.AppendLine(_systemPrompt);
+
+        if (previousResults.Any())
+        {
+            contextBuilder.AppendLine("\n--- Results from Previous Steps ---");
+            foreach (var result in previousResults)
+            {
+                contextBuilder.AppendLine(result);
             }
             contextBuilder.AppendLine("--- End of Previous Steps ---\n");
         }

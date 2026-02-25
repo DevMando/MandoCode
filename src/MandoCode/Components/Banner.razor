@@ -1,12 +1,202 @@
-﻿@using Microsoft.AspNetCore.Components.Web
-@using RazorConsole;
 @using Spectre.Console;
-@using Spectre.Console.Rendering;
-
-<Border BorderColor="Color.Teal">
-<RazorConsole.Components.Figlet Content="MANDOCODE" Color="Color.Green" Justify="Justify.Center" />
-</Border>
 
 @code {
     public static CancellationTokenSource CancellationTokenSource = new CancellationTokenSource();
+
+    protected override void OnInitialized()
+    {
+        var gradientText = BuildGradientBanner();
+
+        // Animation: (eyeColor, wavePhase)
+        // wavePhase 0 = no howl waves, 1-3 = expanding waves
+        var frames = new List<(string eye, int wave)>
+        {
+            // Wolf appears dark
+            ("rgb(8,16,18)",   0),
+            ("rgb(8,16,18)",   0),
+            // Eye flicker power-on
+            ("rgb(0,65,75)",   0),
+            ("rgb(8,16,18)",   0),
+            ("rgb(0,95,110)",  0),
+            ("rgb(0,65,75)",   0),
+            ("rgb(0,155,175)", 0),
+            ("rgb(0,200,220)", 0),
+            ("rgb(0,225,245)", 0),
+            // Eye on, pause before howl
+            ("rgb(0,225,245)", 0),
+            // Howl pulse 1
+            ("rgb(0,225,245)", 1),
+            ("rgb(0,225,245)", 2),
+            ("rgb(0,225,245)", 3),
+            ("rgb(0,225,245)", 2),
+            ("rgb(0,225,245)", 1),
+            ("rgb(0,225,245)", 0),
+            // Brief pause
+            ("rgb(0,225,245)", 0),
+            // Howl pulse 2
+            ("rgb(0,225,245)", 1),
+            ("rgb(0,225,245)", 2),
+            ("rgb(0,225,245)", 3),
+            ("rgb(0,225,245)", 2),
+            ("rgb(0,225,245)", 1),
+            ("rgb(0,225,245)", 0),
+        };
+
+        var finalState = BuildFrame(gradientText, "rgb(0,225,245)", 0);
+
+        AnsiConsole.Live(finalState)
+            .AutoClear(false)
+            .Start(ctx =>
+            {
+                foreach (var (eye, wave) in frames)
+                {
+                    ctx.UpdateTarget(BuildFrame(gradientText, eye, wave));
+                    Thread.Sleep(55);
+                }
+            });
+    }
+
+    // ════════════════════════════════════════════
+    //  Compose text + wolf side-by-side
+    // ════════════════════════════════════════════
+
+    private static Spectre.Console.Panel BuildFrame(string gradientText, string eyeColor, int wavePhase)
+    {
+        // Pad text vertically to center against the taller wolf (10 lines)
+        var text = new Spectre.Console.Markup("\n\n" + gradientText + "\n\n\n");
+        var wolf = new Spectre.Console.Markup(BuildWolfMarkup(eyeColor, wavePhase));
+
+        var table = new Spectre.Console.Table()
+            .Border(TableBorder.None)
+            .HideHeaders();
+        table.AddColumn(new Spectre.Console.TableColumn("t").NoWrap().PadRight(2));
+        table.AddColumn(new Spectre.Console.TableColumn("h").NoWrap());
+        table.AddRow(text, wolf);
+
+        var panel = new Spectre.Console.Panel(table);
+        panel.Border(BoxBorder.Rounded);
+        panel.BorderColor(Color.Teal);
+        return panel;
+    }
+
+    // ════════════════════════════════════════════
+    //  Howling wolf with animated eye + howl waves
+    // ════════════════════════════════════════════
+
+    private static string BuildWolfMarkup(string eyeColor, int wavePhase)
+    {
+        string b = "rgb(170,178,190)";  // body light silver
+        string m = "rgb(130,138,152)";  // body mid silver
+        string d = "rgb(90,98,112)";    // body dark
+        string e = eyeColor;            // eye glow
+        string w = "rgb(0,190,220)";    // howl wave color
+
+        // Howl wave suffix for lines near the mouth
+        // lineFromMouth: 0 = mouth center, higher = further away
+        // Waves form a diamond: most waves at mouth, fewer further out
+        string H(int lineFromMouth)
+        {
+            if (wavePhase <= 0) return "";
+            int count = Math.Max(0, wavePhase - lineFromMouth);
+            if (count <= 0) return "";
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < count; i++)
+                sb.Append($" [{w}])[/]");
+            return sb.ToString();
+        }
+
+        return string.Join('\n', new[]
+        {
+            $"[{b}]        ▄▀▄[/]",
+            $"[{b}]        █[/]  [{b}]▀▀▀▀▀▀▄[/]{H(2)}",
+            $"[{m}]       █[/]           [{b}]█[/]{H(1)}",
+            $"[{d}]    ▄▄[/][{m}]█[/]     [{e}]●[/]      [{b}]█[/]{H(0)}",
+            $"[{d}]   █[/]  [{m}]█▄[/]           [{b}]█[/]{H(1)}",
+            $"[{d}]   █[/]   [{m}]▀▀▄▄▄▄▄▄▄▀[/]{H(2)}",
+            $"[{d}]    █[/]     [{m}]▄█[/]",
+            $"[{d}]     █[/]   [{m}]█[/]",
+            $"[{d}]      █▄█[/]",
+            $"[{d}]       ▀[/]",
+        });
+    }
+
+    // ════════════════════════════════════════════
+    //  Gradient MANDOCODE figlet text
+    // ════════════════════════════════════════════
+
+    private static readonly string[] _figletLines =
+    {
+        @"  __  __      _      _   _   ____     ___     ____    ___    ____    _____  ",
+        @" |  \/  |    / \    | \ | | |  _ \   / _ \   / ___|  / _ \  |  _ \  | ____| ",
+        @" | |\/| |   / _ \   |  \| | | | | | | | | | | |     | | | | | | | | |  _|   ",
+        @" | |  | |  / ___ \  | |\  | | |_| | | |_| | | |___  | |_| | | |_| | | |___  ",
+        @" |_|  |_| /_/   \_\ |_| \_| |____/   \___/   \____|  \___/  |____/  |_____| ",
+    };
+
+    // Gradient stops: teal -> cyan -> blue -> violet -> magenta
+    private static readonly (int R, int G, int B)[] _gradientStops =
+    {
+        (0, 210, 178),
+        (0, 200, 255),
+        (60, 120, 255),
+        (160, 80, 255),
+        (210, 50, 210),
+    };
+
+    private static (int R, int G, int B) LerpColor(double t)
+    {
+        double pos = t * (_gradientStops.Length - 1);
+        int idx = (int)pos;
+        if (idx >= _gradientStops.Length - 1)
+            return _gradientStops[^1];
+
+        double frac = pos - idx;
+        var a = _gradientStops[idx];
+        var b = _gradientStops[idx + 1];
+
+        return (
+            (int)(a.R + (b.R - a.R) * frac),
+            (int)(a.G + (b.G - a.G) * frac),
+            (int)(a.B + (b.B - a.B) * frac)
+        );
+    }
+
+    private static string BuildGradientBanner()
+    {
+        int maxWidth = _figletLines.Max(l => l.Length);
+        var sb = new System.Text.StringBuilder();
+
+        for (int row = 0; row < _figletLines.Length; row++)
+        {
+            var line = _figletLines[row];
+
+            for (int col = 0; col < line.Length; col++)
+            {
+                char c = line[col];
+
+                if (c == ' ')
+                {
+                    sb.Append(' ');
+                }
+                else
+                {
+                    double t = maxWidth > 1 ? (double)col / (maxWidth - 1) : 0;
+                    var (r, g, b) = LerpColor(t);
+
+                    string ch = c switch
+                    {
+                        '[' => "[[",
+                        ']' => "]]",
+                        _ => c.ToString()
+                    };
+                    sb.Append($"[rgb({r},{g},{b})]{ch}[/]");
+                }
+            }
+
+            if (row < _figletLines.Length - 1)
+                sb.Append('\n');
+        }
+
+        return sb.ToString();
+    }
 }

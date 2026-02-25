@@ -1,9 +1,11 @@
 @using MandoCode.Models
 @using MandoCode.Services
+@using System.Text.RegularExpressions
 @using Spectre.Console
 @inject AIService AI
 @inject MandoCodeConfig Config
 @inject TaskPlannerService TaskPlanner
+@inject FileAutocompleteProvider FileProvider
 
 <Banner />
 
@@ -69,6 +71,9 @@
         if (firstRender && _isConnected && !_hasRendered)
         {
             _hasRendered = true;
+
+            // Initialize file autocomplete
+            CommandAutocomplete.Initialize(FileProvider);
 
             // Validate that model supports function calling
             var (isValid, errorMessage) = await AI.ValidateModelAsync();
@@ -207,16 +212,72 @@
                 continue;
             }
 
+            // Process @file references and inject file content
+            var processedInput = ProcessFileReferences(input);
+
             // Check if this request needs task planning
-            if (TaskPlanner.RequiresPlanning(input))
+            if (TaskPlanner.RequiresPlanning(processedInput))
             {
-                await HandlePlannedExecutionAsync(input);
+                await HandlePlannedExecutionAsync(processedInput);
                 continue;
             }
 
             // Process AI request with streaming (non-command input)
-            await ProcessDirectRequestAsync(input);
+            await ProcessDirectRequestAsync(processedInput);
         }
+    }
+
+    private string ProcessFileReferences(string input)
+    {
+        var pattern = @"@([\w.\-/\\]+[\w.])";
+        var matches = Regex.Matches(input, pattern);
+
+        if (matches.Count == 0)
+            return input;
+
+        var contextBlocks = new System.Text.StringBuilder();
+        var referencedFiles = new HashSet<string>();
+
+        foreach (Match match in matches)
+        {
+            var filePath = match.Groups[1].Value;
+
+            // Skip duplicates
+            if (!referencedFiles.Add(filePath))
+                continue;
+
+            var content = FileProvider.ReadFileContent(filePath);
+            if (content != null)
+            {
+                // Truncate files over 10,000 chars
+                if (content.Length > 10_000)
+                    content = content.Substring(0, 10_000) + "\n... [truncated]";
+
+                contextBlocks.AppendLine($"File: {filePath}");
+                contextBlocks.AppendLine("```");
+                contextBlocks.AppendLine(content);
+                contextBlocks.AppendLine("```");
+                contextBlocks.AppendLine();
+
+                AnsiConsole.MarkupLine($"[dim][[Attached]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}[/]");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine($"[dim][[Not found]][/] [yellow]{Spectre.Console.Markup.Escape(filePath)}[/]");
+            }
+        }
+
+        if (contextBlocks.Length == 0)
+            return input;
+
+        var fullContext = new System.Text.StringBuilder();
+        fullContext.AppendLine("--- Referenced Files ---");
+        fullContext.Append(contextBlocks);
+        fullContext.AppendLine("---");
+        fullContext.AppendLine();
+        fullContext.Append(input);
+
+        return fullContext.ToString();
     }
 
     private async Task ProcessDirectRequestAsync(string input)
@@ -234,7 +295,7 @@
             {
                 // Show loading spinner with fun message until first chunk arrives
                 await AnsiConsole.Status()
-                    .Spinner(Spectre.Console.Spinner.Known.Dots)
+                    .Spinner(LoadingMessages.GetRandomSpinner())
                     .StartAsync(LoadingMessages.GetRandom(), async ctx =>
                     {
                         // Wait for first chunk
@@ -245,25 +306,10 @@
                     });
 
                 // Output first chunk and continue streaming
+                // Use Console.Write instead of AnsiConsole.Markup to avoid
+                // Spectre.Console parsing square brackets in AI output as markup tags
                 if (receivedFirstChunk)
                 {
-                    // Show loading spinner with fun message until first chunk arrives
-                    await AnsiConsole.Status()
-                        .Spinner(Spectre.Console.Spinner.Known.Dots)
-                        .StartAsync(LoadingMessages.GetRandom(), async ctx =>
-                        {
-                            // Wait for first chunk
-                            if (await enumerator.MoveNextAsync())
-                            {
-                                receivedFirstChunk = true;
-                            }
-                        });
-
-                    // Output first chunk and continue streaming
-                    // Use Console.Write instead of AnsiConsole.Markup to avoid
-                    // Spectre.Console parsing square brackets in AI output as markup tags
-                    if (receivedFirstChunk)
-                    {
                         var lineBuffer = new System.Text.StringBuilder();
                         var showSpinnerBeforeNextChunk = false;
 
@@ -294,7 +340,7 @@
                             {
                                 showSpinnerBeforeNextChunk = false;
                                 await AnsiConsole.Status()
-                                    .Spinner(Spectre.Console.Spinner.Known.Dots)
+                                    .Spinner(LoadingMessages.GetRandomSpinner())
                                     .StartAsync(LoadingMessages.GetRandom(), async ctx =>
                                     {
                                         hasMore = await enumerator.MoveNextAsync();
@@ -308,7 +354,6 @@
                             if (hasMore)
                                 ProcessChunk(enumerator.Current);
                         }
-                    }
                 }
             }
             finally
@@ -336,7 +381,7 @@
 
         // Create the plan with a spinner
         await AnsiConsole.Status()
-            .Spinner(Spectre.Console.Spinner.Known.Dots)
+            .Spinner(LoadingMessages.GetRandomSpinner())
             .StartAsync("Analyzing request and creating plan...", async ctx =>
             {
                 plan = await TaskPlanner.CreatePlanAsync(input);

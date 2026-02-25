@@ -5,175 +5,320 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0-blueviolet?logo=dotnet)
 ![Semantic Kernel](https://img.shields.io/badge/Semantic%20Kernel-Agent%20Orchestration-blue?logo=microsoft)
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-black?logo=ollama)
-![DeepSeek Coder V2](https://img.shields.io/badge/DeepSeek%20Coder%20V2-16B-orange)
 ![RazorConsole](https://img.shields.io/badge/RazorConsole-Interactive%20TUI-purple)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)
 ![Made with <3 by Mando](https://img.shields.io/badge/Made%20with%20%3C3%20by-Mando-red)
 
-
-
-
-**MandoCode** is a fully local, token-free AI coding assistant powered by **Semantic Kernel**, **Ollama**, **DeepSeek Coder V2**, and **RazorConsole**.  
-It provides Claude-Code–style project awareness, code refactoring, diff previews, interactive terminal UI, and safe file editing — all running **offline** on your machine.
+**MandoCode** is a fully local, token-free AI coding assistant powered by **Semantic Kernel**, **Ollama**, and **RazorConsole**.
+It provides Claude-Code-style project awareness, code generation, task planning, interactive file references, and safe file editing — all running **offline** on your machine.
 
 MandoCode understands **any file type** in your project, including C#, JavaScript, TypeScript, CSS, HTML, JSON, configuration files, and more.
 
 ---
 
-## 🚀 Project Goal
+## Features
 
-Build a local developer assistant that:
-
-- Uses **DeepSeek Coder V2 (via Ollama)** as the LLM  
-- Uses **Semantic Kernel** to orchestrate model calls and tools  
-- Exposes **filesystem operations** (list files, read files, write files)  
-- Provides a natural-language **CLI interface**  
-- Uses **RazorConsole** for a rich, interactive terminal UI  
-- Behaves similarly to **Claude Code**, but completely offline and free
+- **Fully offline** — no API keys, no cloud, no tokens
+- **Project-aware AI** — reads, writes, and searches your entire codebase
+- **`@` file references** — type `@` to autocomplete and attach file content to any prompt
+- **`/` command autocomplete** — slash commands with interactive dropdown navigation
+- **Task planner** — automatically breaks complex requests into step-by-step plans
+- **Streaming responses** — real-time AI output with animated spinners
+- **Retry & deduplication** — resilient function execution with automatic recovery
+- **Configuration wizard** — guided setup with model selection and connection testing
+- **Animated startup banner** — gradient text with howling wolf animation
 
 ---
 
-## 🧠 High-Level Architecture
+## Architecture
 
+```
 [ Terminal (MandoCode CLI with RazorConsole) ]
-↓
-[ .NET CLI Wrapper ]
-↓
-[ Semantic Kernel ]
-↙ ↘
-[ Local LLM ] [ Tools ]
-(DeepSeek via Ollama) (Filesystem, Git,
-Tests, etc.)
+                    |
+             [ .NET 8.0 CLI ]
+                    |
+           [ Semantic Kernel ]
+              /           \
+     [ Local LLM ]     [ Plugins ]
+  (Ollama models)    (FileSystem, etc.)
+```
+
+### Project Structure
+
+```
+src/MandoCode/
+  Components/        Razor UI components (App, Banner, HelpDisplay, ConfigMenu, Prompt)
+  Services/          Core business logic
+  Models/            Data models, config, system prompts
+  Plugins/           Semantic Kernel plugins (FileSystem)
+  Program.cs         Entry point and DI registration
+```
 
 ---
 
-## 📁 Core Behaviors
+## Getting Started
 
-MandoCode provides project-wide intelligence across **any file type**, including:
+### Prerequisites
 
-- `.cs`, `.js`, `.ts`, `.css`, `.scss`, `.html`, `.json`
-- `.csproj`, `.config`, `.env`, `.md`
-- Any file inside your repo
+- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [Ollama](https://ollama.ai) installed and running
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/DevMando/MandoCode.git
+cd MandoCode
+
+# Build the project
+dotnet build src/MandoCode/MandoCode.csproj
+
+# Run MandoCode in your project directory
+dotnet run --project src/MandoCode/MandoCode.csproj -- /path/to/your/project
+```
+
+### First Run
+
+On first run, MandoCode will use the default model (`minimax-m2.5:cloud`). You can configure it:
+
+```bash
+# Run the configuration wizard interactively
+mandocode config init
+
+# Or set individual values
+mandocode config set model qwen2.5-coder:14b
+mandocode config set endpoint http://localhost:11434
+mandocode config set temperature 0.5
+```
 
 ---
 
-## 🔍 Multi-File Intelligence
+## Commands
 
-The model can:
+Type `/` at the start of your input to see the autocomplete dropdown.
 
-- Discover files using listing tools
-- Read any file via `fs.ReadFile()`
-- Modify multiple files per request
-- Produce separate diffs per file
-- Plan changes across multiple languages
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands and usage examples |
+| `/config` | Open the configuration menu (wizard or view current settings) |
+| `/clear` | Clear conversation history |
+| `/exit` | Exit MandoCode |
+| `/quit` | Exit MandoCode |
+
+Anything else you type is sent to the AI as a natural-language prompt.
 
 ---
 
-## 📋 Task Planner
+## `@` File References
 
-MandoCode includes an intelligent **Task Planner** for handling complex, multi-step requests:
+Type `@` anywhere in your input (after a space or at position 0) to trigger **file autocomplete**. A dropdown appears showing your project files, filtered as you type.
 
 ### How It Works
 
-1. **Complexity Detection** - Automatically identifies complex requests that need planning
-2. **Plan Generation** - AI creates a step-by-step execution plan
-3. **User Approval** - Review and approve before execution
-4. **Sequential Execution** - Each step runs with progress tracking and error handling
+1. Type your prompt and hit `@` — a file dropdown appears
+2. Type a partial name to filter (e.g., `Conf`) — matches narrow down
+3. Use arrow keys to navigate, **Tab** or **Enter** to select
+4. The selected path is inserted (e.g., `@src/MandoCode/Models/MandoCodeConfig.cs`)
+5. Continue typing and press **Enter** to submit
+6. MandoCode reads the referenced file(s) and injects the content as context for the AI
 
-### Smart Detection
+### Examples
 
-The planner triggers for requests like:
-- "Create a tic-tac-toe game with HTML, CSS, and JavaScript"
-- "Build an API endpoint with authentication"
+```
+explain @src/MandoCode/Services/AIService.cs to me
+what does the ProcessFileReferences method do in @src/MandoCode/Components/App.razor
+refactor @src/MandoCode/Models/LoadingMessages.cs to use fewer spinners
+```
+
+Multiple `@` references in one prompt are supported. Files over 10,000 characters are automatically truncated.
+
+### Autocomplete Controls
+
+| Key | Action |
+|-----|--------|
+| `@` | Open file dropdown |
+| Type | Filter files by name |
+| Up/Down | Navigate dropdown |
+| Tab/Enter | Insert selected file path (does not submit) |
+| Escape | Close dropdown, keep text |
+| Backspace | Re-filter, or close if you delete past `@` |
+
+---
+
+## Task Planner
+
+MandoCode automatically detects complex requests and offers to break them into a step-by-step plan before execution.
+
+### Triggers
+
+The planner activates for requests like:
+- `Create a tic-tac-toe game with HTML, CSS, and JavaScript`
+- `Build an API endpoint with authentication`
 - Numbered lists with multiple tasks
+- Requests over 250 characters
 
-Questions and simple requests bypass planning automatically.
+Simple questions and short prompts bypass planning automatically.
 
-### Key Features
+### Workflow
 
-- **Event-based completion tracking** - Ensures each step fully completes before proceeding
-- **Retry with exponential backoff** - Automatic recovery from transient connection errors
-- **Intelligent deduplication** - Prevents duplicate operations (2s for reads, 5s for writes)
-- **Fallback function parsing** - Handles models that output function calls as text
+1. **Detection** — heuristics identify complex requests
+2. **Plan generation** — AI creates numbered steps
+3. **User approval** — review the plan table, then choose: execute, skip planning, or cancel
+4. **Step-by-step execution** — each step runs with progress tracking
+5. **Error handling** — skip failed steps or cancel the entire plan
 
-### Configuration
+See [Task Planner Documentation](src/MandoCode/docs/TaskPlannerFeature.md) for full technical details.
+
+---
+
+## AI Capabilities (Plugins)
+
+### FileSystemPlugin
+
+The AI has controlled access to your project directory through these functions:
+
+| Function | Description |
+|----------|-------------|
+| `list_all_project_files()` | Recursively lists all project files, excluding ignored directories |
+| `list_files_match_glob_pattern(pattern)` | Lists files matching a glob pattern (`*.cs`, `src/**/*.ts`, `*.*`) |
+| `read_file_contents(relativePath)` | Reads complete file content with line count |
+| `write_file(relativePath, content)` | Writes/creates a file (creates directories as needed) |
+| `create_folder(relativePath)` | Creates a new directory |
+| `search_text_in_files(pattern, searchText)` | Searches file contents for text, returns file paths and line numbers |
+| `get_absolute_path(relativePath)` | Converts a relative path to its absolute filesystem path |
+
+**Security:** All file operations are sandboxed to the project root. Path traversal outside the project directory is blocked.
+
+**Ignored directories** (not scanned): `.git`, `node_modules`, `bin`, `obj`, `.vs`, `.vscode`, `packages`, `dist`, `build`, `__pycache__`, `.idea` — plus any custom directories from your config.
+
+---
+
+## Reliability Features
+
+### Retry Policy
+
+Transient errors (HTTP failures, timeouts, socket errors) are automatically retried with exponential backoff:
+
+```
+Attempt 1 -> fail -> wait 500ms
+Attempt 2 -> fail -> wait 1000ms
+Attempt 3 -> fail -> throw
+```
+
+### Function Deduplication
+
+Prevents duplicate operations within configurable time windows:
+
+| Operation | Window | Matching |
+|-----------|--------|----------|
+| Read operations | 2 seconds | Function name + arguments |
+| Write operations | 5 seconds (configurable) | Function name + path + content hash (SHA256) |
+
+### Fallback Function Parsing
+
+Some local models output function calls as JSON text instead of proper tool calls. MandoCode automatically detects and parses these formats:
+
+- Standard: `{"name": "func", "parameters": {...}}`
+- OpenAI-style: `{"function_call": {"name": "func", "arguments": {...}}}`
+- Tool calls: `{"tool_calls": [{"function": {"name": "func", "arguments": {...}}}]}`
+
+### Event-Based Completion Tracking
+
+Function executions are tracked with semaphore-based signaling, ensuring each task plan step fully completes before the next begins.
+
+---
+
+## Configuration
+
+### Config File
+
+Located at `~/.mandocode/config.json`
 
 ```json
 {
+  "ollamaEndpoint": "http://localhost:11434",
+  "modelName": "minimax-m2.5:cloud",
+  "modelPath": null,
+  "temperature": 0.7,
+  "maxTokens": 4096,
+  "ignoreDirectories": [],
   "enableTaskPlanning": true,
+  "enableFallbackFunctionParsing": true,
   "functionDeduplicationWindowSeconds": 5,
   "maxRetryAttempts": 2
 }
 ```
 
-See [Task Planner Documentation](src/MandoCode/docs/TaskPlannerFeature.md) for details.
+### All Options
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ollamaEndpoint` | `http://localhost:11434` | Ollama server URL |
+| `modelName` | `minimax-m2.5:cloud` | Model to use |
+| `modelPath` | `null` | Optional path to a local GGUF model file |
+| `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
+| `maxTokens` | `4096` | Maximum response token length |
+| `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
+| `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
+| `enableFallbackFunctionParsing` | `true` | Parse function calls from text output |
+| `functionDeduplicationWindowSeconds` | `5` | Time window to prevent duplicate function calls |
+| `maxRetryAttempts` | `2` | Max retry attempts for transient errors |
+
+### CLI Config Commands
+
+```bash
+mandocode config show              # Display current configuration
+mandocode config init              # Create default configuration file
+mandocode config set <key> <value> # Set a configuration value
+mandocode config path              # Show configuration file location
+mandocode config --help            # Show help
+```
+
+### Environment Variables
+
+| Variable | Overrides |
+|----------|-----------|
+| `OLLAMA_ENDPOINT` | `ollamaEndpoint` in config |
+| `OLLAMA_MODEL` | `modelName` in config |
 
 ---
 
-## 🔧 Semantic Kernel Plugins (Tools)
+## Recommended Models
 
-### **FileSystemPlugin**
+Models with tool/function calling support work best:
 
-Provides safe, controlled access to the project directory:
+- **minimax-m2.5:cloud** (default) — excellent tool support
+- **qwen2.5-coder:14b** — strong coding model with function calling
+- **qwen2.5-coder:7b** — lighter alternative
+- **mistral** — general purpose with tool support
+- **llama3.1** — Meta's model with function calling
 
-- `ListFiles(pattern)`  
-  - Examples: `"*.cs"`, `"*.js"`, `"*.*"`  
-- `ListAllProjectFiles()`  
-  - Recursively returns all project files, excluding ignored dirs  
-- `ReadFile(relativePath)`  
-  - Returns file text  
-- `WriteFile(relativePath, content)`  
-  - Writes updated file content  
-
-### **Planned Tools**
-
-- **Git Integration**
-  - `GitStatus`
-  - `GitDiff`
-  - `GitCommit(message)`
-- **Test Runners**
-  - `RunDotnetTests`
-  - `RunNpmTests`
-- **Search**
-  - `FindInFiles(pattern, text)`
+MandoCode validates model compatibility on startup and warns if the selected model may not support function calling.
 
 ---
 
-## 🧩 System Prompt Behavior
+## UI Components
 
-The model is instructed to:
-
-- Use listing functions instead of guessing file names  
-- Read files before editing  
-- Propose changes with clear summaries  
-- Output diffs for review  
-- Keep edits minimal unless requested otherwise  
-- Work across **multi-language** codebases  
-
-This produces a Claude Code–style workflow using only local compute.
+| Component | Description |
+|-----------|-------------|
+| **Banner** | Animated startup screen with gradient MANDOCODE text and howling wolf animation |
+| **HelpDisplay** | Command reference panel shown on startup |
+| **ConfigMenu** | Interactive configuration display |
+| **Prompt** | Input prompt with autocomplete support |
+| **App** | Main application shell — connection checking, command routing, AI interaction loop |
 
 ---
 
-## 🖼️ Interactive CLI Powered by RazorConsole
+## Dependencies
 
-MandoCode uses **RazorConsole** to provide a modern, interactive TUI (Text User Interface) inside the terminal.
-
-This enables:
-
-- Rich panels and layouts  
-- Syntax-highlighted code previews  
-- File tree explorers  
-- Unified diff visualizations  
-- Interactive Y/N confirmation prompts  
-- Step-by-step guided workflows  
-
-By using Razor components inside the console, MandoCode behaves more like a lightweight **local IDE assistant** than a traditional CLI tool.
-
-**RazorConsole repo:**  
-https://github.com/RazorConsole/RazorConsole
+| Package | Version | Purpose |
+|---------|---------|---------|
+| [Microsoft.SemanticKernel](https://github.com/microsoft/semantic-kernel) | 1.68.0 | LLM orchestration and plugin system |
+| [Microsoft.SemanticKernel.Connectors.Ollama](https://github.com/microsoft/semantic-kernel) | 1.68.0-alpha | Ollama model integration |
+| [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) | 0.2.2 | Rich terminal UI with Razor components |
 
 ---
 
+## License
 
-
-
+[MIT](LICENSE)
