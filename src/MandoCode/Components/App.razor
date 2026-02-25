@@ -49,6 +49,71 @@
     private bool _hasRendered = false;
     private string? _modelWarning = null;
 
+    // Diff approval bypass tracking
+    private bool _globalWriteBypass = false;
+    private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    // Controllable spinner — can be stopped from the diff approval callback
+    private CancellationTokenSource? _spinnerCts;
+    private Task? _spinnerTask;
+    private readonly object _spinnerLock = new();
+
+    private void StartSpinner()
+    {
+        StopSpinner();
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+        var message = LoadingMessages.GetRandom();
+        var frames = new[] { "\u28fb", "\u28fd", "\u28fe", "\u28f7", "\u28ef", "\u28df", "\u28bf", "\u287f" };
+
+        var task = Task.Run(async () =>
+        {
+            var i = 0;
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var frame = frames[i++ % frames.Length];
+                    Console.Write($"\r  {frame} {message}  ");
+                    await Task.Delay(80, token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                // Clear the spinner line
+                Console.Write($"\r{new string(' ', message.Length + 10)}\r");
+            }
+        });
+
+        lock (_spinnerLock)
+        {
+            _spinnerCts = cts;
+            _spinnerTask = task;
+        }
+    }
+
+    private void StopSpinner()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+
+        lock (_spinnerLock)
+        {
+            cts = _spinnerCts;
+            task = _spinnerTask;
+            _spinnerCts = null;
+            _spinnerTask = null;
+        }
+
+        if (cts != null)
+        {
+            cts.Cancel();
+            task?.Wait(1000);
+            cts.Dispose();
+        }
+    }
+
     protected override void OnInitialized()
     {
         // Get project root from command line args if available
@@ -64,6 +129,13 @@
         // Subscribe to function invocation events for UI feedback
         AI.OnFunctionInvoked += OnFunctionInvoked;
         AI.OnFunctionCompleted += OnFunctionCompleted;
+
+        // Wire up diff approval callbacks if enabled
+        if (Config.EnableDiffApprovals)
+        {
+            AI.OnWriteApprovalRequested = HandleDiffApproval;
+            AI.OnDeleteApprovalRequested = HandleDeleteApproval;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -113,11 +185,16 @@
 
     private void OnFunctionInvoked(FunctionCall call)
     {
+        // Pause the spinner so the message renders on a clean line
+        StopSpinner();
         AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+        StartSpinner();
     }
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
     {
+        // Pause the spinner so the message renders on a clean line
+        StopSpinner();
         if (result.Success)
         {
             AnsiConsole.MarkupLine($"[dim][[Done]][/] [green]✓[/]");
@@ -126,6 +203,15 @@
         {
             AnsiConsole.MarkupLine($"[dim][[Error]][/] [red]{Spectre.Console.Markup.Escape(result.Result)}[/]");
         }
+
+        // Refresh file cache after write/delete operations so @ autocomplete stays current
+        var fnLower = result.FunctionName.ToLowerInvariant();
+        if (fnLower.Contains("write") || fnLower.Contains("delete"))
+        {
+            FileProvider.RefreshCache();
+        }
+
+        StartSpinner();
     }
 
     private async Task<bool> CheckOllamaConnectionAsync()
@@ -293,71 +379,68 @@
 
             try
             {
-                // Show loading spinner with fun message until first chunk arrives
-                await AnsiConsole.Status()
-                    .Spinner(LoadingMessages.GetRandomSpinner())
-                    .StartAsync(LoadingMessages.GetRandom(), async ctx =>
-                    {
-                        // Wait for first chunk
-                        if (await enumerator.MoveNextAsync())
-                        {
-                            receivedFirstChunk = true;
-                        }
-                    });
+                // Show our controllable spinner while waiting for first chunk
+                // This spinner can be stopped by HandleDiffApproval when it needs user input
+                StartSpinner();
+
+                if (await enumerator.MoveNextAsync())
+                {
+                    receivedFirstChunk = true;
+                }
+
+                StopSpinner();
 
                 // Output first chunk and continue streaming
                 // Use Console.Write instead of AnsiConsole.Markup to avoid
                 // Spectre.Console parsing square brackets in AI output as markup tags
                 if (receivedFirstChunk)
                 {
-                        var lineBuffer = new System.Text.StringBuilder();
-                        var showSpinnerBeforeNextChunk = false;
+                    var lineBuffer = new System.Text.StringBuilder();
+                    var showSpinnerBeforeNextChunk = false;
 
-                        void ProcessChunk(string chunk)
+                    void ProcessChunk(string chunk)
+                    {
+                        Console.Write(chunk);
+                        foreach (char c in chunk)
                         {
-                            Console.Write(chunk);
-                            foreach (char c in chunk)
+                            if (c == '\n')
                             {
-                                if (c == '\n')
-                                {
-                                    if (lineBuffer.ToString().Contains('\u2699'))
-                                        showSpinnerBeforeNextChunk = true;
-                                    lineBuffer.Clear();
-                                }
-                                else if (c != '\r')
-                                {
-                                    lineBuffer.Append(c);
-                                }
+                                if (lineBuffer.ToString().Contains('\u2699'))
+                                    showSpinnerBeforeNextChunk = true;
+                                lineBuffer.Clear();
+                            }
+                            else if (c != '\r')
+                            {
+                                lineBuffer.Append(c);
                             }
                         }
+                    }
 
-                        ProcessChunk(enumerator.Current);
+                    ProcessChunk(enumerator.Current);
 
-                        var hasMore = true;
-                        while (hasMore)
+                    var hasMore = true;
+                    while (hasMore)
+                    {
+                        if (showSpinnerBeforeNextChunk)
                         {
-                            if (showSpinnerBeforeNextChunk)
-                            {
-                                showSpinnerBeforeNextChunk = false;
-                                await AnsiConsole.Status()
-                                    .Spinner(LoadingMessages.GetRandomSpinner())
-                                    .StartAsync(LoadingMessages.GetRandom(), async ctx =>
-                                    {
-                                        hasMore = await enumerator.MoveNextAsync();
-                                    });
-                            }
-                            else
-                            {
-                                hasMore = await enumerator.MoveNextAsync();
-                            }
-
-                            if (hasMore)
-                                ProcessChunk(enumerator.Current);
+                            showSpinnerBeforeNextChunk = false;
+                            StartSpinner();
+                            hasMore = await enumerator.MoveNextAsync();
+                            StopSpinner();
                         }
+                        else
+                        {
+                            hasMore = await enumerator.MoveNextAsync();
+                        }
+
+                        if (hasMore)
+                            ProcessChunk(enumerator.Current);
+                    }
                 }
             }
             finally
             {
+                StopSpinner();
                 await enumerator.DisposeAsync();
             }
 
@@ -366,6 +449,7 @@
         }
         catch (Exception ex)
         {
+            StopSpinner();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
         }
@@ -475,11 +559,13 @@
         switch (progressEvent.ProgressType)
         {
             case TaskProgressType.StepStarted:
+                StopSpinner();
                 AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
                 break;
 
             case TaskProgressType.StepCompleted:
+                StopSpinner();
                 if (!string.IsNullOrEmpty(progressEvent.Message))
                 {
                     // Truncate long results for display
@@ -494,6 +580,7 @@
                 break;
 
             case TaskProgressType.StepFailed:
+                StopSpinner();
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
@@ -518,11 +605,11 @@
                 break;
 
             case TaskProgressType.PlanCompleted:
-                // Summary is shown in HandlePlannedExecutionAsync
+                StopSpinner();
                 break;
 
             case TaskProgressType.PlanCancelled:
-                // Summary is shown in HandlePlannedExecutionAsync
+                StopSpinner();
                 break;
         }
     }
@@ -556,5 +643,232 @@
                 AnsiConsole.WriteLine();
                 break;
         }
+    }
+
+    private void RenderDiffPanel(string relativePath, List<DiffLine> displayLines, int additions, int deletions, bool isNewFile)
+    {
+        Console.WriteLine();
+
+        var header = $"\u250c\u2500 Diff: {relativePath} ";
+        var padLen = Math.Max(0, 50 - header.Length);
+        Console.WriteLine(header + new string('\u2500', padLen) + "\u2510");
+        Console.WriteLine("\u2502");
+
+        foreach (var line in displayLines)
+        {
+            var lineNum = "";
+
+            switch (line.LineType)
+            {
+                case DiffLineType.Removed:
+                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
+                    Console.Write("\u2502 ");
+                    Console.Write($"\u001b[31m{lineNum} - {line.Content}\u001b[0m");
+                    Console.WriteLine();
+                    break;
+
+                case DiffLineType.Added:
+                    lineNum = line.NewLineNumber.HasValue ? $"{line.NewLineNumber,4}" : "    ";
+                    Console.Write("\u2502 ");
+                    Console.Write($"\u001b[38;2;135;206;250m{lineNum} + {line.Content}\u001b[0m");
+                    Console.WriteLine();
+                    break;
+
+                case DiffLineType.Unchanged:
+                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
+                    Console.Write("\u2502 ");
+                    Console.Write($"\u001b[2m{lineNum}   {line.Content}\u001b[0m");
+                    Console.WriteLine();
+                    break;
+            }
+        }
+
+        Console.WriteLine("\u2502");
+        var fileLabel = isNewFile ? " (new file)" : "";
+        Console.WriteLine($"\u2502  {deletions} deletion(s), {additions} addition(s){fileLabel}");
+        Console.WriteLine("\u2514" + new string('\u2500', Math.Max(padLen + header.Length - 1, 40)) + "\u2518");
+        Console.WriteLine();
+    }
+
+    private Task<DiffApprovalResult> HandleDiffApproval(string relativePath, string? oldContent, string newContent)
+    {
+        // Stop the spinner so we have clean console output
+        StopSpinner();
+
+        // Compute diff
+        var diffLines = DiffService.ComputeDiff(oldContent, newContent);
+        var isNewFile = oldContent == null;
+        var displayLines = DiffService.CollapseContext(diffLines, 3);
+        var additions = diffLines.Count(l => l.LineType == DiffLineType.Added);
+        var deletions = diffLines.Count(l => l.LineType == DiffLineType.Removed);
+        var fileName = Path.GetFileName(relativePath);
+
+        // Always show the diff so the user can see what's changing
+        RenderDiffPanel(relativePath, displayLines, additions, deletions, isNewFile);
+
+        // If globally bypassed or this file is already approved, auto-approve without prompting
+        if (_globalWriteBypass || _approvedFiles.Contains(relativePath))
+        {
+            AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved[/]");
+            AnsiConsole.WriteLine();
+            StartSpinner();
+            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+        }
+
+        // Build choices for the SelectionPrompt — now safe since our spinner is stopped
+        var noAskLabel = isNewFile
+            ? "Approve - okay to write & modify files don't ask me again"
+            : $"Approve - Don't ask again to modify {fileName}";
+
+        var approvalChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Apply these changes?[/]")
+                .AddChoices(new[]
+                {
+                    "Approve",
+                    noAskLabel,
+                    "Deny",
+                    "Provide new instructions"
+                })
+        );
+
+        DiffApprovalResult result;
+
+        if (approvalChoice == "Approve")
+        {
+            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+        }
+        else if (approvalChoice == noAskLabel)
+        {
+            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
+            if (isNewFile)
+            {
+                _globalWriteBypass = true;
+                AnsiConsole.MarkupLine("[dim]All future writes will be auto-approved for this session.[/]");
+            }
+            else
+            {
+                _approvedFiles.Add(relativePath);
+                AnsiConsole.MarkupLine($"[dim]Future modifications to {Spectre.Console.Markup.Escape(fileName)} will be auto-approved.[/]");
+            }
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+        }
+        else if (approvalChoice == "Deny")
+        {
+            AnsiConsole.MarkupLine("[red]Changes denied.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else // "Provide new instructions"
+        {
+            var instructions = AnsiConsole.Prompt(
+                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            );
+            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+            result = new DiffApprovalResult
+            {
+                Response = DiffApprovalResponse.NewInstructions,
+                UserMessage = instructions
+            };
+        }
+
+        AnsiConsole.WriteLine();
+
+        // Resume spinner for the rest of the AI call
+        StartSpinner();
+
+        return Task.FromResult(result);
+    }
+
+    private Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
+    {
+        // Stop the spinner so we have clean console output
+        StopSpinner();
+
+        var fileName = Path.GetFileName(relativePath);
+
+        // Build diff lines — all existing content shown as red removals
+        var diffLines = new List<DiffLine>();
+        if (!string.IsNullOrEmpty(existingContent))
+        {
+            var lines = existingContent.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                diffLines.Add(new DiffLine
+                {
+                    LineType = DiffLineType.Removed,
+                    Content = lines[i].TrimEnd('\r'),
+                    OldLineNumber = i + 1
+                });
+            }
+        }
+
+        var deletions = diffLines.Count;
+        var displayLines = DiffService.CollapseContext(diffLines, 3);
+
+        // Render the deletion diff panel
+        RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
+        AnsiConsole.MarkupLine($"[red]This will DELETE the file: {Spectre.Console.Markup.Escape(relativePath)}[/]");
+        Console.WriteLine();
+
+        // If globally bypassed, auto-approve
+        if (_globalWriteBypass)
+        {
+            AnsiConsole.MarkupLine($"[green]✓ Auto-approved deletion[/]");
+            AnsiConsole.WriteLine();
+            StartSpinner();
+            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+        }
+
+        var approvalChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Delete this file?[/]")
+                .AddChoices(new[]
+                {
+                    "Approve deletion",
+                    "Approve - okay to write, modify & delete files don't ask me again",
+                    "Deny",
+                    "Provide new instructions"
+                })
+        );
+
+        DiffApprovalResult result;
+
+        if (approvalChoice == "Approve deletion")
+        {
+            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+        }
+        else if (approvalChoice.StartsWith("Approve - okay"))
+        {
+            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
+            _globalWriteBypass = true;
+            AnsiConsole.MarkupLine("[dim]All future writes and deletions will be auto-approved for this session.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+        }
+        else if (approvalChoice == "Deny")
+        {
+            AnsiConsole.MarkupLine("[red]Deletion denied.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else // "Provide new instructions"
+        {
+            var instructions = AnsiConsole.Prompt(
+                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            );
+            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+            result = new DiffApprovalResult
+            {
+                Response = DiffApprovalResponse.NewInstructions,
+                UserMessage = instructions
+            };
+        }
+
+        AnsiConsole.WriteLine();
+
+        // Resume spinner for the rest of the AI call
+        StartSpinner();
+
+        return Task.FromResult(result);
     }
 }

@@ -152,6 +152,7 @@ class Program
         Console.WriteLine("  • temperature     - Temperature (0.0-1.0)");
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
         Console.WriteLine("  • taskPlanning    - Enable/disable task planning (true/false)");
+        Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode config show");
@@ -215,6 +216,20 @@ class Program
                 {
                     config.EnableTaskPlanning = enablePlanning;
                     Console.WriteLine($"✓ Task planning {(enablePlanning ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
+                    return;
+                }
+                break;
+
+            case "diffapprovals":
+            case "enablediffapprovals":
+                if (bool.TryParse(value, out var enableDiff))
+                {
+                    config.EnableDiffApprovals = enableDiff;
+                    Console.WriteLine($"✓ Diff approvals {(enableDiff ? "enabled" : "disabled")}");
                 }
                 else
                 {

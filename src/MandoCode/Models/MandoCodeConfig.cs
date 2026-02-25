@@ -74,6 +74,13 @@ public class MandoCodeConfig
     public int MaxRetryAttempts { get; set; } = 2;
 
     /// <summary>
+    /// Enable diff approval prompts before file writes.
+    /// When enabled, the user sees a diff and must approve changes before they are written.
+    /// </summary>
+    [JsonPropertyName("enableDiffApprovals")]
+    public bool EnableDiffApprovals { get; set; } = true;
+
+    /// <summary>
     /// Loads configuration from file, or creates a default one if it doesn't exist.
     /// </summary>
     public static MandoCodeConfig Load(string? configPath = null)
@@ -200,6 +207,7 @@ public class MandoCodeConfig
             Console.WriteLine($"  Ignore Directories: {string.Join(", ", IgnoreDirectories)}");
         }
         Console.WriteLine($"  Task Planning: {(EnableTaskPlanning ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  Diff Approvals: {(EnableDiffApprovals ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Fallback Function Parsing: {(EnableFallbackFunctionParsing ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
