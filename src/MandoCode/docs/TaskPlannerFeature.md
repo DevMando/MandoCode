@@ -24,17 +24,22 @@ Complete
 
 ### Complexity Detection
 
-The system uses heuristics to detect complex requests while filtering out simple questions:
+The system uses heuristics to detect complex requests while filtering out simple questions and single-action operations:
 
 **Questions are NOT planned** (filtered first):
 - Messages ending with `?`
 - Messages starting with: "what", "why", "how", "when", "where", "who", "which", "can you explain", "tell me about", "describe", "show me"
 
+**Simple single-action requests are NOT planned:**
+- Requests starting with simple action verbs that are under 150 characters and don't contain "and" or "also"
+- **Simple action verbs**: "delete", "remove", "read", "show", "list", "find", "search", "open", "cat", "print", "display", "rename"
+- Examples: "delete poem.txt", "remove the old config", "show me the logs"
+
 **Triggers planning:**
-- **Imperative verb at start + scope indicator**: "Create a game", "Build an API", "Implement a feature"
-- **Numbered lists with 2+ items**: "1. Create X\n2. Add Y"
-- **Long requests**: Messages over 250 characters
-- **Multiple explicit tasks**: Using "and" or "also" with an imperative verb
+- **Imperative verb at start + scope indicator + 12+ words**: "Create a REST API service with authentication and rate limiting for the user module"
+- **Numbered lists with 3+ items**: "1. Create X\n2. Add Y\n3. Test Z"
+- **Very long requests**: Messages over 400 characters
+- **Multiple explicit tasks (10+ words)**: Using "and then" or both "also" and "and" with an imperative verb
 
 **Imperative verbs** (must appear at start):
 - "create", "build", "implement", "make", "develop", "write", "add", "design", "set up", "configure", "generate", "refactor", "update", "modify", "change", "fix", "debug", "optimize"
@@ -79,7 +84,9 @@ When a user includes `@file` references in a complex request, the file content i
 | `Services/TaskPlannerService.cs` | Complexity detection, plan parsing, execution orchestration |
 | `Services/AIService.cs` | AI communication, plan generation, step execution |
 | `Services/FunctionCompletionTracker.cs` | Event-based function completion tracking |
-| `Services/FunctionInvocationFilter.cs` | Function deduplication, execution events |
+| `Services/FunctionInvocationFilter.cs` | Function deduplication, execution events, diff approval interception |
+| `Services/DiffService.cs` | LCS-based diff algorithm with context collapsing |
+| `Models/DiffModels.cs` | Diff line types, approval response enums, result models |
 | `Services/RetryPolicy.cs` | Exponential backoff retry for transient errors |
 | `Services/FileAutocompleteProvider.cs` | File content reading for `@` references (used before planning) |
 | `Models/TaskPlan.cs` | Data models for plans and steps |
@@ -223,11 +230,26 @@ Each step shows:
 |-----------|-------------------|
 | "What is 2+2?" | No planning (question) |
 | "What does 'create' mean?" | No planning (question with action word) |
-| "Create a tic-tac-toe game" | Planning triggered |
-| "1. Create X, 2. Add Y" | Planning triggered (numbered list) |
-| "Create folder TestFolder" | Uses `create_folder` function |
+| "delete poem.txt" | No planning (simple action verb) |
+| "remove the old config file" | No planning (simple action verb) |
+| "show me the contents of Program.cs" | No planning (simple action verb) |
+| "create a function" | No planning (too short, under 12 words) |
+| "add a button" | No planning (too short, under 12 words) |
+| "Create a REST API service with authentication and rate limiting for the user module" | Planning triggered (12+ words, imperative + scope) |
+| "1. Create X\n2. Add Y\n3. Test Z" | Planning triggered (3+ numbered items) |
+| "Create folder TestFolder" | Uses `create_folder` function directly |
 | Same write twice quickly | Second should be skipped (deduplication) |
-| "refactor @src/file.cs to use interfaces" | Planning triggered with file content attached |
+| "refactor @src/file.cs to use interfaces and add unit tests and then update the documentation" | Planning triggered (12+ words with file content attached) |
+
+---
+
+## Related Features
+
+### Diff Approvals
+
+File writes and deletions intercepted by `FunctionInvocationFilter` trigger a diff approval UI before execution. This works alongside the task planner — during planned step execution, each file operation still requires approval (unless globally or per-file bypassed).
+
+See the main [README](../../../README.md#diff-approvals) for user-facing documentation.
 
 ---
 
