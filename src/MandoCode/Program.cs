@@ -66,6 +66,19 @@ class Program
                 return new TaskPlannerService(aiService, cfg);
             });
 
+            // Register FileAutocompleteProvider as singleton
+            services.AddSingleton(provider =>
+            {
+                var cfg = provider.GetRequiredService<MandoCodeConfig>();
+                var ignoreDirs = new HashSet<string>
+                {
+                    ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
+                    "packages", "dist", "build", "__pycache__", ".idea", ".claude"
+                };
+                foreach (var dir in cfg.IgnoreDirectories) ignoreDirs.Add(dir);
+                return new FileAutocompleteProvider(projectRoot, ignoreDirs);
+            });
+
             // Configure console options
             services.Configure<ConsoleAppOptions>(options =>
             {

@@ -2,27 +2,29 @@
 
 ## Overview
 
-The Task Planner is a feature designed to handle complex, multi-step requests that would otherwise cause timeouts when using smaller or slower AI models. Instead of attempting to process an entire complex request in a single API call, the Task Planner breaks it down into manageable steps and executes them sequentially.
+The Task Planner handles complex, multi-step requests that would otherwise cause timeouts when using smaller or slower AI models. Instead of attempting to process an entire complex request in a single API call, the Task Planner breaks it down into manageable steps and executes them sequentially with progress tracking and error recovery.
 
 ## How It Works
 
 ```
 User Input
-    ↓
-[Complexity Detection] → Simple request/Question? → Direct execution
-    ↓ Complex request
+    |
+[Process @file references] - Attach referenced file content
+    |
+[Complexity Detection] --> Simple request/Question? --> Direct execution
+    | Complex request
 [Create Plan] - AI generates numbered steps
-    ↓
+    |
 [Display Plan] - User can approve, skip planning, or cancel
-    ↓ Approved
+    | Approved
 [Execute Steps] - Each step runs with completion tracking
-    ↓
+    |
 Complete
 ```
 
 ### Complexity Detection
 
-The system uses improved heuristics to detect complex requests while filtering out simple questions:
+The system uses heuristics to detect complex requests while filtering out simple questions:
 
 **Questions are NOT planned** (filtered first):
 - Messages ending with `?`
@@ -38,7 +40,15 @@ The system uses improved heuristics to detect complex requests while filtering o
 - "create", "build", "implement", "make", "develop", "write", "add", "design", "set up", "configure", "generate", "refactor", "update", "modify", "change", "fix", "debug", "optimize"
 
 **Scope indicators**:
-- "game", "application", "app", "feature", "system", "component", "page", "form", "api", "endpoint", "service", "module", "website", "project", "program", "tool", "utility", "class", "function", "method", "interface", "database"
+- "game", "application", "app", "feature", "system", "component", "page", "form", "api", "endpoint", "service", "module", "website", "site", "project", "program", "tool", "utility", "class", "function", "method", "interface", "database"
+
+### Integration with `@` File References
+
+When a user includes `@file` references in a complex request, the file content is resolved and injected **before** the planner evaluates the input. This means:
+
+- The AI has full context of referenced files when generating the plan
+- Plan steps can reference the content of attached files
+- Example: `refactor @src/MandoCode/Services/AIService.cs to use the strategy pattern` triggers planning with the file content available
 
 ### Configuration
 
@@ -71,6 +81,7 @@ The system uses improved heuristics to detect complex requests while filtering o
 | `Services/FunctionCompletionTracker.cs` | Event-based function completion tracking |
 | `Services/FunctionInvocationFilter.cs` | Function deduplication, execution events |
 | `Services/RetryPolicy.cs` | Exponential backoff retry for transient errors |
+| `Services/FileAutocompleteProvider.cs` | File content reading for `@` references (used before planning) |
 | `Models/TaskPlan.cs` | Data models for plans and steps |
 | `Models/TaskProgressEvent.cs` | Progress event types for UI updates |
 | `Models/SystemPrompts.cs` | Planning prompt with structured format |
@@ -132,31 +143,26 @@ The `TaskPlannerService` supports multiple plan formats (tried in order):
 
 ### Event-Based Completion Tracking
 
-Replaced unreliable `Task.Delay(200)` with `FunctionCompletionTracker`:
+Uses `FunctionCompletionTracker` with semaphore-based signaling to wait for all function invocations to complete before proceeding to the next step:
 
 ```csharp
-// Old approach (race condition prone)
-await Task.Delay(200);
-
-// New approach (event-based)
+// Waits until all pending function calls finish (up to 30s timeout)
 await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
 ```
-
-The tracker uses semaphore-based signaling to wait for all function invocations to complete before proceeding to the next step.
 
 ### Retry Policy
 
 Transient errors (HTTP, timeout, socket) are automatically retried with exponential backoff:
 
 ```
-Attempt 1 → fail → wait 500ms
-Attempt 2 → fail → wait 1000ms
-Attempt 3 → fail → throw
+Attempt 1 -> fail -> wait 500ms
+Attempt 2 -> fail -> wait 1000ms
+Attempt 3 -> fail -> throw
 ```
 
 Applied to:
-- `ChatAsync()` - Main chat endpoint
-- `ExecutePlanStepAsync()` - Plan step execution
+- `ChatAsync()` — main chat endpoint
+- `ExecutePlanStepAsync()` — plan step execution
 
 ### Intelligent Deduplication
 
@@ -165,9 +171,7 @@ Prevents duplicate function calls within configurable time windows:
 | Operation Type | Window | Key Components |
 |---------------|--------|----------------|
 | Read operations | 2 seconds | Function name + all arguments |
-| Write operations | 5 seconds (configurable) | Function name + path + content hash |
-
-Content hashing uses SHA256 to detect identical writes to the same path.
+| Write operations | 5 seconds (configurable) | Function name + path + content hash (SHA256) |
 
 ### Fallback Function Parsing
 
@@ -186,6 +190,33 @@ Some local models output function calls as JSON text instead of proper tool call
 
 ---
 
+## User Interaction Flow
+
+### Plan Display
+
+Plans are presented in a table with step numbers and descriptions. The user chooses:
+
+- **Execute plan** — runs all steps sequentially with progress output
+- **Execute directly (skip planning)** — sends the original request as-is
+- **Cancel** — aborts the request
+
+### Error Handling During Execution
+
+When a step fails, the user is prompted:
+
+- **Skip this step and continue** — marks the step as skipped, proceeds to the next
+- **Cancel the plan** — stops execution, marks the plan as cancelled
+
+### Progress Feedback
+
+Each step shows:
+- Step number and description when starting
+- Function invocation notifications in real-time
+- Result summary when completed (truncated to 500 chars for display)
+- Success/failure status
+
+---
+
 ## Testing Recommendations
 
 | Test Case | Expected Behavior |
@@ -195,7 +226,8 @@ Some local models output function calls as JSON text instead of proper tool call
 | "Create a tic-tac-toe game" | Planning triggered |
 | "1. Create X, 2. Add Y" | Planning triggered (numbered list) |
 | "Create folder TestFolder" | Uses `create_folder` function |
-| Same write twice quickly | Second should be skipped |
+| Same write twice quickly | Second should be skipped (deduplication) |
+| "refactor @src/file.cs to use interfaces" | Planning triggered with file content attached |
 
 ---
 
