@@ -22,6 +22,21 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// </summary>
     public event Action<FunctionExecutionResult>? OnFunctionCompleted;
 
+    /// <summary>
+    /// Async callback for requesting user approval before writing a file.
+    /// Parameters: (relativePath, oldContent, newContent) → DiffApprovalResult.
+    /// </summary>
+    public Func<string, string?, string, Task<DiffApprovalResult>>? OnWriteApprovalRequested { get; set; }
+
+    /// <summary>
+    /// Async callback for requesting user approval before deleting a file.
+    /// Parameters: (relativePath, existingContent) → DiffApprovalResult.
+    /// </summary>
+    public Func<string, string?, Task<DiffApprovalResult>>? OnDeleteApprovalRequested { get; set; }
+
+    // Project root for resolving file paths when reading existing content
+    private readonly string? _projectRoot;
+
     // Cache for deduplication - stores recent function calls and their results
     private readonly Dictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
 
@@ -55,11 +70,12 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     {
     }
 
-    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds)
+    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, string? projectRoot = null)
     {
         // Read operations use shorter window (2s), writes use configured window
         _readDeduplicationWindow = TimeSpan.FromSeconds(2);
         _writeDeduplicationWindow = TimeSpan.FromSeconds(defaultDeduplicationWindowSeconds);
+        _projectRoot = projectRoot;
     }
 
     public async Task OnFunctionInvocationAsync(FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
@@ -100,6 +116,57 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         };
 
         OnFunctionInvoked?.Invoke(functionCall);
+
+        // Intercept write_file calls for diff approval
+        if (context.Function.Name == "write_file" && OnWriteApprovalRequested != null)
+        {
+            var approvalResult = await HandleWriteApprovalAsync(context);
+            if (approvalResult != null)
+            {
+                // User denied or redirected — skip actual write
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(
+                    context.Function,
+                    approvalResult
+                );
+
+                var skipResult = new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = approvalResult.Length > 200 ? approvalResult[..200] + "..." : approvalResult,
+                    Success = true
+                };
+                OnFunctionCompleted?.Invoke(skipResult);
+
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+        }
+
+        // Intercept delete_file calls for approval
+        if (context.Function.Name == "delete_file" && OnDeleteApprovalRequested != null)
+        {
+            var approvalResult = await HandleDeleteApprovalAsync(context);
+            if (approvalResult != null)
+            {
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(
+                    context.Function,
+                    approvalResult
+                );
+
+                var skipResult = new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = approvalResult.Length > 200 ? approvalResult[..200] + "..." : approvalResult,
+                    Success = true
+                };
+                OnFunctionCompleted?.Invoke(skipResult);
+
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+        }
 
         // Invoke the function
         try
@@ -150,6 +217,117 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Handles the write approval workflow. Returns a result message to use instead of writing,
+    /// or null if the write should proceed normally.
+    /// </summary>
+    private async Task<string?> HandleWriteApprovalAsync(FunctionInvocationContext context)
+    {
+        if (OnWriteApprovalRequested == null)
+            return null;
+
+        // Extract arguments
+        context.Arguments.TryGetValue("relativePath", out var pathObj);
+        context.Arguments.TryGetValue("content", out var contentObj);
+
+        var relativePath = pathObj?.ToString();
+        var newContent = contentObj?.ToString();
+
+        if (string.IsNullOrEmpty(relativePath) || newContent == null)
+            return null;
+
+        // Read existing file content (null if new file)
+        string? oldContent = null;
+        if (!string.IsNullOrEmpty(_projectRoot))
+        {
+            var fullPath = Path.Combine(_projectRoot, relativePath);
+            fullPath = Path.GetFullPath(fullPath);
+            if (File.Exists(fullPath))
+            {
+                try
+                {
+                    oldContent = await File.ReadAllTextAsync(fullPath);
+                }
+                catch
+                {
+                    // If we can't read the file, treat it as new
+                }
+            }
+        }
+
+        // Request approval from the UI
+        var approval = await OnWriteApprovalRequested(relativePath, oldContent, newContent);
+
+        switch (approval.Response)
+        {
+            case DiffApprovalResponse.Approved:
+            case DiffApprovalResponse.ApprovedNoAskAgain:
+                return null; // Proceed with the write
+
+            case DiffApprovalResponse.Denied:
+                return $"User denied the file write to '{relativePath}'. Do not retry this write unless the user asks.";
+
+            case DiffApprovalResponse.NewInstructions:
+                return $"User rejected the file write to '{relativePath}' and provided new instructions: {approval.UserMessage}";
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Handles the delete approval workflow. Returns a result message to use instead of deleting,
+    /// or null if the delete should proceed normally.
+    /// </summary>
+    private async Task<string?> HandleDeleteApprovalAsync(FunctionInvocationContext context)
+    {
+        if (OnDeleteApprovalRequested == null)
+            return null;
+
+        context.Arguments.TryGetValue("relativePath", out var pathObj);
+        var relativePath = pathObj?.ToString();
+
+        if (string.IsNullOrEmpty(relativePath))
+            return null;
+
+        // Read existing file content to show in the diff
+        string? existingContent = null;
+        if (!string.IsNullOrEmpty(_projectRoot))
+        {
+            var fullPath = Path.Combine(_projectRoot, relativePath);
+            fullPath = Path.GetFullPath(fullPath);
+            if (File.Exists(fullPath))
+            {
+                try
+                {
+                    existingContent = await File.ReadAllTextAsync(fullPath);
+                }
+                catch
+                {
+                    // If we can't read it, show deletion without content
+                }
+            }
+        }
+
+        var approval = await OnDeleteApprovalRequested(relativePath, existingContent);
+
+        switch (approval.Response)
+        {
+            case DiffApprovalResponse.Approved:
+            case DiffApprovalResponse.ApprovedNoAskAgain:
+                return null; // Proceed with the delete
+
+            case DiffApprovalResponse.Denied:
+                return $"User denied the deletion of '{relativePath}'. Do not retry unless the user asks.";
+
+            case DiffApprovalResponse.NewInstructions:
+                return $"User rejected the deletion of '{relativePath}' and provided new instructions: {approval.UserMessage}";
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
     /// Determines if a function is a write operation (modifies files/folders).
     /// </summary>
     private bool IsWriteOperation(string? functionName)
@@ -176,6 +354,11 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     if (arguments.TryGetValue("relativePath", out var writePath))
                         return $"Writing to {writePath}";
                     return "Writing file";
+
+                case "delete_file":
+                    if (arguments.TryGetValue("relativePath", out var deletePath))
+                        return $"Deleting {deletePath}";
+                    return "Deleting file";
 
                 case "read_file_contents":
                     if (arguments.TryGetValue("relativePath", out var readPath))

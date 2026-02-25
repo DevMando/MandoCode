@@ -175,6 +175,33 @@ public class FileSystemPlugin
     }
 
     /// <summary>
+    /// Deletes a file from the project.
+    /// </summary>
+    [KernelFunction("delete_file")]
+    [Description("Deletes a file. Use relative path from project root. Cannot delete directories — only files.")]
+    public Task<string> DeleteFile(
+        [Description("Relative path to the file from project root")] string relativePath)
+    {
+        try
+        {
+            var fullPath = GetFullPath(relativePath);
+
+            if (!File.Exists(fullPath))
+            {
+                return Task.FromResult($"Error: File not found: {relativePath}");
+            }
+
+            File.Delete(fullPath);
+
+            return Task.FromResult($"Successfully deleted file:\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error deleting file '{relativePath}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Searches for text within files.
     /// </summary>
     [KernelFunction("search_text_in_files")]

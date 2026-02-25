@@ -46,6 +46,42 @@ public class AIService
     /// </summary>
     public FunctionCompletionTracker CompletionTracker => _completionTracker;
 
+    /// <summary>
+    /// Async callback for requesting user approval before writing a file.
+    /// Set this from the UI layer (App.razor) to enable diff approvals.
+    /// </summary>
+    private Func<string, string?, string, Task<DiffApprovalResult>>? _onWriteApprovalRequested;
+    public Func<string, string?, string, Task<DiffApprovalResult>>? OnWriteApprovalRequested
+    {
+        get => _onWriteApprovalRequested;
+        set
+        {
+            _onWriteApprovalRequested = value;
+            if (_functionFilter != null)
+            {
+                _functionFilter.OnWriteApprovalRequested = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Async callback for requesting user approval before deleting a file.
+    /// Set this from the UI layer (App.razor) to enable delete approvals.
+    /// </summary>
+    private Func<string, string?, Task<DiffApprovalResult>>? _onDeleteApprovalRequested;
+    public Func<string, string?, Task<DiffApprovalResult>>? OnDeleteApprovalRequested
+    {
+        get => _onDeleteApprovalRequested;
+        set
+        {
+            _onDeleteApprovalRequested = value;
+            if (_functionFilter != null)
+            {
+                _functionFilter.OnDeleteApprovalRequested = value;
+            }
+        }
+    }
+
     public AIService(string projectRoot, MandoCodeConfig config)
     {
         _projectRoot = projectRoot;
@@ -96,11 +132,22 @@ public class AIService
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
         // Set up function invocation filter for UI events and deduplication
-        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds);
+        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRoot);
         _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
         _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
         _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
         _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
+
+        // Wire diff approval callbacks through to the filter
+        if (_onWriteApprovalRequested != null)
+        {
+            _functionFilter.OnWriteApprovalRequested = _onWriteApprovalRequested;
+        }
+        if (_onDeleteApprovalRequested != null)
+        {
+            _functionFilter.OnDeleteApprovalRequested = _onDeleteApprovalRequested;
+        }
+
         _kernel.FunctionInvocationFilters.Add(_functionFilter);
     }
 
@@ -756,6 +803,9 @@ public class AIService
         { "make_directory", "create_folder" },
         { "create_directory", "create_folder" },
         { "read_file", "read_file_contents" },
+        { "remove_file", "delete_file" },
+        { "rm", "delete_file" },
+        { "unlink", "delete_file" },
         { "list_files", "list_files_match_glob_pattern" },
         { "list_files_glob", "list_files_match_glob_pattern" },
         { "list_project_files", "list_all_project_files" },

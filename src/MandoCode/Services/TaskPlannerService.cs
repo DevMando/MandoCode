@@ -49,6 +49,16 @@ public class TaskPlannerService
     }
 
     /// <summary>
+    /// Simple single-action verbs that should never trigger planning on their own.
+    /// These represent quick file operations, not complex multi-step tasks.
+    /// </summary>
+    private static readonly string[] SimpleActionVerbs =
+    {
+        "delete", "remove", "read", "show", "list", "find",
+        "search", "open", "cat", "print", "display", "rename"
+    };
+
+    /// <summary>
     /// Determines if a user message should trigger the planning workflow.
     /// Uses improved heuristics to avoid planning for simple questions or requests.
     /// </summary>
@@ -63,29 +73,59 @@ public class TaskPlannerService
         var trimmed = userMessage.Trim();
         var lower = trimmed.ToLowerInvariant();
 
-        // Rule 1: Questions don't require planning
+        // Rule 0: Questions don't require planning
         if (IsQuestion(lower))
             return false;
 
-        // Rule 2: Check for numbered list with 2+ items (explicit multi-step)
+        // Rule 1: Simple single-action requests never need planning
+        // Short requests starting with simple verbs like "delete file X" should execute directly
+        if (IsSimpleSingleAction(lower))
+            return false;
+
+        // Rule 2: Check for numbered list with 3+ items (explicit multi-step)
         var numberedListCount = Regex.Matches(lower, @"^\s*\d+[\.\)]\s+", RegexOptions.Multiline).Count;
-        if (numberedListCount >= 2)
+        if (numberedListCount >= 3)
             return true;
 
-        // Rule 3: Check for imperative verb at start + scope indicator
+        // Rule 3: Check for imperative verb at start + scope indicator + enough substance
+        // Short requests like "create a function" or "add a component" are single actions — not plans
         var startsWithImperative = StartsWithImperative(lower);
         var hasScope = ScopeIndicators.Any(s => lower.Contains(s));
-        if (startsWithImperative && hasScope)
+        var wordCount = lower.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        if (startsWithImperative && hasScope && wordCount >= 12)
             return true;
 
-        // Rule 4: Long requests likely have detailed requirements (increased threshold)
-        if (trimmed.Length > 250)
+        // Rule 4: Very long requests likely have detailed requirements
+        if (trimmed.Length > 400)
             return true;
 
-        // Rule 5: Multiple explicit tasks connected with "and" or "also"
-        var hasMultipleTasks = (lower.Contains(" and ") && StartsWithImperative(lower)) ||
-                              (lower.Contains("also") && StartsWithImperative(lower));
-        if (hasMultipleTasks)
+        // Rule 5: Multiple explicit tasks connected with "and" or "also" — only when request is substantial
+        if (wordCount >= 10 && StartsWithImperative(lower))
+        {
+            var hasMultipleTasks = lower.Contains(" and then ") ||
+                                  (lower.Contains(" also ") && lower.Contains(" and "));
+            if (hasMultipleTasks)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Detects simple single-action requests that should skip planning.
+    /// e.g., "delete poem.txt", "remove the file", "show me Program.cs"
+    /// </summary>
+    private static bool IsSimpleSingleAction(string lowerMessage)
+    {
+        // Must start with a simple action verb
+        var startsWithSimple = SimpleActionVerbs.Any(v =>
+            lowerMessage.StartsWith(v + " "));
+
+        if (!startsWithSimple)
+            return false;
+
+        // Short requests with simple verbs are always simple actions
+        if (lowerMessage.Length < 150 && !lowerMessage.Contains(" and ") && !lowerMessage.Contains(" also "))
             return true;
 
         return false;
