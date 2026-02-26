@@ -25,9 +25,9 @@ public static class MarkdownRenderer
     private const string Grey = "\u001b[90m";
     private const string FgReset = "\u001b[39m"; // reset foreground only (preserves bold/italic)
 
-    // Regex for detecting bare URLs in literal text
+    // Regex for detecting bare URLs and bare domain names in literal text
     private static readonly System.Text.RegularExpressions.Regex UrlPattern = new(
-        @"(https?://[^\s)\]>""]+)",
+        @"(https?://[^\s)\]>""]+|(?<![@\w])[\w][\w.-]*\.(?:com|org|net|io|dev|edu|gov|co|app|ai|us|uk|de|fr|jp|au|ca|ru|br|in|xyz|tech|info|biz|me|tv|cc)\b(?:/[^\s)\]>""]*)?)",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
@@ -446,7 +446,12 @@ public static class MarkdownRenderer
                 Console.Write(text[lastIndex..match.Index]);
 
             // Write the URL as a clickable hyperlink
-            WriteHyperlink(match.Value, match.Value);
+            // For bare domains (no http prefix), prepend https:// for the link target
+            var displayText = match.Value;
+            var linkUrl = displayText.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? displayText
+                : $"https://{displayText}";
+            WriteHyperlink(linkUrl, displayText);
             lastIndex = match.Index + match.Length;
         }
 
