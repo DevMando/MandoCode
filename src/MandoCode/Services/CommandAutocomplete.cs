@@ -69,11 +69,21 @@ public static class CommandAutocomplete
                     }
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
-                        // Insert selected file path — do NOT submit
-                        InsertFileSelection(input, filteredFiles[selectedIndex], atAnchorPos, cursorLeft, ref cursorTop);
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
+                        var selected = filteredFiles[selectedIndex];
+                        if (selected.EndsWith('/'))
+                        {
+                            // Directory selected — drill into it
+                            DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
+                                ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
+                        }
+                        else
+                        {
+                            // Insert selected file path — do NOT submit
+                            InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
+                            autocompleteMode = AutocompleteMode.None;
+                            atAnchorPos = -1;
+                            selectedIndex = 0;
+                        }
                         continue;
                     }
                     else
@@ -100,11 +110,21 @@ public static class CommandAutocomplete
                     }
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
-                        // Insert selected file path — do NOT submit
-                        InsertFileSelection(input, filteredFiles[selectedIndex], atAnchorPos, cursorLeft, ref cursorTop);
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
+                        var selected = filteredFiles[selectedIndex];
+                        if (selected.EndsWith('/'))
+                        {
+                            // Directory selected — drill into it
+                            DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
+                                ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
+                        }
+                        else
+                        {
+                            // Insert selected file path — do NOT submit
+                            InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
+                            autocompleteMode = AutocompleteMode.None;
+                            atAnchorPos = -1;
+                            selectedIndex = 0;
+                        }
                     }
                     continue;
 
@@ -138,6 +158,7 @@ public static class CommandAutocomplete
                     if (autocompleteMode != AutocompleteMode.None)
                     {
                         ClearAutocompleteDisplay(ref cursorTop);
+                        Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
                         autocompleteMode = AutocompleteMode.None;
                         atAnchorPos = -1;
                         selectedIndex = 0;
@@ -166,6 +187,7 @@ public static class CommandAutocomplete
                             {
                                 // Deleted back to or past the @
                                 ClearAutocompleteDisplay(ref cursorTop);
+                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
                                 autocompleteMode = AutocompleteMode.None;
                                 atAnchorPos = -1;
                                 selectedIndex = 0;
@@ -183,6 +205,7 @@ public static class CommandAutocomplete
                                 else
                                 {
                                     ClearAutocompleteDisplay(ref cursorTop);
+                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
                                     autocompleteMode = AutocompleteMode.None;
                                     atAnchorPos = -1;
                                     selectedIndex = 0;
@@ -203,14 +226,20 @@ public static class CommandAutocomplete
                             else
                             {
                                 if (autocompleteMode != AutocompleteMode.None)
+                                {
                                     ClearAutocompleteDisplay(ref cursorTop);
+                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                                }
                                 autocompleteMode = AutocompleteMode.None;
                             }
                         }
                         else
                         {
                             if (autocompleteMode != AutocompleteMode.None)
+                            {
                                 ClearAutocompleteDisplay(ref cursorTop);
+                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                            }
                             autocompleteMode = AutocompleteMode.None;
                             selectedIndex = 0;
                         }
@@ -253,6 +282,7 @@ public static class CommandAutocomplete
                             else
                             {
                                 ClearAutocompleteDisplay(ref cursorTop);
+                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
                                 autocompleteMode = AutocompleteMode.None;
                                 atAnchorPos = -1;
                                 selectedIndex = 0;
@@ -273,7 +303,10 @@ public static class CommandAutocomplete
                             else
                             {
                                 if (autocompleteMode != AutocompleteMode.None)
+                                {
                                     ClearAutocompleteDisplay(ref cursorTop);
+                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                                }
                                 autocompleteMode = AutocompleteMode.None;
                             }
                         }
@@ -281,6 +314,7 @@ public static class CommandAutocomplete
                         {
                             // Was in command mode but input no longer starts with /
                             ClearAutocompleteDisplay(ref cursorTop);
+                            Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
                             autocompleteMode = AutocompleteMode.None;
                         }
                     }
@@ -307,6 +341,44 @@ public static class CommandAutocomplete
         Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
         Console.SetCursorPosition(cursorLeft, cursorTop);
         Console.Write(input.ToString());
+    }
+
+    /// <summary>
+    /// Drills into a selected directory: updates input to @dir/, re-filters, and shows contents.
+    /// </summary>
+    private static void DrillIntoDirectory(
+        StringBuilder input, string dirPath, int atAnchorPos, int cursorLeft, ref int cursorTop,
+        ref List<string> filteredFiles, ref int selectedIndex, ref AutocompleteMode autocompleteMode, ref int atAnchorPos2)
+    {
+        // Replace everything from @ onward with @dirPath (keeps trailing /)
+        var before = input.ToString().Substring(0, atAnchorPos);
+        input.Clear();
+        input.Append(before);
+        input.Append('@');
+        input.Append(dirPath);
+
+        // Redraw input line
+        ClearAutocompleteDisplay(ref cursorTop);
+        Console.SetCursorPosition(cursorLeft, cursorTop);
+        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+        Console.SetCursorPosition(cursorLeft, cursorTop);
+        Console.Write(input.ToString());
+
+        // Re-filter to show directory contents
+        filteredFiles = _fileProvider?.FilterFiles(dirPath) ?? new();
+        if (filteredFiles.Any())
+        {
+            selectedIndex = 0;
+            DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+        }
+        else
+        {
+            // Empty directory — close autocomplete
+            Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+            autocompleteMode = AutocompleteMode.None;
+            atAnchorPos2 = -1;
+            selectedIndex = 0;
+        }
     }
 
     /// <summary>
@@ -383,7 +455,8 @@ public static class CommandAutocomplete
     }
 
     /// <summary>
-    /// Displays the file autocomplete dropdown.
+    /// Displays the file autocomplete dropdown. Directories are shown with a trailing /
+    /// and use cyan styling to distinguish them from files (yellow).
     /// </summary>
     private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> files, int selectedIndex)
     {
@@ -401,26 +474,62 @@ public static class CommandAutocomplete
 
         for (int i = 0; i < files.Count; i++)
         {
-            var filePath = files[i];
-            var fileName = Path.GetFileName(filePath);
-            var dirPath = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+            var entryPath = files[i];
+            var isDirectory = entryPath.EndsWith('/');
 
-            if (i == selectedIndex)
+            if (isDirectory)
             {
-                var display = string.IsNullOrEmpty(dirPath)
-                    ? fileName
-                    : $"{fileName}  {dirPath}/";
-                AnsiConsole.MarkupLine($"[black on yellow]│ {display,-46}[/]");
-            }
-            else
-            {
-                if (string.IsNullOrEmpty(dirPath))
+                // Directory entry — show the last directory name with / suffix
+                var trimmed = entryPath.TrimEnd('/');
+                var dirName = trimmed.Contains('/')
+                    ? trimmed.Substring(trimmed.LastIndexOf('/') + 1)
+                    : trimmed;
+                var parentPath = trimmed.Contains('/')
+                    ? trimmed.Substring(0, trimmed.LastIndexOf('/'))
+                    : "";
+
+                if (i == selectedIndex)
                 {
-                    AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName),-46}[/]");
+                    var display = string.IsNullOrEmpty(parentPath)
+                        ? $"{dirName}/"
+                        : $"{dirName}/  {parentPath}/";
+                    AnsiConsole.MarkupLine($"[black on cyan]│ {display,-46}[/]");
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName)}[/]  [dim]{Markup.Escape(dirPath)}/[/]");
+                    if (string.IsNullOrEmpty(parentPath))
+                    {
+                        AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{Markup.Escape(dirName)}/[/]");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{Markup.Escape(dirName)}/[/]  [dim]{Markup.Escape(parentPath)}/[/]");
+                    }
+                }
+            }
+            else
+            {
+                // File entry — existing display logic
+                var fileName = Path.GetFileName(entryPath);
+                var dirPath = Path.GetDirectoryName(entryPath)?.Replace('\\', '/') ?? "";
+
+                if (i == selectedIndex)
+                {
+                    var display = string.IsNullOrEmpty(dirPath)
+                        ? fileName
+                        : $"{fileName}  {dirPath}/";
+                    AnsiConsole.MarkupLine($"[black on yellow]│ {display,-46}[/]");
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(dirPath))
+                    {
+                        AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName),-46}[/]");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName)}[/]  [dim]{Markup.Escape(dirPath)}/[/]");
+                    }
                 }
             }
         }

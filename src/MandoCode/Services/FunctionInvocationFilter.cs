@@ -3,6 +3,7 @@ using MandoCode.Models;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MandoCode.Services;
 
@@ -47,6 +48,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     // Count of currently executing functions (for completion tracking)
     private int _pendingFunctionCount;
     private readonly object _pendingLock = new();
+
+    // Max lines to show in content preview for new file writes
+    private const int MaxPreviewLines = 10;
 
     /// <summary>
     /// Gets the number of functions currently executing.
@@ -117,10 +121,64 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
         OnFunctionInvoked?.Invoke(functionCall);
 
+        // --- Capture pre-execution state for operation display ---
+        string? capturedOldContent = null;
+        bool capturedIsNewFile = false;
+        bool approvalWasShown = false;
+
+        // For write_file: capture old content and new-file flag before any approval or execution
+        if (context.Function.Name == "write_file" && !string.IsNullOrEmpty(_projectRoot))
+        {
+            context.Arguments.TryGetValue("relativePath", out var pObj);
+            var path = pObj?.ToString();
+            if (!string.IsNullOrEmpty(path))
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, path));
+                capturedIsNewFile = !File.Exists(fullPath);
+                if (!capturedIsNewFile)
+                {
+                    try { capturedOldContent = await File.ReadAllTextAsync(fullPath); }
+                    catch { /* treat as new file if unreadable */ }
+                }
+            }
+        }
+
+        // For delete_file or delete_folder: capture existing content before approval or execution
+        if ((context.Function.Name == "delete_file" || context.Function.Name == "delete_folder") && !string.IsNullOrEmpty(_projectRoot))
+        {
+            context.Arguments.TryGetValue("relativePath", out var pObj);
+            var path = pObj?.ToString();
+            if (!string.IsNullOrEmpty(path))
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, path));
+                if (File.Exists(fullPath))
+                {
+                    try { capturedOldContent = await File.ReadAllTextAsync(fullPath); }
+                    catch { }
+                }
+                else if (Directory.Exists(fullPath))
+                {
+                    // For folders, build a listing of contents as the "old content"
+                    try
+                    {
+                        var files = Directory.GetFiles(fullPath, "*", SearchOption.AllDirectories);
+                        var listing = files
+                            .Select(f => Path.GetRelativePath(fullPath, f).Replace('\\', '/'))
+                            .OrderBy(f => f)
+                            .ToList();
+                        capturedOldContent = $"Folder: {path}/\nContents ({listing.Count} files):\n" +
+                                             string.Join("\n", listing.Select(f => $"  {f}"));
+                    }
+                    catch { }
+                }
+            }
+        }
+
         // Intercept write_file calls for diff approval
         if (context.Function.Name == "write_file" && OnWriteApprovalRequested != null)
         {
-            var approvalResult = await HandleWriteApprovalAsync(context);
+            approvalWasShown = true;
+            var approvalResult = await HandleWriteApprovalAsync(context, capturedOldContent);
             if (approvalResult != null)
             {
                 // User denied or redirected — skip actual write
@@ -143,10 +201,11 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             }
         }
 
-        // Intercept delete_file calls for approval
-        if (context.Function.Name == "delete_file" && OnDeleteApprovalRequested != null)
+        // Intercept delete_file/delete_folder calls for approval
+        if ((context.Function.Name == "delete_file" || context.Function.Name == "delete_folder") && OnDeleteApprovalRequested != null)
         {
-            var approvalResult = await HandleDeleteApprovalAsync(context);
+            approvalWasShown = true;
+            var approvalResult = await HandleDeleteApprovalAsync(context, capturedOldContent);
             if (approvalResult != null)
             {
                 context.Result = new Microsoft.SemanticKernel.FunctionResult(
@@ -181,11 +240,26 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             var resultStr = context.Result?.ToString() ?? string.Empty;
             var isError = resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
 
+            // Build operation display for known file operations
+            OperationDisplayEvent? operationDisplay = null;
+            if (!isError)
+            {
+                operationDisplay = BuildOperationDisplay(
+                    context.Function.Name,
+                    context.Arguments,
+                    resultStr,
+                    capturedOldContent,
+                    capturedIsNewFile,
+                    approvalWasShown
+                );
+            }
+
             var successResult = new FunctionExecutionResult
             {
                 FunctionName = functionName,
                 Result = TruncateResult(resultStr),
-                Success = !isError
+                Success = !isError,
+                OperationDisplay = operationDisplay
             };
 
             OnFunctionCompleted?.Invoke(successResult);
@@ -217,10 +291,182 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Builds an OperationDisplayEvent for known file operations.
+    /// Returns null for unknown operations.
+    /// </summary>
+    private OperationDisplayEvent? BuildOperationDisplay(
+        string functionName,
+        IReadOnlyDictionary<string, object?> arguments,
+        string resultStr,
+        string? capturedOldContent,
+        bool capturedIsNewFile,
+        bool approvalWasShown)
+    {
+        switch (functionName)
+        {
+            case "write_file":
+                return BuildWriteDisplay(arguments, capturedOldContent, capturedIsNewFile, approvalWasShown);
+
+            case "read_file_contents":
+                return BuildReadDisplay(arguments, resultStr);
+
+            case "delete_file":
+                return BuildDeleteDisplay(arguments, capturedOldContent, approvalWasShown);
+
+            case "delete_folder":
+                arguments.TryGetValue("relativePath", out var delFolderPath);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "DeleteFolder",
+                    FilePath = delFolderPath?.ToString() ?? "",
+                    ApprovalWasShown = approvalWasShown
+                };
+
+            case "create_folder":
+                arguments.TryGetValue("relativePath", out var folderPath);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "CreateFolder",
+                    FilePath = folderPath?.ToString() ?? ""
+                };
+
+            case "list_all_project_files":
+                return new OperationDisplayEvent
+                {
+                    OperationType = "List",
+                    FilePath = ""
+                };
+
+            case "list_files_match_glob_pattern":
+                arguments.TryGetValue("pattern", out var pattern);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "Glob",
+                    FilePath = pattern?.ToString() ?? "*.*"
+                };
+
+            case "search_text_in_files":
+                arguments.TryGetValue("searchText", out var searchText);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "Search",
+                    FilePath = searchText?.ToString() ?? ""
+                };
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Builds display event for write operations (new file = Write, existing file = Update).
+    /// </summary>
+    private OperationDisplayEvent BuildWriteDisplay(
+        IReadOnlyDictionary<string, object?> arguments,
+        string? oldContent,
+        bool isNewFile,
+        bool approvalWasShown)
+    {
+        arguments.TryGetValue("relativePath", out var pathObj);
+        arguments.TryGetValue("content", out var contentObj);
+        var filePath = pathObj?.ToString() ?? "";
+        var newContent = contentObj?.ToString() ?? "";
+
+        var lines = newContent.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+        var lineCount = lines.Length;
+
+        if (isNewFile)
+        {
+            // New file — show content preview
+            var previewCount = Math.Min(MaxPreviewLines, lineCount);
+            var preview = string.Join('\n', lines.Take(previewCount));
+
+            return new OperationDisplayEvent
+            {
+                OperationType = "Write",
+                FilePath = filePath,
+                LineCount = lineCount,
+                IsNewFile = true,
+                ContentPreview = preview,
+                RemainingLines = Math.Max(0, lineCount - previewCount),
+                ApprovalWasShown = approvalWasShown
+            };
+        }
+        else
+        {
+            // Existing file — compute inline diff
+            var diffLines = DiffService.ComputeDiff(oldContent, newContent);
+            var additions = diffLines.Count(l => l.LineType == DiffLineType.Added);
+            var deletions = diffLines.Count(l => l.LineType == DiffLineType.Removed);
+            var collapsedDiff = DiffService.CollapseContext(diffLines, 3);
+
+            return new OperationDisplayEvent
+            {
+                OperationType = "Update",
+                FilePath = filePath,
+                LineCount = lineCount,
+                IsNewFile = false,
+                InlineDiff = collapsedDiff,
+                Additions = additions,
+                Deletions = deletions,
+                ApprovalWasShown = approvalWasShown
+            };
+        }
+    }
+
+    /// <summary>
+    /// Builds display event for read operations.
+    /// </summary>
+    private OperationDisplayEvent BuildReadDisplay(IReadOnlyDictionary<string, object?> arguments, string resultStr)
+    {
+        arguments.TryGetValue("relativePath", out var pathObj);
+        var filePath = pathObj?.ToString() ?? "";
+
+        // Parse line count from result: "Content of file '...' (42 lines):"
+        var lineCount = 0;
+        var match = Regex.Match(resultStr, @"\((\d+) lines?\)");
+        if (match.Success)
+            lineCount = int.Parse(match.Groups[1].Value);
+
+        return new OperationDisplayEvent
+        {
+            OperationType = "Read",
+            FilePath = filePath,
+            LineCount = lineCount
+        };
+    }
+
+    /// <summary>
+    /// Builds display event for delete operations.
+    /// </summary>
+    private OperationDisplayEvent BuildDeleteDisplay(
+        IReadOnlyDictionary<string, object?> arguments,
+        string? oldContent,
+        bool approvalWasShown)
+    {
+        arguments.TryGetValue("relativePath", out var pathObj);
+        var filePath = pathObj?.ToString() ?? "";
+
+        var lineCount = 0;
+        if (!string.IsNullOrEmpty(oldContent))
+            lineCount = oldContent.Split('\n').Length;
+
+        return new OperationDisplayEvent
+        {
+            OperationType = "Delete",
+            FilePath = filePath,
+            LineCount = lineCount,
+            Deletions = lineCount,
+            ApprovalWasShown = approvalWasShown
+        };
+    }
+
+    /// <summary>
     /// Handles the write approval workflow. Returns a result message to use instead of writing,
     /// or null if the write should proceed normally.
+    /// Uses pre-captured old content to avoid double file reads.
     /// </summary>
-    private async Task<string?> HandleWriteApprovalAsync(FunctionInvocationContext context)
+    private async Task<string?> HandleWriteApprovalAsync(FunctionInvocationContext context, string? oldContent)
     {
         if (OnWriteApprovalRequested == null)
             return null;
@@ -235,26 +481,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (string.IsNullOrEmpty(relativePath) || newContent == null)
             return null;
 
-        // Read existing file content (null if new file)
-        string? oldContent = null;
-        if (!string.IsNullOrEmpty(_projectRoot))
-        {
-            var fullPath = Path.Combine(_projectRoot, relativePath);
-            fullPath = Path.GetFullPath(fullPath);
-            if (File.Exists(fullPath))
-            {
-                try
-                {
-                    oldContent = await File.ReadAllTextAsync(fullPath);
-                }
-                catch
-                {
-                    // If we can't read the file, treat it as new
-                }
-            }
-        }
-
-        // Request approval from the UI
+        // Request approval from the UI (oldContent is pre-captured, null for new files)
         var approval = await OnWriteApprovalRequested(relativePath, oldContent, newContent);
 
         switch (approval.Response)
@@ -277,8 +504,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// <summary>
     /// Handles the delete approval workflow. Returns a result message to use instead of deleting,
     /// or null if the delete should proceed normally.
+    /// Uses pre-captured existing content to avoid double file reads.
     /// </summary>
-    private async Task<string?> HandleDeleteApprovalAsync(FunctionInvocationContext context)
+    private async Task<string?> HandleDeleteApprovalAsync(FunctionInvocationContext context, string? existingContent)
     {
         if (OnDeleteApprovalRequested == null)
             return null;
@@ -288,25 +516,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
         if (string.IsNullOrEmpty(relativePath))
             return null;
-
-        // Read existing file content to show in the diff
-        string? existingContent = null;
-        if (!string.IsNullOrEmpty(_projectRoot))
-        {
-            var fullPath = Path.Combine(_projectRoot, relativePath);
-            fullPath = Path.GetFullPath(fullPath);
-            if (File.Exists(fullPath))
-            {
-                try
-                {
-                    existingContent = await File.ReadAllTextAsync(fullPath);
-                }
-                catch
-                {
-                    // If we can't read it, show deletion without content
-                }
-            }
-        }
 
         var approval = await OnDeleteApprovalRequested(relativePath, existingContent);
 
@@ -359,6 +568,11 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     if (arguments.TryGetValue("relativePath", out var deletePath))
                         return $"Deleting {deletePath}";
                     return "Deleting file";
+
+                case "delete_folder":
+                    if (arguments.TryGetValue("relativePath", out var deleteFolderPath))
+                        return $"Deleting folder {deleteFolderPath}";
+                    return "Deleting folder";
 
                 case "read_file_contents":
                     if (arguments.TryGetValue("relativePath", out var readPath))
