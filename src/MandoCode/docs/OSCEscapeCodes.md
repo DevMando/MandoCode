@@ -60,10 +60,9 @@ public static string Hyperlink(string uri, string text)
 
 **Support:** Windows Terminal (v1.4+), iTerm2, kitty, alacritty (v0.11+), WezTerm, GNOME Terminal, VS Code terminal.
 
-**Use cases for MandoCode:**
-- Make file paths in AI output clickable
-- Link error messages to source locations
-- Link to docs/URLs mentioned in responses
+**Used in MandoCode:**
+- `FileLink()` in `App.razor` — wraps file paths in operation displays (Read, Write, Update, Delete, Glob, Search, Diff panel) as clickable `file://` links
+- `WriteHyperlink()` in `MarkdownRenderer.cs` — renders markdown URLs and bare URLs as clickable links in AI output
 
 ---
 
@@ -89,9 +88,12 @@ Progress states: `0`=clear, `1`=progress, `2`=error, `3`=indeterminate, `4`=warn
 Console.Write($"\x1b]9;9;{Directory.GetCurrentDirectory()}\x07");
 ```
 
-**Use cases for MandoCode:**
-- Show task plan progress in the Windows taskbar
-- Notify when long AI operations complete
+**Used in MandoCode:**
+- `SetTaskbarIndeterminate()` — pulses taskbar during AI requests (wired into `StartSpinner()`)
+- `SetTaskbarProgress()` — fills taskbar step-by-step during task plan execution
+- `SetTaskbarError()` — shows red on step failure
+- `ClearTaskbarProgress()` — clears on completion (wired into `StopSpinner()` and plan completion)
+- OSC 9;9 — emitted by `HandleShellCommand()` after `cd` to sync Windows Terminal CWD
 
 ---
 
