@@ -3,7 +3,7 @@
 ## Markdown-to-Terminal Renderer
 
 **Priority:** Next up
-**Status:** Planned
+**Status:** Completed
 
 ### Summary
 

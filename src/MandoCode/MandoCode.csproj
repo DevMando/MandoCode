@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Markdig" Version="1.0.0" />
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.68.0" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.68.0-alpha" />
     <PackageReference Include="RazorConsole.Core" Version="0.2.2" />
