@@ -222,6 +222,16 @@ Each step shows:
 - Result summary when completed (truncated to 500 chars for display)
 - Success/failure status
 
+### Taskbar Progress (Windows Terminal)
+
+During plan execution, the Windows Terminal taskbar icon reflects progress via OSC 9;4:
+- **Step starting** — green fill advances proportionally (`(currentStep - 1) / totalSteps * 100`)
+- **Step completed** — fill advances to `currentStep / totalSteps * 100`
+- **Step failed** — turns red at the current progress
+- **Plan completed/cancelled** — progress cleared
+
+Single AI requests (outside task plans) pulse the taskbar with an indeterminate indicator while the spinner is active.
+
 ---
 
 ## Testing Recommendations
