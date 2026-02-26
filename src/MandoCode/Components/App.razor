@@ -187,7 +187,14 @@
     {
         // Pause the spinner so the message renders on a clean line
         StopSpinner();
-        AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+
+        // Suppress display for known FileSystem operations — they will be shown
+        // as rich operation displays when OnFunctionCompleted fires
+        if (!IsFileSystemOperation(call.FunctionName))
+        {
+            AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+        }
+
         StartSpinner();
     }
 
@@ -195,7 +202,13 @@
     {
         // Pause the spinner so the message renders on a clean line
         StopSpinner();
-        if (result.Success)
+
+        if (result.OperationDisplay != null)
+        {
+            // Render Claude-Code-style operation display
+            RenderOperationDisplay(result.OperationDisplay);
+        }
+        else if (result.Success)
         {
             AnsiConsole.MarkupLine($"[dim][[Done]][/] [green]✓[/]");
         }
@@ -212,6 +225,128 @@
         }
 
         StartSpinner();
+    }
+
+    /// <summary>
+    /// Checks if a function name belongs to the FileSystem plugin.
+    /// </summary>
+    private bool IsFileSystemOperation(string functionName)
+    {
+        return functionName.StartsWith("FileSystem_", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Renders a Claude-Code-style operation display with tree connectors,
+    /// content previews, and inline diffs.
+    /// </summary>
+    private void RenderOperationDisplay(OperationDisplayEvent e)
+    {
+        Console.WriteLine();
+
+        switch (e.OperationType)
+        {
+            case "Write":
+                RenderWriteDisplay(e);
+                break;
+
+            case "Update":
+                RenderUpdateDisplay(e);
+                break;
+
+            case "Read":
+                Console.WriteLine($"\u001b[1m● Read(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
+                break;
+
+            case "Delete":
+                Console.WriteLine($"\u001b[1m● Delete(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"  ⎿  \u001b[2mDeleted {e.LineCount} lines\u001b[0m");
+                break;
+
+            case "DeleteFolder":
+                Console.WriteLine($"\u001b[1m● DeleteFolder(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"  ⎿  \u001b[2mDeleted folder and all contents\u001b[0m");
+                break;
+
+            case "CreateFolder":
+                Console.WriteLine($"\u001b[1m● CreateFolder(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"  ⎿  \u001b[2mCreated directory\u001b[0m");
+                break;
+
+            case "List":
+                Console.WriteLine($"\u001b[2m● Listed project files\u001b[0m");
+                break;
+
+            case "Glob":
+                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{e.FilePath}\u001b[2m)\u001b[0m");
+                break;
+
+            case "Search":
+                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{e.FilePath}\"\u001b[2m)\u001b[0m");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Renders a new file write: header, line count, content preview, remaining lines.
+    /// </summary>
+    private void RenderWriteDisplay(OperationDisplayEvent e)
+    {
+        Console.WriteLine($"\u001b[1m● Write(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+        Console.WriteLine($"  ⎿  \u001b[2mWrote {e.LineCount} lines to {e.FilePath}\u001b[0m");
+
+        // Show content preview unless the user already reviewed the diff via approval
+        if (!e.ApprovalWasShown && !string.IsNullOrEmpty(e.ContentPreview))
+        {
+            foreach (var line in e.ContentPreview.Split('\n'))
+            {
+                var display = line.Length > 120 ? line[..120] + "..." : line;
+                Console.WriteLine($"\u001b[2m     {display}\u001b[0m");
+            }
+
+            if (e.RemainingLines > 0)
+            {
+                Console.WriteLine($"\u001b[2m     … +{e.RemainingLines} lines\u001b[0m");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Renders an update to an existing file: header, change summary, inline diff.
+    /// </summary>
+    private void RenderUpdateDisplay(OperationDisplayEvent e)
+    {
+        Console.WriteLine($"\u001b[1m● Update(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+
+        // Build summary line: "Added N lines" / "Removed N lines" / "Added N, removed M lines"
+        var parts = new List<string>();
+        if (e.Additions > 0) parts.Add($"Added {e.Additions} line{(e.Additions != 1 ? "s" : "")}");
+        if (e.Deletions > 0) parts.Add($"Removed {e.Deletions} line{(e.Deletions != 1 ? "s" : "")}");
+        Console.WriteLine($"  ⎿  \u001b[2m{string.Join(", ", parts)}\u001b[0m");
+
+        // Show inline diff unless the user already reviewed via approval
+        if (!e.ApprovalWasShown && e.InlineDiff != null)
+        {
+            foreach (var d in e.InlineDiff)
+            {
+                var num = (d.NewLineNumber ?? d.OldLineNumber)?.ToString() ?? "";
+                var padNum = num.PadLeft(4);
+                var content = d.Content.Length > 120 ? d.Content[..120] + "..." : d.Content;
+
+                switch (d.LineType)
+                {
+                    case DiffLineType.Added:
+                        Console.WriteLine($"\u001b[32m      {padNum} + {content}\u001b[0m");
+                        break;
+                    case DiffLineType.Removed:
+                        Console.WriteLine($"\u001b[31m      {padNum} - {content}\u001b[0m");
+                        break;
+                    case DiffLineType.Unchanged:
+                        Console.WriteLine($"\u001b[2m      {padNum}   {content}\u001b[0m");
+                        break;
+                }
+            }
+        }
     }
 
     private async Task<bool> CheckOllamaConnectionAsync()
@@ -298,11 +433,14 @@
                 continue;
             }
 
+            // Check if this request needs task planning BEFORE injecting file content,
+            // so that attached file size doesn't inflate the complexity heuristics
+            var needsPlanning = TaskPlanner.RequiresPlanning(input);
+
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
 
-            // Check if this request needs task planning
-            if (TaskPlanner.RequiresPlanning(processedInput))
+            if (needsPlanning)
             {
                 await HandlePlannedExecutionAsync(processedInput);
                 continue;
@@ -349,7 +487,21 @@
             }
             else
             {
-                AnsiConsole.MarkupLine($"[dim][[Not found]][/] [yellow]{Spectre.Console.Markup.Escape(filePath)}[/]");
+                // Check if this is a directory reference
+                var dirListing = FileProvider.GetDirectoryListing(filePath);
+                if (dirListing != null)
+                {
+                    contextBlocks.AppendLine($"Directory: {filePath}/");
+                    contextBlocks.AppendLine("Contents:");
+                    contextBlocks.AppendLine(dirListing);
+                    contextBlocks.AppendLine();
+
+                    AnsiConsole.MarkupLine($"[dim][[Directory]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}/[/]");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"[dim][[Not found]][/] [yellow]{Spectre.Console.Markup.Escape(filePath)}[/]");
+                }
             }
         }
 
@@ -786,30 +938,49 @@
         StopSpinner();
 
         var fileName = Path.GetFileName(relativePath);
+        var isFolder = existingContent != null && existingContent.StartsWith("Folder:");
 
-        // Build diff lines — all existing content shown as red removals
-        var diffLines = new List<DiffLine>();
-        if (!string.IsNullOrEmpty(existingContent))
+        if (isFolder)
         {
-            var lines = existingContent.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            // Folder deletion — show folder listing instead of diff
+            Console.WriteLine();
+            Console.WriteLine($"\u001b[31m┌─ Delete Folder: {relativePath}/ ─────────────────────┐\u001b[0m");
+            Console.WriteLine("\u001b[31m│\u001b[0m");
+            foreach (var line in existingContent!.Split('\n'))
             {
-                diffLines.Add(new DiffLine
-                {
-                    LineType = DiffLineType.Removed,
-                    Content = lines[i].TrimEnd('\r'),
-                    OldLineNumber = i + 1
-                });
+                Console.WriteLine($"\u001b[31m│ {line}\u001b[0m");
             }
+            Console.WriteLine("\u001b[31m│\u001b[0m");
+            Console.WriteLine($"\u001b[31m└──────────────────────────────────────────────────┘\u001b[0m");
+            Console.WriteLine();
+            AnsiConsole.MarkupLine($"[red]This will DELETE the folder and ALL its contents: {Spectre.Console.Markup.Escape(relativePath)}/[/]");
+            Console.WriteLine();
         }
+        else
+        {
+            // File deletion — show diff as before
+            var diffLines = new List<DiffLine>();
+            if (!string.IsNullOrEmpty(existingContent))
+            {
+                var lines = existingContent.Split('\n');
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    diffLines.Add(new DiffLine
+                    {
+                        LineType = DiffLineType.Removed,
+                        Content = lines[i].TrimEnd('\r'),
+                        OldLineNumber = i + 1
+                    });
+                }
+            }
 
-        var deletions = diffLines.Count;
-        var displayLines = DiffService.CollapseContext(diffLines, 3);
+            var deletions = diffLines.Count;
+            var displayLines = DiffService.CollapseContext(diffLines, 3);
 
-        // Render the deletion diff panel
-        RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
-        AnsiConsole.MarkupLine($"[red]This will DELETE the file: {Spectre.Console.Markup.Escape(relativePath)}[/]");
-        Console.WriteLine();
+            RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
+            AnsiConsole.MarkupLine($"[red]This will DELETE the file: {Spectre.Console.Markup.Escape(relativePath)}[/]");
+            Console.WriteLine();
+        }
 
         // If globally bypassed, auto-approve
         if (_globalWriteBypass)

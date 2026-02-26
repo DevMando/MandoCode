@@ -178,7 +178,7 @@ public class FileSystemPlugin
     /// Deletes a file from the project.
     /// </summary>
     [KernelFunction("delete_file")]
-    [Description("Deletes a file. Use relative path from project root. Cannot delete directories — only files.")]
+    [Description("Deletes a single file. Use relative path from project root. For deleting folders/directories, use delete_folder instead.")]
     public Task<string> DeleteFile(
         [Description("Relative path to the file from project root")] string relativePath)
     {
@@ -198,6 +198,36 @@ public class FileSystemPlugin
         catch (Exception ex)
         {
             return Task.FromResult($"Error deleting file '{relativePath}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Deletes a folder/directory and all its contents from the project.
+    /// </summary>
+    [KernelFunction("delete_folder")]
+    [Description("Deletes a folder/directory and all its contents. Use relative path from project root. Use this when asked to delete, remove, or clean up a folder or directory.")]
+    public Task<string> DeleteFolder(
+        [Description("Relative path to the folder from project root")] string relativePath)
+    {
+        try
+        {
+            var fullPath = GetFullPath(relativePath);
+
+            if (!Directory.Exists(fullPath))
+            {
+                return Task.FromResult($"Error: Folder not found: {relativePath}");
+            }
+
+            var fileCount = Directory.GetFiles(fullPath, "*", SearchOption.AllDirectories).Length;
+            var dirCount = Directory.GetDirectories(fullPath, "*", SearchOption.AllDirectories).Length;
+
+            Directory.Delete(fullPath, recursive: true);
+
+            return Task.FromResult($"Successfully deleted folder ({fileCount} files, {dirCount} subdirectories):\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error deleting folder '{relativePath}': {ex.Message}");
         }
     }
 
