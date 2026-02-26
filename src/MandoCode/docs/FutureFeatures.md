@@ -1,43 +1,31 @@
 # Future Features
 
-## Markdown-to-Terminal Renderer
+## Completed Features
 
-**Priority:** Next up
-**Status:** Completed
+### Markdown-to-Terminal Renderer
 
-### Summary
+**Status:** Shipped
 
-Convert LLM markdown output into rich Spectre.Console terminal widgets instead of printing raw markdown text.
+Implemented in `Services/MarkdownRenderer.cs` using Markdig for parsing and Spectre.Console + ANSI escape codes for rendering. Supports headers, bold, italic, inline code, fenced code blocks (with syntax highlighting via `SyntaxHighlighter.cs`), tables, lists, block quotes, and thematic breaks. Responses are buffered and rendered as rich terminal output.
 
-### Problem
+### Syntax Highlighting
 
-AI responses are streamed as raw `Console.Write(chunk)` — markdown syntax like `**bold**`, `# Headers`, and `` `code blocks` `` displays as plain text with visible markup characters.
+**Status:** Shipped
 
-### Approach
+Implemented in `Services/SyntaxHighlighter.cs`. Regex-based highlighter supporting C#, Python, JavaScript/TypeScript, and Bash with keyword (yellow), type (cyan), string (green), comment (dim), and number (magenta) coloring.
 
-1. **Add Markdig NuGet package** for markdown parsing
-2. **Build a buffered streaming renderer** that accumulates tokens, detects markdown block boundaries, and flushes rendered output
-3. **Map markdown nodes to Spectre.Console widgets:**
+### Token Tracking
 
-| Markdown | Spectre.Console |
-|---|---|
-| `**bold**` | `[bold]bold[/]` |
-| `*italic*` | `[italic]italic[/]` |
-| `` `inline code` `` | `[cyan on grey]code[/]` |
-| ```` ```code blocks``` ```` | `Panel` with syntax coloring |
-| `\| table \|` | `Table` widget |
-| `# Headers` | `[bold yellow]Header[/]` + `Rule` |
-| `- lists` | Indented bullet points |
-| `> quotes` | `Panel` with dim border |
+**Status:** Shipped
 
-### Challenges
+Implemented in `Services/TokenTrackingService.cs` and `Models/TokenUsageInfo.cs`. Tracks real token counts from Ollama responses and estimated counts from `@file` references. Displays per-response summaries and session totals. Configurable via `enableTokenTracking`.
 
-- **Streaming tokenization**: Can't parse markdown until a complete block is received (e.g., need both ``` delimiters before rendering a code panel)
-- **Buffer management**: Need to detect when a block is complete and flush it, while still showing inline text in real-time
-- **Bracket escaping**: Spectre.Console interprets `[` and `]` as markup tags — AI output containing these (code, JSON) must be escaped properly
+### `/learn` Command — LLM Education & Onboarding
 
-### Available Infrastructure
+**Status:** Shipped
 
-- Spectre.Console widgets already in use: `Panel`, `Table`, `Rule`, `Markup`, `Columns`
-- Additional available widgets not yet used: `Tree`, `Text`, `Padder`
-- RazorConsole `<Markup>` component available for Razor-level rendering
+Implemented in `Models/LearnContent.cs`. Displays educational content about open-weight LLMs, model sizes, cloud vs local models, and setup instructions. Automatically shown at startup when Ollama is not detected. Offers interactive AI educator chat mode when a model is available.
+
+---
+
+## Planned Features
