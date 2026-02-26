@@ -137,7 +137,7 @@ public static class CommandAutocomplete
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
                         selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredFiles.Count - 1;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                     }
                     continue;
 
@@ -150,7 +150,7 @@ public static class CommandAutocomplete
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
                         selectedIndex = (selectedIndex + 1) % filteredFiles.Count;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                     }
                     continue;
 
@@ -200,7 +200,7 @@ public static class CommandAutocomplete
                                 if (filteredFiles.Any())
                                 {
                                     selectedIndex = Math.Min(selectedIndex, filteredFiles.Count - 1);
-                                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+                                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                                 }
                                 else
                                 {
@@ -265,7 +265,7 @@ public static class CommandAutocomplete
                                     ClearAutocompleteDisplay(ref cursorTop);
                                 autocompleteMode = AutocompleteMode.File;
                                 selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                             }
                         }
                         else if (autocompleteMode == AutocompleteMode.File && atAnchorPos >= 0)
@@ -277,7 +277,7 @@ public static class CommandAutocomplete
                             {
                                 ClearAutocompleteDisplay(ref cursorTop);
                                 selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                             }
                             else
                             {
@@ -369,7 +369,7 @@ public static class CommandAutocomplete
         if (filteredFiles.Any())
         {
             selectedIndex = 0;
-            DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex);
+            DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
         }
         else
         {
@@ -455,10 +455,23 @@ public static class CommandAutocomplete
     }
 
     /// <summary>
+    /// Computes the current directory browsing prefix from input and anchor position.
+    /// e.g., input "@Poems/po" with atAnchorPos pointing to @ → browsePrefix = "Poems/"
+    /// </summary>
+    private static string GetBrowsePrefix(StringBuilder input, int atAnchorPos)
+    {
+        if (atAnchorPos < 0 || atAnchorPos >= input.Length) return "";
+        var fragment = input.ToString().Substring(atAnchorPos + 1);
+        var lastSlash = fragment.LastIndexOf('/');
+        return lastSlash >= 0 ? fragment.Substring(0, lastSlash + 1) : "";
+    }
+
+    /// <summary>
     /// Displays the file autocomplete dropdown. Directories are shown with a trailing /
     /// and use cyan styling to distinguish them from files (yellow).
+    /// browsePrefix is stripped from display paths to avoid redundant parent directories.
     /// </summary>
-    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> files, int selectedIndex)
+    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> files, int selectedIndex, string browsePrefix = "")
     {
         var totalLines = files.Count + 3; // header + files + footer + help
 
@@ -477,10 +490,15 @@ public static class CommandAutocomplete
             var entryPath = files[i];
             var isDirectory = entryPath.EndsWith('/');
 
+            // Strip the browse prefix so drilled-into directory paths aren't shown redundantly
+            var displayEntry = browsePrefix.Length > 0 && entryPath.StartsWith(browsePrefix, StringComparison.OrdinalIgnoreCase)
+                ? entryPath.Substring(browsePrefix.Length)
+                : entryPath;
+
             if (isDirectory)
             {
                 // Directory entry — show the last directory name with / suffix
-                var trimmed = entryPath.TrimEnd('/');
+                var trimmed = displayEntry.TrimEnd('/');
                 var dirName = trimmed.Contains('/')
                     ? trimmed.Substring(trimmed.LastIndexOf('/') + 1)
                     : trimmed;
@@ -509,9 +527,9 @@ public static class CommandAutocomplete
             }
             else
             {
-                // File entry — existing display logic
-                var fileName = Path.GetFileName(entryPath);
-                var dirPath = Path.GetDirectoryName(entryPath)?.Replace('\\', '/') ?? "";
+                // File entry
+                var fileName = Path.GetFileName(displayEntry);
+                var dirPath = Path.GetDirectoryName(displayEntry)?.Replace('\\', '/') ?? "";
 
                 if (i == selectedIndex)
                 {

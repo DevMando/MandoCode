@@ -542,17 +542,16 @@
 
                 StopSpinner();
 
-                // Output first chunk and continue streaming
-                // Use Console.Write instead of AnsiConsole.Markup to avoid
-                // Spectre.Console parsing square brackets in AI output as markup tags
+                // Buffer all chunks, then render as rich markdown
                 if (receivedFirstChunk)
                 {
+                    var responseBuffer = new System.Text.StringBuilder();
                     var lineBuffer = new System.Text.StringBuilder();
                     var showSpinnerBeforeNextChunk = false;
 
-                    void ProcessChunk(string chunk)
+                    void AccumulateChunk(string chunk)
                     {
-                        Console.Write(chunk);
+                        responseBuffer.Append(chunk);
                         foreach (char c in chunk)
                         {
                             if (c == '\n')
@@ -568,7 +567,7 @@
                         }
                     }
 
-                    ProcessChunk(enumerator.Current);
+                    AccumulateChunk(enumerator.Current);
 
                     var hasMore = true;
                     while (hasMore)
@@ -586,7 +585,22 @@
                         }
 
                         if (hasMore)
-                            ProcessChunk(enumerator.Current);
+                            AccumulateChunk(enumerator.Current);
+                    }
+
+                    // Render the complete response as rich markdown
+                    var responseText = responseBuffer.ToString().Trim();
+                    if (!string.IsNullOrEmpty(responseText))
+                    {
+                        try
+                        {
+                            MarkdownRenderer.Render(responseText);
+                        }
+                        catch
+                        {
+                            // Fallback to raw text if markdown rendering fails
+                            Console.Write(responseText);
+                        }
                     }
                 }
             }
