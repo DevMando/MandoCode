@@ -45,6 +45,7 @@ public static class CommandAutocomplete
         List<string> filteredCommands = new();
         List<string> filteredFiles = new();
         int atAnchorPos = -1;
+        string? pastedFullText = null; // holds full content when paste is detected
 
         while (true)
         {
@@ -88,11 +89,11 @@ public static class CommandAutocomplete
                     }
                     else
                     {
-                        // Submit the input
+                        // Submit the input — use full pasted content if available
                         if (autocompleteMode != AutocompleteMode.None)
                             ClearAutocompleteDisplay(ref cursorTop);
                         Console.WriteLine();
-                        return input.ToString();
+                        return pastedFullText ?? input.ToString();
                     }
 
                 case ConsoleKey.Tab:
@@ -166,6 +167,24 @@ public static class CommandAutocomplete
                     continue;
 
                 case ConsoleKey.Backspace:
+                    if (pastedFullText != null)
+                    {
+                        // Clear the entire paste — start fresh
+                        pastedFullText = null;
+                        input.Clear();
+                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        if (autocompleteMode != AutocompleteMode.None)
+                        {
+                            ClearAutocompleteDisplay(ref cursorTop);
+                            Console.SetCursorPosition(cursorLeft, cursorTop);
+                        }
+                        autocompleteMode = AutocompleteMode.None;
+                        atAnchorPos = -1;
+                        selectedIndex = 0;
+                        continue;
+                    }
                     if (input.Length > 0)
                     {
                         input.Length--;
@@ -249,6 +268,44 @@ public static class CommandAutocomplete
                 default:
                     if (!char.IsControl(key.KeyChar))
                     {
+                        // Detect paste: if more characters are immediately buffered, consume them all
+                        if (Console.KeyAvailable)
+                        {
+                            var pasteChars = new StringBuilder();
+                            pasteChars.Append(key.KeyChar);
+
+                            while (Console.KeyAvailable)
+                            {
+                                var pk = Console.ReadKey(intercept: true);
+                                if (pk.Key == ConsoleKey.Enter || pk.KeyChar == '\n' || pk.KeyChar == '\r')
+                                    pasteChars.Append(' '); // newlines → spaces
+                                else if (!char.IsControl(pk.KeyChar))
+                                    pasteChars.Append(pk.KeyChar);
+                            }
+
+                            // Store full content: any text typed before + pasted chars
+                            var beforePaste = input.ToString();
+                            pastedFullText = beforePaste + pasteChars.ToString();
+
+                            // Update display to show summary
+                            input.Clear();
+                            input.Append($"[pasted {pastedFullText.Length} characters]");
+
+                            // Close any autocomplete
+                            if (autocompleteMode != AutocompleteMode.None)
+                                ClearAutocompleteDisplay(ref cursorTop);
+                            autocompleteMode = AutocompleteMode.None;
+                            atAnchorPos = -1;
+                            selectedIndex = 0;
+
+                            // Redraw input line with paste summary
+                            Console.SetCursorPosition(cursorLeft, cursorTop);
+                            Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                            Console.SetCursorPosition(cursorLeft, cursorTop);
+                            Console.Write(input.ToString());
+                            continue;
+                        }
+
                         input.Append(key.KeyChar);
                         Console.Write(key.KeyChar);
 
