@@ -51,11 +51,15 @@ class Program
             // Register configuration as singleton
             services.AddSingleton(config);
 
+            // Register TokenTrackingService as singleton
+            services.AddSingleton<TokenTrackingService>();
+
             // Register AIService as singleton
             services.AddSingleton(provider =>
             {
                 var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                return new AIService(projectRoot, cfg);
+                var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
+                return new AIService(projectRoot, cfg, tokenTracker);
             });
 
             // Register TaskPlannerService as singleton

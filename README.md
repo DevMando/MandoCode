@@ -19,10 +19,15 @@ MandoCode understands **any file type** in your project, including C#, JavaScrip
 ## Features
 
 - **Fully offline** — no API keys, no cloud, no tokens
-- **Project-aware AI** — reads, writes, and searches your entire codebase
+- **Project-aware AI** — reads, writes, deletes, and searches your entire codebase
+- **Diff approvals** — color-coded diffs for file writes and deletions with approve/deny/redirect controls
 - **`@` file references** — type `@` to autocomplete and attach file content to any prompt
 - **`/` command autocomplete** — slash commands with interactive dropdown navigation
 - **Task planner** — automatically breaks complex requests into step-by-step plans
+- **Markdown rendering** — rich terminal output with headers, tables, lists, and syntax-highlighted code blocks
+- **Syntax highlighting** — regex-based highlighter for C#, Python, JavaScript/TypeScript, and Bash
+- **Token tracking** — real-time session token counts with per-response and cumulative totals
+- **`/learn` command** — LLM education guide with optional AI educator chat mode
 - **Streaming responses** — real-time AI output with animated spinners
 - **Retry & deduplication** — resilient function execution with automatic recovery
 - **Configuration wizard** — guided setup with model selection and connection testing
@@ -48,9 +53,10 @@ MandoCode understands **any file type** in your project, including C#, JavaScrip
 ```
 src/MandoCode/
   Components/        Razor UI components (App, Banner, HelpDisplay, ConfigMenu, Prompt)
-  Services/          Core business logic
-  Models/            Data models, config, system prompts
+  Services/          Core business logic (AI, markdown rendering, syntax highlighting, token tracking)
+  Models/            Data models, config, system prompts, educational content
   Plugins/           Semantic Kernel plugins (FileSystem)
+  docs/              Feature documentation
   Program.cs         Entry point and DI registration
 ```
 
@@ -100,12 +106,11 @@ Type `/` at the start of your input to see the autocomplete dropdown.
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands and usage examples |
+| `/learn` | Learn about LLMs and local AI models (with optional AI educator chat) |
 | `/config` | Open the configuration menu (wizard or view current settings) |
 | `/clear` | Clear conversation history |
 | `/exit` | Exit MandoCode |
 | `/quit` | Exit MandoCode |
-
-Anything else you type is sent to the AI as a natural-language prompt.
 
 ---
 
@@ -145,6 +150,44 @@ Multiple `@` references in one prompt are supported. Files over 10,000 character
 
 ---
 
+## Diff Approvals
+
+When the AI writes or deletes a file, MandoCode intercepts the operation and shows a color-coded diff before applying changes.
+
+### What You See
+
+- **Red lines** — content being removed
+- **Light blue lines** — content being added
+- **Dim lines** — unchanged context (3 lines around each change)
+- Long unchanged sections are collapsed with a summary
+
+### Approval Options
+
+| Option | Behavior |
+|--------|----------|
+| **Approve** | Apply this change |
+| **Approve - Don't ask again** | Auto-approve future changes to this file (per-file), or all files (global) |
+| **Deny** | Reject the change, the AI is told it was denied |
+| **Provide new instructions** | Redirect the AI with custom feedback |
+
+For **new files**, the "don't ask again" option sets a **global bypass** — all future writes and deletes are auto-approved for the session. For **existing files**, the bypass is **per-file**.
+
+Even when auto-approved, diffs are still rendered so you can follow along.
+
+### Delete Approvals
+
+File deletions show all existing content as red removals with a deletion warning. The same approval options apply.
+
+### Configuration
+
+Diff approvals are enabled by default. To toggle:
+
+```bash
+mandocode config set diffApprovals false
+```
+
+---
+
 ## Task Planner
 
 MandoCode automatically detects complex requests and offers to break them into a step-by-step plan before execution.
@@ -152,12 +195,12 @@ MandoCode automatically detects complex requests and offers to break them into a
 ### Triggers
 
 The planner activates for requests like:
-- `Create a tic-tac-toe game with HTML, CSS, and JavaScript`
-- `Build an API endpoint with authentication`
-- Numbered lists with multiple tasks
-- Requests over 250 characters
+- `Create a REST API service with authentication and rate limiting for the user module` (12+ words with imperative verb and scope indicator)
+- `Build an application that handles user registration and sends email confirmations`
+- Numbered lists with 3+ items
+- Requests over 400 characters
 
-Simple questions and short prompts bypass planning automatically.
+Simple questions, short prompts, and single-action operations (delete, remove, read, show, list, find, search, rename) bypass planning automatically.
 
 ### Workflow
 
@@ -168,6 +211,82 @@ Simple questions and short prompts bypass planning automatically.
 5. **Error handling** — skip failed steps or cancel the entire plan
 
 See [Task Planner Documentation](src/MandoCode/docs/TaskPlannerFeature.md) for full technical details.
+
+---
+
+## `/learn` — LLM Education & Onboarding
+
+The `/learn` command helps new users understand local LLMs and get set up.
+
+### Behavior
+
+| Scenario | What happens |
+|----------|-------------|
+| Startup, no Ollama detected | Automatically displays the educational guide instead of a bare error |
+| `/learn` typed, no model running | Displays the static educational guide |
+| `/learn` typed, model is running | Shows the guide, then offers to enter AI educator chat mode |
+
+### Educational Content
+
+The guide covers five sections:
+
+1. **What are Open-Weight LLMs?** — Free, private, offline models vs. cloud AI
+2. **Model Sizes & Hardware** — Parameters, quantization, VRAM requirements
+3. **Cloud vs Local Models** — Ollama cloud models (no GPU) vs local models
+4. **Recommended Models** — Table of cloud and local options
+5. **Getting Started** — Step-by-step setup instructions
+
+### AI Educator Chat Mode
+
+When Ollama is running, `/learn` offers an interactive chat mode where the AI explains LLM concepts using beginner-friendly language and analogies. Type `/clear` to return to normal assistant mode.
+
+---
+
+## Markdown Rendering
+
+AI responses are rendered as rich terminal output instead of raw markdown text.
+
+| Markdown | Terminal Output |
+|----------|----------------|
+| `**bold**` | Bold text |
+| `*italic*` | Italic text |
+| `` `inline code` `` | Cyan highlighted code |
+| Fenced code blocks | Bordered panels with syntax highlighting |
+| Tables | Spectre.Console table widgets |
+| `# Headers` | Bold yellow text with horizontal rules |
+| `- lists` | Indented bullet points |
+| `> quotes` | Grey-bordered block quotes |
+
+### Syntax Highlighting
+
+Fenced code blocks are syntax-highlighted with language-specific keyword and type coloring:
+
+- **C#** — keywords (yellow), types (cyan), strings (green), comments (dim), numbers (magenta)
+- **Python** — same color scheme with Python-specific keywords and builtins
+- **JavaScript/TypeScript** — includes JSX/TSX support
+- **Bash** — highlights commands, keywords, and common CLI tools
+
+Unsupported languages fall back to plain text with string/number/comment highlighting.
+
+---
+
+## Token Tracking
+
+MandoCode tracks token consumption across your session with real-time display.
+
+### What You See
+
+- **Per-response summary** — right-aligned after each AI response: `[~1.2k in, 847 out]`
+- **Session total** — displayed above the prompt: `Total [4.2k tokens]`
+- **File reference estimates** — `@file` attachments show estimated token cost using a chars/4 heuristic
+
+### Configuration
+
+Token tracking is enabled by default. To toggle:
+
+```bash
+mandocode config set enableTokenTracking false
+```
 
 ---
 
@@ -183,6 +302,7 @@ The AI has controlled access to your project directory through these functions:
 | `list_files_match_glob_pattern(pattern)` | Lists files matching a glob pattern (`*.cs`, `src/**/*.ts`, `*.*`) |
 | `read_file_contents(relativePath)` | Reads complete file content with line count |
 | `write_file(relativePath, content)` | Writes/creates a file (creates directories as needed) |
+| `delete_file(relativePath)` | Deletes a file (directories cannot be deleted) |
 | `create_folder(relativePath)` | Creates a new directory |
 | `search_text_in_files(pattern, searchText)` | Searches file contents for text, returns file paths and line numbers |
 | `get_absolute_path(relativePath)` | Converts a relative path to its absolute filesystem path |
@@ -242,7 +362,9 @@ Located at `~/.mandocode/config.json`
   "temperature": 0.7,
   "maxTokens": 4096,
   "ignoreDirectories": [],
+  "enableDiffApprovals": true,
   "enableTaskPlanning": true,
+  "enableTokenTracking": true,
   "enableFallbackFunctionParsing": true,
   "functionDeduplicationWindowSeconds": 5,
   "maxRetryAttempts": 2
@@ -259,7 +381,9 @@ Located at `~/.mandocode/config.json`
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `4096` | Maximum response token length |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
+| `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
 | `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
+| `enableTokenTracking` | `true` | Show session token totals and per-response token costs |
 | `enableFallbackFunctionParsing` | `true` | Parse function calls from text output |
 | `functionDeduplicationWindowSeconds` | `5` | Time window to prevent duplicate function calls |
 | `maxRetryAttempts` | `2` | Max retry attempts for transient errors |
@@ -285,15 +409,27 @@ mandocode config --help            # Show help
 
 ## Recommended Models
 
-Models with tool/function calling support work best:
+Models with tool/function calling support work best.
+
+### Cloud Models (no GPU required)
+
+These run remotely via Ollama — no local VRAM needed:
 
 - **minimax-m2.5:cloud** (default) — excellent tool support
-- **qwen2.5-coder:14b** — strong coding model with function calling
-- **qwen2.5-coder:7b** — lighter alternative
-- **mistral** — general purpose with tool support
-- **llama3.1** — Meta's model with function calling
+- **kimi-k2.5:cloud** — strong general-purpose cloud model
+- **qwen3-coder:480b-cloud** — code-focused cloud model
 
-MandoCode validates model compatibility on startup and warns if the selected model may not support function calling.
+### Local Models
+
+These run on your hardware — fully offline and private:
+
+- **qwen3:8b** — recommended, good balance of speed and quality (~5-6 GB VRAM)
+- **qwen2.5-coder:7b** — code-focused (~5-6 GB VRAM)
+- **qwen2.5-coder:14b** — stronger coding model (~10-12 GB VRAM)
+- **mistral** — general purpose (~5 GB VRAM)
+- **llama3.1** — Meta's model (~5-6 GB VRAM)
+
+MandoCode validates model compatibility on startup and warns if the selected model may not support function calling. Run `/learn` for a detailed guide on model sizes and hardware requirements.
 
 ---
 
@@ -305,7 +441,7 @@ MandoCode validates model compatibility on startup and warns if the selected mod
 | **HelpDisplay** | Command reference panel shown on startup |
 | **ConfigMenu** | Interactive configuration display |
 | **Prompt** | Input prompt with autocomplete support |
-| **App** | Main application shell — connection checking, command routing, AI interaction loop |
+| **App** | Main application shell — connection checking, command routing, AI interaction loop, learn mode |
 
 ---
 
@@ -313,9 +449,10 @@ MandoCode validates model compatibility on startup and warns if the selected mod
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| [Microsoft.SemanticKernel](https://github.com/microsoft/semantic-kernel) | 1.68.0 | LLM orchestration and plugin system |
-| [Microsoft.SemanticKernel.Connectors.Ollama](https://github.com/microsoft/semantic-kernel) | 1.68.0-alpha | Ollama model integration |
-| [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) | 0.2.2 | Rich terminal UI with Razor components |
+| [Microsoft.SemanticKernel](https://github.com/microsoft/semantic-kernel) | 1.72.0 | LLM orchestration and plugin system |
+| [Microsoft.SemanticKernel.Connectors.Ollama](https://github.com/microsoft/semantic-kernel) | 1.72.0-alpha | Ollama model integration |
+| [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) | 0.5.0-alpha | Rich terminal UI with Razor components |
+| [Markdig](https://github.com/xoofx/markdig) | 1.0.0 | Markdown parsing for rich terminal rendering |
 
 ---
 

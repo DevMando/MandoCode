@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(dotnet build:*)",
-      "Bash(dotnet clean:*)"
+      "Bash(dotnet clean:*)",
+      "Bash(grep:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(dotnet list:*)",
+      "WebFetch(domain:ollama.com)"
     ]
   }
 }

@@ -6,6 +6,7 @@
 @inject MandoCodeConfig Config
 @inject TaskPlannerService TaskPlanner
 @inject FileAutocompleteProvider FileProvider
+@inject TokenTrackingService TokenTracker
 
 <Banner />
 
@@ -16,17 +17,7 @@
 
     @if (!_isConnected)
     {
-        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Red">
-            <Rows>
-                <Markup Content="Error: Could not connect to Ollama!" />
-                <Markup Content="Please ensure:" />
-                <Markup Content="  1. Ollama is installed: https://ollama.ai" />
-                <Markup Content="  2. Ollama is running: ollama serve" />
-                <Markup Content="@($"  3. Model is installed: ollama pull {Config.GetEffectiveModelName()}")" />
-                <Markup Content="" />
-                <Markup Content="Or run: mandocode config --help" />
-            </Rows>
-        </Panel>
+        LearnContent.Display();
     }
     else if (!string.IsNullOrEmpty(_modelWarning))
     {
@@ -255,7 +246,15 @@
 
             case "Read":
                 Console.WriteLine($"\u001b[1m● Read(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
-                Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
+                if (Config.EnableTokenTracking && TokenTracker.LastOperation is { IsEstimate: true } readOp
+                    && readOp.OperationLabel.StartsWith("Read"))
+                {
+                    Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines ~{TokenTrackingService.FormatTokenCount(readOp.PromptTokens)} tokens\u001b[0m");
+                }
+                else
+                {
+                    Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
+                }
                 break;
 
             case "Delete":
@@ -367,6 +366,14 @@
     {
         while (true)
         {
+            // Show session token count right-aligned above prompt
+            if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
+            {
+                var tokenDisplay = $"Total [{TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens)} tokens]";
+                var padding = Math.Max(0, Console.WindowWidth - tokenDisplay.Length - 1);
+                Console.WriteLine($"\u001b[2m{new string(' ', padding)}{tokenDisplay}\u001b[0m");
+            }
+
             AnsiConsole.Markup("[yellow]> [/]");
             var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
@@ -413,9 +420,9 @@
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
                     table.AddRow("/config", "Open configuration menu");
+                    table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit, /quit", "Exit MandoCode");
-                    table.AddRow("anything else", "Chat with the AI assistant");
                     AnsiConsole.Write(table);
                     AnsiConsole.WriteLine();
                     AnsiConsole.WriteLine("Examples:");
@@ -430,6 +437,12 @@
                 if (command == "config")
                 {
                     await HandleConfigCommandAsync();
+                    continue;
+                }
+
+                if (command == "learn")
+                {
+                    HandleLearnCommand();
                     continue;
                 }
 
@@ -489,6 +502,12 @@
                 contextBlocks.AppendLine(content);
                 contextBlocks.AppendLine("```");
                 contextBlocks.AppendLine();
+
+                // Track estimated tokens for @file references
+                if (Config.EnableTokenTracking)
+                {
+                    TokenTracker.RecordEstimatedUsage(content.Length, $"@{filePath}");
+                }
 
                 AnsiConsole.MarkupLine($"[dim][[Attached]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}[/]");
             }
@@ -609,6 +628,21 @@
                             Console.Write(responseText);
                         }
                     }
+
+                    // Show per-response token summary (right-aligned, tight to response)
+                    if (Config.EnableTokenTracking)
+                    {
+                        var lastOp = TokenTracker.LastOperation;
+                        if (lastOp != null && !lastOp.IsEstimate)
+                        {
+                            var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
+                            var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
+                            var tokenSummary = $"[{inLabel}, {outLabel}]";
+                            var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
+                            Console.WriteLine();
+                            Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
+                        }
+                    }
                 }
             }
             finally
@@ -617,7 +651,6 @@
                 await enumerator.DisposeAsync();
             }
 
-            AnsiConsole.WriteLine();
             AnsiConsole.WriteLine();
         }
         catch (Exception ex)
@@ -784,6 +817,25 @@
             case TaskProgressType.PlanCancelled:
                 StopSpinner();
                 break;
+        }
+    }
+
+    private void HandleLearnCommand()
+    {
+        AnsiConsole.WriteLine();
+        LearnContent.Display();
+
+        if (_isConnected)
+        {
+            var wantChat = AnsiConsole.Confirm("Chat with an AI educator to learn more?", false);
+            if (wantChat)
+            {
+                AI.EnterLearnMode();
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[green]AI Educator mode active![/]");
+                AnsiConsole.MarkupLine("[dim]Ask me anything about local AI! Type /clear to return to normal mode.[/]");
+                AnsiConsole.WriteLine();
+            }
         }
     }
 

@@ -38,6 +38,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     // Project root for resolving file paths when reading existing content
     private readonly string? _projectRoot;
 
+    // Optional token tracker for estimating file operation token costs
+    private readonly TokenTrackingService? _tokenTracker;
+
     // Cache for deduplication - stores recent function calls and their results
     private readonly Dictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
 
@@ -74,12 +77,13 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     {
     }
 
-    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, string? projectRoot = null)
+    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, string? projectRoot = null, TokenTrackingService? tokenTracker = null)
     {
         // Read operations use shorter window (2s), writes use configured window
         _readDeduplicationWindow = TimeSpan.FromSeconds(2);
         _writeDeduplicationWindow = TimeSpan.FromSeconds(defaultDeduplicationWindowSeconds);
         _projectRoot = projectRoot;
+        _tokenTracker = tokenTracker;
     }
 
     public async Task OnFunctionInvocationAsync(FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
@@ -235,6 +239,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             // Cache the result for deduplication
             _recentCalls[callKey] = (DateTime.UtcNow, context.Result?.GetValue<object>());
             CleanupOldEntries();
+
+            // Estimate token costs for content-heavy file operations
+            EstimateFileOperationTokens(context.Function.Name, context.Arguments, context.Result?.ToString());
 
             // Check if result indicates an error from the plugin itself
             var resultStr = context.Result?.ToString() ?? string.Empty;
@@ -660,6 +667,59 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         var hashBytes = SHA256.HashData(bytes);
         // Use first 8 bytes for a shorter hash (sufficient for dedup purposes)
         return Convert.ToHexString(hashBytes.AsSpan(0, 8));
+    }
+
+    /// <summary>
+    /// Estimates token costs for content-heavy file operations and records them.
+    /// </summary>
+    private void EstimateFileOperationTokens(string functionName, IReadOnlyDictionary<string, object?> arguments, string? resultStr)
+    {
+        if (_tokenTracker == null)
+            return;
+
+        try
+        {
+            switch (functionName)
+            {
+                case "read_file_contents":
+                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 0)
+                    {
+                        arguments.TryGetValue("relativePath", out var readPath);
+                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, $"Read {readPath}");
+                    }
+                    break;
+
+                case "write_file":
+                    if (arguments.TryGetValue("content", out var contentObj) && contentObj != null)
+                    {
+                        var content = contentObj.ToString() ?? "";
+                        if (content.Length > 0)
+                        {
+                            arguments.TryGetValue("relativePath", out var writePath);
+                            _tokenTracker.RecordEstimatedUsage(content.Length, $"Write {writePath}");
+                        }
+                    }
+                    break;
+
+                case "search_text_in_files":
+                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
+                    {
+                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "Search");
+                    }
+                    break;
+
+                case "list_all_project_files":
+                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
+                    {
+                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "List");
+                    }
+                    break;
+            }
+        }
+        catch
+        {
+            // Token estimation is non-critical
+        }
     }
 
     /// <summary>

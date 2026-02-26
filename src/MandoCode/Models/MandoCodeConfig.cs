@@ -81,6 +81,13 @@ public class MandoCodeConfig
     public bool EnableDiffApprovals { get; set; } = true;
 
     /// <summary>
+    /// Enable token tracking and display.
+    /// Shows session token totals and per-operation token costs.
+    /// </summary>
+    [JsonPropertyName("enableTokenTracking")]
+    public bool EnableTokenTracking { get; set; } = true;
+
+    /// <summary>
     /// Loads configuration from file, or creates a default one if it doesn't exist.
     /// </summary>
     public static MandoCodeConfig Load(string? configPath = null)
@@ -208,6 +215,7 @@ public class MandoCodeConfig
         }
         Console.WriteLine($"  Task Planning: {(EnableTaskPlanning ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Diff Approvals: {(EnableDiffApprovals ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  Token Tracking: {(EnableTokenTracking ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Fallback Function Parsing: {(EnableFallbackFunctionParsing ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
