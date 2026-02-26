@@ -70,6 +70,13 @@ class Program
                 return new TaskPlannerService(aiService, cfg);
             });
 
+            // Register MusicPlayerService as singleton
+            services.AddSingleton(provider =>
+            {
+                var cfg = provider.GetRequiredService<MandoCodeConfig>();
+                return new MusicPlayerService(cfg);
+            });
+
             // Register FileAutocompleteProvider as singleton
             services.AddSingleton(provider =>
             {

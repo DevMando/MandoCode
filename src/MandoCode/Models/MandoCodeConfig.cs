@@ -88,6 +88,12 @@ public class MandoCodeConfig
     public bool EnableTokenTracking { get; set; } = true;
 
     /// <summary>
+    /// Music player preferences (volume, genre, autoplay).
+    /// </summary>
+    [JsonPropertyName("music")]
+    public MusicConfig Music { get; set; } = new();
+
+    /// <summary>
     /// Loads configuration from file, or creates a default one if it doesn't exist.
     /// </summary>
     public static MandoCodeConfig Load(string? configPath = null)
@@ -219,6 +225,7 @@ public class MandoCodeConfig
         Console.WriteLine($"  Fallback Function Parsing: {(EnableFallbackFunctionParsing ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
+        Console.WriteLine($"  Music Volume: {(int)(Music.Volume * 100)}%  Genre: {Music.Genre}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");
     }
 }
