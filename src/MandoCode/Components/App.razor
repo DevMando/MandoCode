@@ -7,6 +7,7 @@
 @inject TaskPlannerService TaskPlanner
 @inject FileAutocompleteProvider FileProvider
 @inject TokenTrackingService TokenTracker
+@inject MusicPlayerService MusicPlayer
 
 <Banner />
 
@@ -44,14 +45,44 @@
     private bool _globalWriteBypass = false;
     private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
 
+    // Last AI response for /copy command
+    private string? _lastAiResponse;
+
     // Controllable spinner — can be stopped from the diff approval callback
     private CancellationTokenSource? _spinnerCts;
     private Task? _spinnerTask;
     private readonly object _spinnerLock = new();
 
+    // Music visualizer — animated equalizer while music plays
+    private CancellationTokenSource? _musicVisCts;
+    private Task? _musicVisTask;
+    private readonly object _musicVisLock = new();
+
+    // Taskbar progress (Windows Terminal OSC 9;4)
+    private static void SetTaskbarProgress(int percent)
+    {
+        Console.Write($"\u001b]9;4;1;{percent}\u0007");
+    }
+
+    private static void SetTaskbarIndeterminate()
+    {
+        Console.Write("\u001b]9;4;3\u0007");
+    }
+
+    private static void SetTaskbarError(int percent = 100)
+    {
+        Console.Write($"\u001b]9;4;2;{percent}\u0007");
+    }
+
+    private static void ClearTaskbarProgress()
+    {
+        Console.Write("\u001b]9;4;0\u0007");
+    }
+
     private void StartSpinner()
     {
         StopSpinner();
+        SetTaskbarIndeterminate();
         var cts = new CancellationTokenSource();
         var token = cts.Token;
         var message = LoadingMessages.GetRandom();
@@ -95,6 +126,77 @@
             task = _spinnerTask;
             _spinnerCts = null;
             _spinnerTask = null;
+        }
+
+        if (cts != null)
+        {
+            cts.Cancel();
+            task?.Wait(1000);
+            cts.Dispose();
+        }
+
+        ClearTaskbarProgress();
+    }
+
+    private void StartMusicVisualizer()
+    {
+        StopMusicVisualizer();
+
+        if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
+            return;
+
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+
+        var task = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var isPlaying = MusicPlayer.IsPlaying;
+                    var trackName = MusicPlayer.CurrentTrack?.Name ?? "Unknown";
+
+                    if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
+                        break;
+
+                    // Animated equalizer in the terminal title bar — always visible,
+                    // never overlaps scrollback content
+                    var eq = isPlaying ? MusicAsciiArt.GetEqualizerFrame() : MusicAsciiArt.GetPausedEqualizerFrame();
+                    var note = MusicAsciiArt.GetRandomNote();
+                    var stateIcon = isPlaying ? "\u25b6" : "\u23f8";
+                    var title = $"{note} {trackName}  {eq}  {stateIcon} MandoCode";
+                    Console.Write($"\u001b]0;{title}\u0007");
+
+                    await Task.Delay(isPlaying ? 150 : 500, token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                // Restore default title
+                try { Console.Write("\u001b]0;MandoCode\u0007"); } catch { }
+            }
+        });
+
+        lock (_musicVisLock)
+        {
+            _musicVisCts = cts;
+            _musicVisTask = task;
+        }
+    }
+
+    private void StopMusicVisualizer()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+
+        lock (_musicVisLock)
+        {
+            cts = _musicVisCts;
+            task = _musicVisTask;
+            _musicVisCts = null;
+            _musicVisTask = null;
         }
 
         if (cts != null)
@@ -227,6 +329,16 @@
     }
 
     /// <summary>
+    /// Wraps a relative file path in an OSC 8 hyperlink so clicking it
+    /// opens the file in the user's default editor / handler.
+    /// </summary>
+    private string FileLink(string relativePath)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relativePath));
+        return $"\u001b]8;;file://{fullPath}\u0007{relativePath}\u001b]8;;\u0007";
+    }
+
+    /// <summary>
     /// Renders a Claude-Code-style operation display with tree connectors,
     /// content previews, and inline diffs.
     /// </summary>
@@ -245,7 +357,7 @@
                 break;
 
             case "Read":
-                Console.WriteLine($"\u001b[1m● Read(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[1m● Read(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 if (Config.EnableTokenTracking && TokenTracker.LastOperation is { IsEstimate: true } readOp
                     && readOp.OperationLabel.StartsWith("Read"))
                 {
@@ -258,17 +370,17 @@
                 break;
 
             case "Delete":
-                Console.WriteLine($"\u001b[1m● Delete(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[1m● Delete(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mDeleted {e.LineCount} lines\u001b[0m");
                 break;
 
             case "DeleteFolder":
-                Console.WriteLine($"\u001b[1m● DeleteFolder(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[1m● DeleteFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mDeleted folder and all contents\u001b[0m");
                 break;
 
             case "CreateFolder":
-                Console.WriteLine($"\u001b[1m● CreateFolder(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[1m● CreateFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mCreated directory\u001b[0m");
                 break;
 
@@ -277,11 +389,11 @@
                 break;
 
             case "Glob":
-                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{e.FilePath}\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{FileLink(e.FilePath)}\u001b[2m)\u001b[0m");
                 break;
 
             case "Search":
-                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{e.FilePath}\"\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{FileLink(e.FilePath)}\"\u001b[2m)\u001b[0m");
                 break;
         }
     }
@@ -291,8 +403,8 @@
     /// </summary>
     private void RenderWriteDisplay(OperationDisplayEvent e)
     {
-        Console.WriteLine($"\u001b[1m● Write(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
-        Console.WriteLine($"  ⎿  \u001b[2mWrote {e.LineCount} lines to {e.FilePath}\u001b[0m");
+        Console.WriteLine($"\u001b[1m● Write(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+        Console.WriteLine($"  ⎿  \u001b[2mWrote {e.LineCount} lines to {FileLink(e.FilePath)}\u001b[0m");
 
         // Show content preview unless the user already reviewed the diff via approval
         if (!e.ApprovalWasShown && !string.IsNullOrEmpty(e.ContentPreview))
@@ -315,7 +427,7 @@
     /// </summary>
     private void RenderUpdateDisplay(OperationDisplayEvent e)
     {
-        Console.WriteLine($"\u001b[1m● Update(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+        Console.WriteLine($"\u001b[1m● Update(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
 
         // Build summary line: "Added N lines" / "Removed N lines" / "Added N, removed M lines"
         var parts = new List<string>();
@@ -374,6 +486,10 @@
                 Console.WriteLine($"\u001b[2m{new string(' ', padding)}{tokenDisplay}\u001b[0m");
             }
 
+            // Ensure music visualizer is running if music is active
+            // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
+            StartMusicVisualizer();
+
             AnsiConsole.Markup("[yellow]> [/]");
             var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
@@ -387,6 +503,13 @@
             Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - input.Length - 3)));
             Console.WriteLine();
 
+            // Shell escape: !<cmd> runs a shell command inline
+            if (input.TrimStart().StartsWith('!'))
+            {
+                HandleShellCommand(input.TrimStart()[1..].Trim());
+                continue;
+            }
+
             // Check if this is a command (starts with /)
             if (CommandAutocomplete.IsCommand(input))
             {
@@ -395,6 +518,8 @@
                 // Handle special commands
                 if (command == "exit" || command == "quit")
                 {
+                    StopMusicVisualizer();
+                    MusicPlayer.Dispose();
                     AnsiConsole.WriteLine("Goodbye!");
                     Environment.Exit(0);
                     return;
@@ -421,6 +546,16 @@
                     table.AddRow("/help", "Show this help message");
                     table.AddRow("/config", "Open configuration menu");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
+                    table.AddRow("/music", "Play lofi/synthwave coding music");
+                    table.AddRow("/music-stop", "Stop music playback");
+                    table.AddRow("/music-pause", "Pause/resume music");
+                    table.AddRow("/music-next", "Skip to next track");
+                    table.AddRow("/music-vol", "Set volume (0-100)");
+                    table.AddRow("/music-lofi", "Switch to lofi genre");
+                    table.AddRow("/music-synthwave", "Switch to synthwave genre");
+                    table.AddRow("/music-list", "Show available tracks");
+                    table.AddRow("/command", "Run a shell command (also: !<cmd>)");
+                    table.AddRow("/copy", "Copy last AI response to clipboard");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit, /quit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -443,6 +578,33 @@
                 if (command == "learn")
                 {
                     HandleLearnCommand();
+                    continue;
+                }
+
+                if (command == "copy")
+                {
+                    HandleCopyCommand();
+                    continue;
+                }
+
+                // Music commands
+                if (command == "music")           { HandleMusicCommand("play"); continue; }
+                if (command == "music-stop")      { HandleMusicCommand("stop"); continue; }
+                if (command == "music-pause")     { HandleMusicCommand("pause"); continue; }
+                if (command == "music-next")      { HandleMusicCommand("next"); continue; }
+                if (command == "music-lofi")      { HandleMusicCommand("lofi"); continue; }
+                if (command == "music-synthwave") { HandleMusicCommand("synthwave"); continue; }
+                if (command == "music-list")      { HandleMusicCommand("list"); continue; }
+                if (command.StartsWith("music-vol"))
+                {
+                    HandleMusicCommand(command);
+                    continue;
+                }
+
+                if (command == "command" || command.StartsWith("command "))
+                {
+                    var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
+                    HandleShellCommand(shellCmd);
                     continue;
                 }
 
@@ -618,6 +780,8 @@
                     var responseText = responseBuffer.ToString().Trim();
                     if (!string.IsNullOrEmpty(responseText))
                     {
+                        _lastAiResponse = responseText;
+
                         try
                         {
                             MarkdownRenderer.Render(responseText);
@@ -766,12 +930,14 @@
         {
             case TaskProgressType.StepStarted:
                 StopSpinner();
+                SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
                 break;
 
             case TaskProgressType.StepCompleted:
                 StopSpinner();
+                SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 if (!string.IsNullOrEmpty(progressEvent.Message))
                 {
                     // Truncate long results for display
@@ -787,6 +953,7 @@
 
             case TaskProgressType.StepFailed:
                 StopSpinner();
+                SetTaskbarError(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
@@ -812,10 +979,12 @@
 
             case TaskProgressType.PlanCompleted:
                 StopSpinner();
+                ClearTaskbarProgress();
                 break;
 
             case TaskProgressType.PlanCancelled:
                 StopSpinner();
+                ClearTaskbarProgress();
                 break;
         }
     }
@@ -837,6 +1006,179 @@
                 AnsiConsole.WriteLine();
             }
         }
+    }
+
+    private void HandleCopyCommand()
+    {
+        if (string.IsNullOrEmpty(_lastAiResponse))
+        {
+            AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // OSC 52: copy to system clipboard via terminal escape code
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
+        Console.Write($"\u001b]52;c;{base64}\u0007");
+
+        // Truncate preview for display
+        var preview = _lastAiResponse.Length > 80
+            ? _lastAiResponse[..77] + "..."
+            : _lastAiResponse.Replace("\n", " ");
+        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private void HandleShellCommand(string cmd)
+    {
+        if (string.IsNullOrWhiteSpace(cmd))
+        {
+            AnsiConsole.MarkupLine("[yellow]Usage:[/] !<command>  or  /command <command>");
+            AnsiConsole.MarkupLine("[dim]Examples: !ls -la, !git status, !cd ..[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Intercept cd so the AI agent stays aware of the new working directory
+        if (cmd == "cd" || cmd.StartsWith("cd "))
+        {
+            var target = cmd.Length > 2 ? cmd[3..].Trim() : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(target))
+                target = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            try
+            {
+                var newDir = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), target));
+                if (!Directory.Exists(newDir))
+                {
+                    AnsiConsole.MarkupLine($"[red]cd: no such directory: {Spectre.Console.Markup.Escape(target)}[/]");
+                    AnsiConsole.WriteLine();
+                    return;
+                }
+
+                Directory.SetCurrentDirectory(newDir);
+                _projectRoot = newDir;
+                FileProvider.RefreshCache();
+
+                // OSC 9;9 — tell Windows Terminal the new CWD
+                Console.Write($"\u001b]9;9;{newDir}\u0007");
+
+                AnsiConsole.MarkupLine($"[green]Changed directory to[/] {Spectre.Console.Markup.Escape(newDir)}");
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]cd: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
+            }
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Run the command in a child process
+        try
+        {
+            var isWindows = OperatingSystem.IsWindows();
+            var escapedCmd = cmd.Replace("\"", "\\\"");
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = isWindows ? "cmd.exe" : "/bin/bash",
+                Arguments = isWindows ? "/c " + cmd : "-c \"" + escapedCmd + "\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = Directory.GetCurrentDirectory()
+            };
+
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null)
+            {
+                AnsiConsole.MarkupLine("[red]Failed to start process.[/]");
+                AnsiConsole.WriteLine();
+                return;
+            }
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit(30_000);
+
+            if (!string.IsNullOrEmpty(stdout))
+                Console.Write(stdout);
+            if (!string.IsNullOrEmpty(stderr))
+                Console.Write($"\u001b[31m{stderr}\u001b[0m");
+            if (string.IsNullOrEmpty(stdout) && string.IsNullOrEmpty(stderr))
+                AnsiConsole.MarkupLine("[dim](no output)[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Shell error: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    private void HandleMusicCommand(string action)
+    {
+        // Stop visualizer before rendering status panels to avoid flicker
+        StopMusicVisualizer();
+
+        // Parse volume from "music-vol 70" style commands
+        if (action.StartsWith("music-vol"))
+        {
+            var parts = action.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && int.TryParse(parts[1], out var vol))
+            {
+                MusicPlayer.SetVolume(vol / 100f);
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+            }
+            else
+            {
+                Console.WriteLine();
+                Console.WriteLine("  Usage: /music-vol [0-100]");
+                Console.WriteLine("  Example: /music-vol 70");
+                Console.WriteLine();
+            }
+            // Restart visualizer after panel render
+            StartMusicVisualizer();
+            return;
+        }
+
+        switch (action)
+        {
+            case "play":
+                MusicPlayer.Play();
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "stop":
+                MusicPlayer.Stop();
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "pause":
+                MusicPlayer.TogglePause();
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "next":
+                MusicPlayer.NextTrack();
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "lofi":
+                MusicPlayer.Play("lofi");
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "synthwave":
+                MusicPlayer.Play("synthwave");
+                MusicPlayerUI.RenderStatus(MusicPlayer);
+                break;
+
+            case "list":
+                MusicPlayerUI.RenderTrackList(MusicPlayer);
+                break;
+        }
+
+        // Restart visualizer — it will auto-check if music is still active
+        StartMusicVisualizer();
     }
 
     private async Task HandleConfigCommandAsync()
@@ -874,7 +1216,7 @@
     {
         Console.WriteLine();
 
-        var header = $"\u250c\u2500 Diff: {relativePath} ";
+        var header = $"\u250c\u2500 Diff: {FileLink(relativePath)} ";
         var padLen = Math.Max(0, 50 - header.Length);
         Console.WriteLine(header + new string('\u2500', padLen) + "\u2510");
         Console.WriteLine("\u2502");

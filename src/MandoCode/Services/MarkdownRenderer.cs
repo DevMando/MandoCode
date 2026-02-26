@@ -25,6 +25,19 @@ public static class MarkdownRenderer
     private const string Grey = "\u001b[90m";
     private const string FgReset = "\u001b[39m"; // reset foreground only (preserves bold/italic)
 
+    // Regex for detecting bare URLs and bare domain names in literal text
+    private static readonly System.Text.RegularExpressions.Regex UrlPattern = new(
+        @"(https?://[^\s)\]>""]+|(?<![@\w])[\w][\w.-]*\.(?:com|org|net|io|dev|edu|gov|co|app|ai|us|uk|de|fr|jp|au|ca|ru|br|in|xyz|tech|info|biz|me|tv|cc)\b(?:/[^\s)\]>""]*)?)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Wraps text in an OSC 8 clickable hyperlink.
+    /// </summary>
+    private static void WriteHyperlink(string url, string displayText, string color = Cyan)
+    {
+        Console.Write($"\u001b]8;;{url}\u0007{color}{displayText}{FgReset}\u001b]8;;\u0007");
+    }
+
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UsePipeTables()
         .UseAutoLinks()
@@ -305,7 +318,7 @@ public static class MarkdownRenderer
             switch (inline)
             {
                 case LiteralInline literal:
-                    Console.Write(literal.Content.ToString());
+                    WriteLiteralWithLinks(literal.Content.ToString());
                     break;
 
                 case EmphasisInline emphasis:
@@ -337,13 +350,24 @@ public static class MarkdownRenderer
 
                 case LinkInline link:
                     var linkText = GetPlainText(link);
-                    RenderInlines(link);
-                    if (!string.IsNullOrEmpty(link.Url) && link.Url != linkText)
-                        Console.Write($"{Grey} ({link.Url}){FgReset}");
+                    if (!string.IsNullOrEmpty(link.Url))
+                    {
+                        // Wrap the entire link in an OSC 8 clickable hyperlink
+                        Console.Write($"\u001b]8;;{link.Url}\u0007");
+                        Console.Write(Cyan);
+                        RenderInlines(link);
+                        if (link.Url != linkText)
+                            Console.Write($" ({link.Url})");
+                        Console.Write($"{FgReset}\u001b]8;;\u0007");
+                    }
+                    else
+                    {
+                        RenderInlines(link);
+                    }
                     break;
 
                 case AutolinkInline autolink:
-                    Console.Write($"{Cyan}{autolink.Url}{FgReset}");
+                    WriteHyperlink(autolink.Url, autolink.Url);
                     break;
 
                 case LineBreakInline:
@@ -407,6 +431,33 @@ public static class MarkdownRenderer
             sb.Append(lines.Lines[i].Slice.ToString());
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Writes literal text, detecting bare URLs and wrapping them in OSC 8 hyperlinks.
+    /// </summary>
+    private static void WriteLiteralWithLinks(string text)
+    {
+        var lastIndex = 0;
+        foreach (System.Text.RegularExpressions.Match match in UrlPattern.Matches(text))
+        {
+            // Write text before the URL
+            if (match.Index > lastIndex)
+                Console.Write(text[lastIndex..match.Index]);
+
+            // Write the URL as a clickable hyperlink
+            // For bare domains (no http prefix), prepend https:// for the link target
+            var displayText = match.Value;
+            var linkUrl = displayText.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? displayText
+                : $"https://{displayText}";
+            WriteHyperlink(linkUrl, displayText);
+            lastIndex = match.Index + match.Length;
+        }
+
+        // Write remaining text after the last URL
+        if (lastIndex < text.Length)
+            Console.Write(text[lastIndex..]);
     }
 
     /// <summary>
