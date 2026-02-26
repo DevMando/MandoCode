@@ -96,7 +96,8 @@ public class TaskPlannerService
             return true;
 
         // Rule 4: Very long requests likely have detailed requirements
-        if (trimmed.Length > 400)
+        // But only if they actually contain action-oriented language, not just pasted text
+        if (trimmed.Length > 400 && startsWithImperative)
             return true;
 
         // Rule 5: Multiple explicit tasks connected with "and" or "also" — only when request is substantial

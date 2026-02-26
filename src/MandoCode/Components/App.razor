@@ -217,9 +217,9 @@
             AnsiConsole.MarkupLine($"[dim][[Error]][/] [red]{Spectre.Console.Markup.Escape(result.Result)}[/]");
         }
 
-        // Refresh file cache after write/delete operations so @ autocomplete stays current
+        // Refresh file cache after any operation that modifies the file system
         var fnLower = result.FunctionName.ToLowerInvariant();
-        if (fnLower.Contains("write") || fnLower.Contains("delete"))
+        if (fnLower.Contains("write") || fnLower.Contains("delete") || fnLower.Contains("create") || fnLower.Contains("folder"))
         {
             FileProvider.RefreshCache();
         }
@@ -367,11 +367,18 @@
     {
         while (true)
         {
-            AnsiConsole.Markup("You: ");
+            AnsiConsole.Markup("[yellow]> [/]");
             var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
+
+            // Re-render the submitted input in amber/yellow for old-school terminal feel
+            var curTop = Console.CursorTop - 1;
+            Console.SetCursorPosition(0, curTop);
+            Console.Write($"\u001b[33m> {input}\u001b[0m");
+            Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - input.Length - 3)));
+            Console.WriteLine();
 
             // Check if this is a command (starts with /)
             if (CommandAutocomplete.IsCommand(input))
