@@ -135,8 +135,9 @@ public static class MarkdownRenderer
         var language = (codeBlock as FencedCodeBlock)?.Info ?? "";
         var code = GetLeafContent(codeBlock).TrimEnd();
 
-        var text = new Text(code, Style.Parse("grey"));
-        var panel = new Panel(text)
+        var highlighted = SyntaxHighlighter.Highlight(code, language);
+        var content = new Markup(highlighted);
+        var panel = new Panel(content)
             .Border(BoxBorder.Rounded)
             .BorderStyle(Style.Parse("dim"))
             .Padding(1, 0);

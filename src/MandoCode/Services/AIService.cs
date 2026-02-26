@@ -30,6 +30,7 @@ public class AIService
     private readonly string _projectRoot;
     private readonly FunctionCompletionTracker _completionTracker = new();
     private FunctionInvocationFilter _functionFilter;
+    private readonly TokenTrackingService _tokenTracker;
 
     /// <summary>
     /// Event raised when a function is about to be invoked.
@@ -82,10 +83,11 @@ public class AIService
         }
     }
 
-    public AIService(string projectRoot, MandoCodeConfig config)
+    public AIService(string projectRoot, MandoCodeConfig config, TokenTrackingService tokenTracker)
     {
         _projectRoot = projectRoot;
         _config = config;
+        _tokenTracker = tokenTracker;
         _systemPrompt = SystemPrompts.MandoCodeAssistant;
 
         BuildKernel();
@@ -132,7 +134,7 @@ public class AIService
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
         // Set up function invocation filter for UI events and deduplication
-        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRoot);
+        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRoot, _tokenTracker);
         _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
         _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
         _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
@@ -172,29 +174,7 @@ public class AIService
                 return (false, $"Model '{modelName}' not found. Run: ollama pull {modelName}");
             }
 
-            var content = await response.Content.ReadAsStringAsync();
-
-            // Check modelfile for known tool-supporting model families
-            var supportedModelFamilies = new[]
-            {
-                "qwen", "mistral", "llama3", "llama-3", "mixtral", "command-r",
-                "deepseek", "phi3", "phi-3", "gemma2", "gemma-2"
-            };
-
-            var modelLower = modelName.ToLowerInvariant();
-            var hasToolSupport = supportedModelFamilies.Any(family => modelLower.Contains(family));
-
-            if (!hasToolSupport)
-            {
-                return (false, $"Warning: Model '{modelName}' may not support function calling.\n\n" +
-                    "Recommended models with tool support:\n" +
-                    "  - qwen2.5-coder:14b (best for coding)\n" +
-                    "  - qwen2.5-coder:7b\n" +
-                    "  - mistral\n" +
-                    "  - llama3.1\n\n" +
-                    "Continue anyway? The model might not execute file operations correctly.");
-            }
-
+            // Model exists and is available — Ollama handles tool support at the API level
             return (true, null);
         }
         catch (Exception ex)
@@ -223,6 +203,9 @@ public class AIService
                 _config.MaxRetryAttempts,
                 "ChatAsync"
             );
+
+            // Extract token usage from the response
+            ExtractAndRecordTokens(response, "Chat");
 
             // Add the final response to history
             if (!string.IsNullOrEmpty(response.Content))
@@ -294,6 +277,9 @@ public class AIService
                 cts.Token
             );
 
+            // Extract token usage from the response
+            ExtractAndRecordTokens(result, "Chat");
+
             var rawResponse = result.Content ?? "No response from AI.";
 
             // Check if the model output function calls as text instead of invoking them
@@ -333,16 +319,19 @@ public class AIService
         // Check if the error is about tool support
         if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
         {
-            return $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
-                   $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
-                   $"Recommended models with tool support:\n" +
-                   $"  • ollama pull qwen2.5-coder:14b\n" +
-                   $"  • ollama pull qwen2.5-coder:7b\n" +
-                   $"  • ollama pull mistral\n" +
-                   $"  • ollama pull llama3.1\n\n" +
-                   $"Then update your configuration:\n" +
-                   $"  Type 'config' and select 'Run configuration wizard'\n" +
-                   $"  Or run: dotnet run -- config set model qwen2.5-coder:14b";
+            return $"Error: The model '{_config.GetEffectiveModelName()}' does not support tool calling.\n\n" +
+                   $"MandoCode uses agentic tool calling to read, write, and manage files.\n" +
+                   $"Your current model doesn't support this — you'll need to switch to a tool-enabled model.\n\n" +
+                   $"To change your model, run /config and select a model that supports tool use.\n\n" +
+                   $"Cloud models (no GPU required):\n" +
+                   $"  • kimi-k2.5:cloud\n" +
+                   $"  • minimax-m2.5:cloud\n" +
+                   $"  • qwen3-coder:480b-cloud\n\n" +
+                   $"Local models:\n" +
+                   $"  • qwen3:8b (recommended, runs on most hardware)\n" +
+                   $"  • qwen2.5-coder:7b\n" +
+                   $"  • mistral\n" +
+                   $"  • llama3.1";
         }
 
         return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
@@ -379,6 +368,9 @@ public class AIService
                 _config.MaxRetryAttempts,
                 "GetPlanAsync"
             );
+
+            // Extract token usage from the planning response
+            ExtractAndRecordTokens(result, "Plan");
 
             return result.Content ?? "Failed to generate plan.";
         }
@@ -443,6 +435,10 @@ public class AIService
                 _config.MaxRetryAttempts,
                 "ExecutePlanStepAsync"
             );
+
+            // Extract token usage from the step response
+            var stepLabel = $"Step {previousResults.Count + 1}";
+            ExtractAndRecordTokens(result, stepLabel);
 
             var response = result.Content ?? "Step completed (no response content).";
 
@@ -983,6 +979,45 @@ public class AIService
     }
 
     /// <summary>
+    /// Extracts real token counts from a ChatMessageContent response and records them.
+    /// Non-critical — failures are silently swallowed.
+    /// </summary>
+    private void ExtractAndRecordTokens(ChatMessageContent response, string label)
+    {
+        try
+        {
+            if (response.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream done)
+            {
+                var promptTokens = done.PromptEvalCount;
+                var completionTokens = done.EvalCount;
+                if (promptTokens > 0 || completionTokens > 0)
+                {
+                    _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label);
+                }
+            }
+        }
+        catch
+        {
+            // Token extraction is non-critical — never let it break the flow
+        }
+    }
+
+    /// <summary>
+    /// Exposes the token tracker for external consumers (e.g., App.razor display).
+    /// </summary>
+    public TokenTrackingService TokenTracker => _tokenTracker;
+
+    /// <summary>
+    /// Enters learn mode by clearing history and injecting the educator system prompt.
+    /// The user can return to normal mode via /clear which restores the original system prompt.
+    /// </summary>
+    public void EnterLearnMode()
+    {
+        _chatHistory.Clear();
+        _chatHistory.AddSystemMessage(SystemPrompts.LearnModePrompt);
+    }
+
+    /// <summary>
     /// Clears the chat history and starts a new conversation.
     /// </summary>
     public void ClearHistory()
@@ -990,6 +1025,7 @@ public class AIService
         _chatHistory.Clear();
         _chatHistory.AddSystemMessage(_systemPrompt);
         _functionFilter.ClearCache(); // Clear deduplication cache
+        _tokenTracker.Reset();
     }
 
     /// <summary>

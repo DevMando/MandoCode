@@ -16,6 +16,7 @@ public static class CommandAutocomplete
         { "/help", "Show this help message" },
         { "/config", "Open configuration menu" },
         { "/clear", "Clear conversation history" },
+        { "/learn", "Learn about LLMs and local AI models" },
         { "/exit", "Exit MandoCode" },
         { "/quit", "Exit MandoCode" }
     };

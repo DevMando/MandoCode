@@ -19,7 +19,8 @@ MandoCode understands **any file type** in your project, including C#, JavaScrip
 ## Features
 
 - **Fully offline** — no API keys, no cloud, no tokens
-- **Project-aware AI** — reads, writes, and searches your entire codebase
+- **Project-aware AI** — reads, writes, deletes, and searches your entire codebase
+- **Diff approvals** — color-coded diffs for file writes and deletions with approve/deny/redirect controls
 - **`@` file references** — type `@` to autocomplete and attach file content to any prompt
 - **`/` command autocomplete** — slash commands with interactive dropdown navigation
 - **Task planner** — automatically breaks complex requests into step-by-step plans
@@ -145,6 +146,44 @@ Multiple `@` references in one prompt are supported. Files over 10,000 character
 
 ---
 
+## Diff Approvals
+
+When the AI writes or deletes a file, MandoCode intercepts the operation and shows a color-coded diff before applying changes.
+
+### What You See
+
+- **Red lines** — content being removed
+- **Light blue lines** — content being added
+- **Dim lines** — unchanged context (3 lines around each change)
+- Long unchanged sections are collapsed with a summary
+
+### Approval Options
+
+| Option | Behavior |
+|--------|----------|
+| **Approve** | Apply this change |
+| **Approve - Don't ask again** | Auto-approve future changes to this file (per-file), or all files (global) |
+| **Deny** | Reject the change, the AI is told it was denied |
+| **Provide new instructions** | Redirect the AI with custom feedback |
+
+For **new files**, the "don't ask again" option sets a **global bypass** — all future writes and deletes are auto-approved for the session. For **existing files**, the bypass is **per-file**.
+
+Even when auto-approved, diffs are still rendered so you can follow along.
+
+### Delete Approvals
+
+File deletions show all existing content as red removals with a deletion warning. The same approval options apply.
+
+### Configuration
+
+Diff approvals are enabled by default. To toggle:
+
+```bash
+mandocode config set diffApprovals false
+```
+
+---
+
 ## Task Planner
 
 MandoCode automatically detects complex requests and offers to break them into a step-by-step plan before execution.
@@ -152,12 +191,12 @@ MandoCode automatically detects complex requests and offers to break them into a
 ### Triggers
 
 The planner activates for requests like:
-- `Create a tic-tac-toe game with HTML, CSS, and JavaScript`
-- `Build an API endpoint with authentication`
-- Numbered lists with multiple tasks
-- Requests over 250 characters
+- `Create a REST API service with authentication and rate limiting for the user module` (12+ words with imperative verb and scope indicator)
+- `Build an application that handles user registration and sends email confirmations`
+- Numbered lists with 3+ items
+- Requests over 400 characters
 
-Simple questions and short prompts bypass planning automatically.
+Simple questions, short prompts, and single-action operations (delete, remove, read, show, list, find, search, rename) bypass planning automatically.
 
 ### Workflow
 
@@ -183,6 +222,7 @@ The AI has controlled access to your project directory through these functions:
 | `list_files_match_glob_pattern(pattern)` | Lists files matching a glob pattern (`*.cs`, `src/**/*.ts`, `*.*`) |
 | `read_file_contents(relativePath)` | Reads complete file content with line count |
 | `write_file(relativePath, content)` | Writes/creates a file (creates directories as needed) |
+| `delete_file(relativePath)` | Deletes a file (directories cannot be deleted) |
 | `create_folder(relativePath)` | Creates a new directory |
 | `search_text_in_files(pattern, searchText)` | Searches file contents for text, returns file paths and line numbers |
 | `get_absolute_path(relativePath)` | Converts a relative path to its absolute filesystem path |
@@ -259,6 +299,7 @@ Located at `~/.mandocode/config.json`
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `4096` | Maximum response token length |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
+| `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
 | `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
 | `enableFallbackFunctionParsing` | `true` | Parse function calls from text output |
 | `functionDeduplicationWindowSeconds` | `5` | Time window to prevent duplicate function calls |
