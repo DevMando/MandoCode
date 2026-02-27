@@ -64,7 +64,11 @@ public class SpinnerService
         if (cts != null)
         {
             cts.Cancel();
-            task?.Wait(1000);
+            // Use non-blocking wait with timeout to avoid thread pool starvation
+            if (task != null)
+            {
+                try { task.Wait(1000); } catch (AggregateException) { }
+            }
             cts.Dispose();
         }
 

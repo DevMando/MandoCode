@@ -1,6 +1,7 @@
 using Microsoft.SemanticKernel;
 using MandoCode.Models;
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -42,7 +43,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     private readonly TokenTrackingService? _tokenTracker;
 
     // Cache for deduplication - stores recent function calls and their results
-    private readonly Dictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
+    // Uses ConcurrentDictionary for thread safety with AllowConcurrentInvocation = true
+    private readonly ConcurrentDictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
 
     // Deduplication windows for different operation types
     private readonly TimeSpan _readDeduplicationWindow;
@@ -736,7 +738,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
         foreach (var key in keysToRemove)
         {
-            _recentCalls.Remove(key);
+            _recentCalls.TryRemove(key, out _);
         }
     }
 

@@ -31,6 +31,7 @@ public class AIService
     private readonly FunctionCompletionTracker _completionTracker = new();
     private FunctionInvocationFilter _functionFilter;
     private readonly TokenTrackingService _tokenTracker;
+    private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     /// <summary>
     /// Event raised when a function is about to be invoked.
@@ -189,68 +190,61 @@ public class AIService
     /// </summary>
     public async Task<string> ChatAsync(string userMessage)
     {
-        _chatHistory.AddUserMessage(userMessage);
-
+        await _historyLock.WaitAsync();
         try
         {
-            // Get the response with automatic function calling, with retry for transient errors
-            var response = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    _chatHistory,
-                    _settings,
-                    _kernel
-                ),
-                _config.MaxRetryAttempts,
-                "ChatAsync"
-            );
+            _chatHistory.AddUserMessage(userMessage);
 
-            // Extract token usage from the response
-            ExtractAndRecordTokens(response, "Chat");
-
-            // Add the final response to history
-            if (!string.IsNullOrEmpty(response.Content))
+            try
             {
-                _chatHistory.AddAssistantMessage(response.Content);
-            }
+                // Get the response with automatic function calling, with retry for transient errors
+                var response = await RetryPolicy.ExecuteWithRetryAsync(
+                    async () => await _chatService.GetChatMessageContentAsync(
+                        _chatHistory,
+                        _settings,
+                        _kernel
+                    ),
+                    _config.MaxRetryAttempts,
+                    "ChatAsync"
+                );
 
-            var rawResponse = response.Content ?? "No response from AI.";
+                // Extract token usage from the response
+                ExtractAndRecordTokens(response, "Chat");
 
-            // Check if the model output function calls as text instead of invoking them
-            var processedResponse = _config.EnableFallbackFunctionParsing
-                ? await ProcessTextFunctionCallsAsync(rawResponse)
-                : rawResponse;
-
-            // Update history with processed response
-            if (!string.IsNullOrEmpty(processedResponse) && processedResponse != rawResponse)
-            {
-                // Remove the raw response and add processed one
-                if (_chatHistory.Count > 0 && _chatHistory.Last().Role == AuthorRole.Assistant)
+                // Add the final response to history
+                if (!string.IsNullOrEmpty(response.Content))
                 {
-                    _chatHistory.RemoveAt(_chatHistory.Count - 1);
+                    _chatHistory.AddAssistantMessage(response.Content);
                 }
-                _chatHistory.AddAssistantMessage(processedResponse);
-            }
 
-            return processedResponse;
-        }
-        catch (Exception ex)
-        {
-            // Check if the error is about tool support
-            if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
+                var rawResponse = response.Content ?? "No response from AI.";
+
+                // Check if the model output function calls as text instead of invoking them
+                var processedResponse = _config.EnableFallbackFunctionParsing
+                    ? await ProcessTextFunctionCallsAsync(rawResponse)
+                    : rawResponse;
+
+                // Update history with processed response
+                if (!string.IsNullOrEmpty(processedResponse) && processedResponse != rawResponse)
+                {
+                    // Remove the raw response and add processed one
+                    if (_chatHistory.Count > 0 && _chatHistory.Last().Role == AuthorRole.Assistant)
+                    {
+                        _chatHistory.RemoveAt(_chatHistory.Count - 1);
+                    }
+                    _chatHistory.AddAssistantMessage(processedResponse);
+                }
+
+                return processedResponse;
+            }
+            catch (Exception ex)
             {
-                return $"Error: The model '{_config.GetEffectiveModelName()}' does not support function calling (tools).\n\n" +
-                       $"MandoCode requires a model with function calling support to use FileSystem plugins.\n\n" +
-                       $"Recommended models with tool support:\n" +
-                       $"  • ollama pull minimax-m2.5:cloud\n" +
-                       $"  • ollama pull qwen2.5-coder:14b\n" +
-                       $"  • ollama pull mistral\n" +
-                       $"  • ollama pull llama3.1\n\n" +
-                       $"Then update your configuration:\n" +
-                       $"  Type 'config' and select 'Run configuration wizard'\n" +
-                       $"  Or run: dotnet run -- config set model minimax-m2.5:cloud";
+                return FormatErrorMessage(ex);
             }
-
-            return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
+        }
+        finally
+        {
+            _historyLock.Release();
         }
     }
 
@@ -260,54 +254,72 @@ public class AIService
     /// Streaming with auto-invocation causes issues where function calls are not properly parsed
     /// or executed by the Semantic Kernel with local Ollama models.
     /// </summary>
-    public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage)
+    public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _chatHistory.AddUserMessage(userMessage);
-
         string response;
+
+        await _historyLock.WaitAsync(cancellationToken);
         try
         {
-            // Use a cancellation token with timeout for long operations
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            _chatHistory.AddUserMessage(userMessage);
 
-            var result = await _chatService.GetChatMessageContentAsync(
-                _chatHistory,
-                _settings,
-                _kernel,
-                cts.Token
-            );
-
-            // Extract token usage from the response
-            ExtractAndRecordTokens(result, "Chat");
-
-            var rawResponse = result.Content ?? "No response from AI.";
-
-            // Check if the model output function calls as text instead of invoking them
-            response = await ProcessTextFunctionCallsAsync(rawResponse);
-
-            // Add the response to history
-            if (!string.IsNullOrEmpty(response))
+            try
             {
-                _chatHistory.AddAssistantMessage(response);
+                // Link caller's cancellation token with an internal 5-minute timeout
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+                var result = await RetryPolicy.ExecuteWithRetryAsync(
+                    async () => await _chatService.GetChatMessageContentAsync(
+                        _chatHistory,
+                        _settings,
+                        _kernel,
+                        linkedCts.Token
+                    ),
+                    _config.MaxRetryAttempts,
+                    "ChatStreamAsync"
+                );
+
+                // Extract token usage from the response
+                ExtractAndRecordTokens(result, "Chat");
+
+                var rawResponse = result.Content ?? "No response from AI.";
+
+                // Check if the model output function calls as text instead of invoking them
+                response = await ProcessTextFunctionCallsAsync(rawResponse);
+
+                // Add the response to history
+                if (!string.IsNullOrEmpty(response))
+                {
+                    _chatHistory.AddAssistantMessage(response);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                response = "Request cancelled.";
+            }
+            catch (OperationCanceledException)
+            {
+                response = "Error: Request timed out. The model took too long to respond.\n\n" +
+                          "Try breaking your request into smaller parts, or use a faster model.";
+            }
+            catch (HttpRequestException ex)
+            {
+                response = $"Error: Connection to Ollama failed.\n\n" +
+                          $"Details: {ex.Message}\n\n" +
+                          "Make sure Ollama is running: ollama serve";
+            }
+            catch (Exception ex)
+            {
+                response = FormatErrorMessage(ex);
             }
         }
-        catch (OperationCanceledException)
+        finally
         {
-            response = "Error: Request timed out. The model took too long to respond.\n\n" +
-                      "Try breaking your request into smaller parts, or use a faster model.";
-        }
-        catch (HttpRequestException ex)
-        {
-            response = $"Error: Connection to Ollama failed.\n\n" +
-                      $"Details: {ex.Message}\n\n" +
-                      "Make sure Ollama is running: ollama serve";
-        }
-        catch (Exception ex)
-        {
-            response = FormatErrorMessage(ex);
+            _historyLock.Release();
         }
 
-        // Yield the complete response
+        // Yield outside the lock — response is fully computed
         yield return response;
     }
 
@@ -451,8 +463,16 @@ public class AIService
                 : response;
 
             // Also add to main history so user can see the full conversation
-            _chatHistory.AddUserMessage($"[Plan Step] {stepInstruction}");
-            _chatHistory.AddAssistantMessage(processedResponse);
+            await _historyLock.WaitAsync();
+            try
+            {
+                _chatHistory.AddUserMessage($"[Plan Step] {stepInstruction}");
+                _chatHistory.AddAssistantMessage(processedResponse);
+            }
+            finally
+            {
+                _historyLock.Release();
+            }
 
             return processedResponse;
         }
@@ -947,35 +967,34 @@ public class AIService
         }
     }
 
+    // Static parameter name mappings to avoid allocation per call
+    private static readonly Dictionary<string, string> ParamMappings =
+        new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "pattern", "pattern" },
+        { "glob_pattern", "pattern" },
+        { "globPattern", "pattern" },
+        { "relativePath", "relativePath" },
+        { "relative_path", "relativePath" },
+        { "path", "relativePath" },
+        { "filePath", "relativePath" },
+        { "file_path", "relativePath" },
+        { "content", "content" },
+        { "file_content", "content" },
+        { "fileContent", "content" },
+        { "searchPattern", "searchPattern" },
+        { "search_pattern", "searchPattern" },
+        { "query", "searchPattern" },
+    };
+
     /// <summary>
     /// Normalizes parameter names to match function parameter names.
     /// </summary>
-    private string NormalizeParameterName(string paramName)
+    private static string NormalizeParameterName(string paramName)
     {
-        var paramMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "pattern", "pattern" },
-            { "glob_pattern", "pattern" },
-            { "globPattern", "pattern" },
-            { "relativePath", "relativePath" },
-            { "relative_path", "relativePath" },
-            { "path", "relativePath" },
-            { "filePath", "relativePath" },
-            { "file_path", "relativePath" },
-            { "content", "content" },
-            { "file_content", "content" },
-            { "fileContent", "content" },
-            { "searchPattern", "searchPattern" },
-            { "search_pattern", "searchPattern" },
-            { "query", "searchPattern" },
-        };
-
-        if (paramMappings.TryGetValue(paramName, out var normalizedName))
-        {
-            return normalizedName;
-        }
-
-        return paramName;
+        return ParamMappings.TryGetValue(paramName, out var normalizedName)
+            ? normalizedName
+            : paramName;
     }
 
     /// <summary>
@@ -1013,8 +1032,16 @@ public class AIService
     /// </summary>
     public void EnterLearnMode()
     {
-        _chatHistory.Clear();
-        _chatHistory.AddSystemMessage(SystemPrompts.LearnModePrompt);
+        _historyLock.Wait();
+        try
+        {
+            _chatHistory.Clear();
+            _chatHistory.AddSystemMessage(SystemPrompts.LearnModePrompt);
+        }
+        finally
+        {
+            _historyLock.Release();
+        }
     }
 
     /// <summary>
@@ -1022,8 +1049,16 @@ public class AIService
     /// </summary>
     public void ClearHistory()
     {
-        _chatHistory.Clear();
-        _chatHistory.AddSystemMessage(_systemPrompt);
+        _historyLock.Wait();
+        try
+        {
+            _chatHistory.Clear();
+            _chatHistory.AddSystemMessage(_systemPrompt);
+        }
+        finally
+        {
+            _historyLock.Release();
+        }
         _functionFilter.ClearCache(); // Clear deduplication cache
         _tokenTracker.Reset();
     }
@@ -1033,6 +1068,14 @@ public class AIService
     /// </summary>
     public IReadOnlyList<ChatMessageContent> GetHistory()
     {
-        return _chatHistory.ToList().AsReadOnly();
+        _historyLock.Wait();
+        try
+        {
+            return _chatHistory.ToList().AsReadOnly();
+        }
+        finally
+        {
+            _historyLock.Release();
+        }
     }
 }

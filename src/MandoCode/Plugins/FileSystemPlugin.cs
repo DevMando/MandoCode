@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.SemanticKernel;
 
 namespace MandoCode.Plugins;
@@ -335,42 +336,9 @@ public class FileSystemPlugin
 
     private bool MatchesPattern(string filePath, string pattern)
     {
-        // Simple glob pattern matching
-        filePath = filePath.Replace('\\', '/');
-        pattern = pattern.Replace('\\', '/');
-
-        // Handle special patterns
-        if (pattern == "*.*")
-        {
-            return true;
-        }
-
-        if (pattern.StartsWith("**"))
-        {
-            var extension = pattern.Replace("**", "").Replace("/", "").Replace("*", "");
-            return filePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (pattern.StartsWith("*."))
-        {
-            var extension = pattern.Substring(1);
-            return filePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (pattern.Contains("**"))
-        {
-            var parts = pattern.Split("**");
-            if (parts.Length == 2)
-            {
-                var startsWith = parts[0].TrimEnd('/');
-                var endsWith = parts[1].TrimStart('/').Replace("*", "");
-                return (string.IsNullOrEmpty(startsWith) || filePath.StartsWith(startsWith, StringComparison.OrdinalIgnoreCase)) &&
-                       (string.IsNullOrEmpty(endsWith) || filePath.EndsWith(endsWith, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-
-        // Exact match
-        return filePath.Equals(pattern, StringComparison.OrdinalIgnoreCase);
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        matcher.AddInclude(pattern);
+        return matcher.Match(filePath).HasMatches;
     }
 
     private string GetFullPath(string relativePath)
@@ -378,8 +346,13 @@ public class FileSystemPlugin
         var fullPath = Path.Combine(_projectRoot, relativePath);
         fullPath = Path.GetFullPath(fullPath);
 
-        // Security check: ensure the path is within project root
-        if (!fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase))
+        // Security check: ensure the path is within project root with separator boundary
+        // Without the separator, "C:\projects\myapp" would match "C:\projects\myappevil"
+        var normalizedRoot = _projectRoot.TrimEnd(Path.DirectorySeparatorChar)
+                           + Path.DirectorySeparatorChar;
+
+        if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
+            && !fullPath.Equals(_projectRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Access denied: Path is outside project root: {relativePath}");
         }
