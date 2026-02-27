@@ -5,7 +5,9 @@
       "Bash(curl:*)",
       "Bash(git status:*)",
       "Bash(git config:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(dotnet add:*)",
+      "Bash(taskkill:*)"
     ]
   }
 }

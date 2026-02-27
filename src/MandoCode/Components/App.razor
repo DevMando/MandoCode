@@ -48,6 +48,9 @@
     // Last AI response for /copy command
     private string? _lastAiResponse;
 
+    // Cancellation for active AI requests — triggered by Ctrl+C
+    private CancellationTokenSource? _requestCts;
+
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
     private Task? _musicVisTask;
@@ -119,7 +122,10 @@
         if (cts != null)
         {
             cts.Cancel();
-            task?.Wait(1000);
+            if (task != null)
+            {
+                try { task.Wait(1000); } catch (AggregateException) { }
+            }
             cts.Dispose();
         }
     }
@@ -133,9 +139,6 @@
             ProjectRoot.ProjectRoot = args[0];
         }
 
-        // Check Ollama connection synchronously to ensure UI is correct
-        _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
-
         // Subscribe to function invocation events for UI feedback
         AI.OnFunctionInvoked += OnFunctionInvoked;
         AI.OnFunctionCompleted += OnFunctionCompleted;
@@ -146,6 +149,21 @@
             AI.OnWriteApprovalRequested = DiffApproval.HandleDiffApproval;
             AI.OnDeleteApprovalRequested = DiffApproval.HandleDeleteApproval;
         }
+
+        // Check Ollama connection synchronously — render depends on the result
+        _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
+
+        // Ctrl+C cancels the active AI request instead of killing the process
+        Console.CancelKeyPress += (_, e) =>
+        {
+            var cts = _requestCts;
+            if (cts != null && !cts.IsCancellationRequested)
+            {
+                e.Cancel = true;   // suppress default process termination
+                cts.Cancel();
+            }
+            // If no active request, let the default Ctrl+C behavior (exit) proceed
+        };
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -497,10 +515,13 @@
         AnsiConsole.MarkupLine("[green]MandoCode:[/]");
         AnsiConsole.WriteLine();
 
+        _requestCts = new CancellationTokenSource();
+        var token = _requestCts.Token;
+
         try
         {
             var receivedFirstChunk = false;
-            var enumerator = AI.ChatStreamAsync(input).GetAsyncEnumerator();
+            var enumerator = AI.ChatStreamAsync(input, token).GetAsyncEnumerator(token);
 
             try
             {
@@ -602,11 +623,23 @@
 
             AnsiConsole.WriteLine();
         }
+        catch (OperationCanceledException)
+        {
+            Spinner.Stop();
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]Request cancelled.[/]");
+            AnsiConsole.WriteLine();
+        }
         catch (Exception ex)
         {
             Spinner.Stop();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
+        }
+        finally
+        {
+            _requestCts?.Dispose();
+            _requestCts = null;
         }
     }
 
