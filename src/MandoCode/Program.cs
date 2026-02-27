@@ -51,6 +51,21 @@ class Program
             // Register configuration as singleton
             services.AddSingleton(config);
 
+            // Register ProjectRootAccessor as singleton
+            services.AddSingleton(new ProjectRootAccessor(projectRoot));
+
+            // Register SpinnerService as singleton
+            services.AddSingleton<SpinnerService>();
+
+            // Register OperationDisplayRenderer as singleton
+            services.AddSingleton<OperationDisplayRenderer>();
+
+            // Register DiffApprovalHandler as singleton
+            services.AddSingleton<DiffApprovalHandler>();
+
+            // Register ShellCommandHandler as singleton
+            services.AddSingleton<ShellCommandHandler>();
+
             // Register TokenTrackingService as singleton
             services.AddSingleton<TokenTrackingService>();
 

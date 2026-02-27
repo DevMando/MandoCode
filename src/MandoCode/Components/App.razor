@@ -8,11 +8,16 @@
 @inject FileAutocompleteProvider FileProvider
 @inject TokenTrackingService TokenTracker
 @inject MusicPlayerService MusicPlayer
+@inject ProjectRootAccessor ProjectRoot
+@inject SpinnerService Spinner
+@inject OperationDisplayRenderer OperationRenderer
+@inject DiffApprovalHandler DiffApproval
+@inject ShellCommandHandler Shell
 
 <Banner />
 
 <Rows>
-    <Markup Content="@($"Project Root: {_projectRoot}")" Background="Color.Black" />
+    <Markup Content="@($"Project Root: {ProjectRoot.ProjectRoot}")" Background="Color.Black" />
     <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
     <Markup Content="@($"Model: {Config.GetEffectiveModelName()}")" />
 
@@ -36,107 +41,19 @@
 </Rows>
 
 @code {
-    private string _projectRoot = Environment.CurrentDirectory;
     protected bool _isConnected { get; set; } = false;
     private bool _hasRendered = false;
     private string? _modelWarning = null;
 
-    // Diff approval bypass tracking
-    private bool _globalWriteBypass = false;
-    private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
-
     // Last AI response for /copy command
     private string? _lastAiResponse;
-
-    // Controllable spinner — can be stopped from the diff approval callback
-    private CancellationTokenSource? _spinnerCts;
-    private Task? _spinnerTask;
-    private readonly object _spinnerLock = new();
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
     private Task? _musicVisTask;
     private readonly object _musicVisLock = new();
 
-    // Taskbar progress (Windows Terminal OSC 9;4)
-    private static void SetTaskbarProgress(int percent)
-    {
-        Console.Write($"\u001b]9;4;1;{percent}\u0007");
-    }
 
-    private static void SetTaskbarIndeterminate()
-    {
-        Console.Write("\u001b]9;4;3\u0007");
-    }
-
-    private static void SetTaskbarError(int percent = 100)
-    {
-        Console.Write($"\u001b]9;4;2;{percent}\u0007");
-    }
-
-    private static void ClearTaskbarProgress()
-    {
-        Console.Write("\u001b]9;4;0\u0007");
-    }
-
-    private void StartSpinner()
-    {
-        StopSpinner();
-        SetTaskbarIndeterminate();
-        var cts = new CancellationTokenSource();
-        var token = cts.Token;
-        var message = LoadingMessages.GetRandom();
-        var frames = new[] { "\u28fb", "\u28fd", "\u28fe", "\u28f7", "\u28ef", "\u28df", "\u28bf", "\u287f" };
-
-        var task = Task.Run(async () =>
-        {
-            var i = 0;
-            try
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    var frame = frames[i++ % frames.Length];
-                    Console.Write($"\r  {frame} {message}  ");
-                    await Task.Delay(80, token);
-                }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                // Clear the spinner line
-                Console.Write($"\r{new string(' ', message.Length + 10)}\r");
-            }
-        });
-
-        lock (_spinnerLock)
-        {
-            _spinnerCts = cts;
-            _spinnerTask = task;
-        }
-    }
-
-    private void StopSpinner()
-    {
-        CancellationTokenSource? cts;
-        Task? task;
-
-        lock (_spinnerLock)
-        {
-            cts = _spinnerCts;
-            task = _spinnerTask;
-            _spinnerCts = null;
-            _spinnerTask = null;
-        }
-
-        if (cts != null)
-        {
-            cts.Cancel();
-            task?.Wait(1000);
-            cts.Dispose();
-        }
-
-        ClearTaskbarProgress();
-    }
 
     private void StartMusicVisualizer()
     {
@@ -213,7 +130,7 @@
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
         if (args.Length > 0 && !args[0].StartsWith("config"))
         {
-            _projectRoot = args[0];
+            ProjectRoot.ProjectRoot = args[0];
         }
 
         // Check Ollama connection synchronously to ensure UI is correct
@@ -226,8 +143,8 @@
         // Wire up diff approval callbacks if enabled
         if (Config.EnableDiffApprovals)
         {
-            AI.OnWriteApprovalRequested = HandleDiffApproval;
-            AI.OnDeleteApprovalRequested = HandleDeleteApproval;
+            AI.OnWriteApprovalRequested = DiffApproval.HandleDiffApproval;
+            AI.OnDeleteApprovalRequested = DiffApproval.HandleDeleteApproval;
         }
     }
 
@@ -279,7 +196,7 @@
     private void OnFunctionInvoked(FunctionCall call)
     {
         // Pause the spinner so the message renders on a clean line
-        StopSpinner();
+        Spinner.Stop();
 
         // Suppress display for known FileSystem operations — they will be shown
         // as rich operation displays when OnFunctionCompleted fires
@@ -288,18 +205,18 @@
             AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
         }
 
-        StartSpinner();
+        Spinner.Start();
     }
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
     {
         // Pause the spinner so the message renders on a clean line
-        StopSpinner();
+        Spinner.Stop();
 
         if (result.OperationDisplay != null)
         {
             // Render Claude-Code-style operation display
-            RenderOperationDisplay(result.OperationDisplay);
+            OperationRenderer.Render(result.OperationDisplay);
         }
         else if (result.Success)
         {
@@ -317,7 +234,7 @@
             FileProvider.RefreshCache();
         }
 
-        StartSpinner();
+        Spinner.Start();
     }
 
     /// <summary>
@@ -326,138 +243,6 @@
     private bool IsFileSystemOperation(string functionName)
     {
         return functionName.StartsWith("FileSystem_", StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Wraps a relative file path in an OSC 8 hyperlink so clicking it
-    /// opens the file in the user's default editor / handler.
-    /// </summary>
-    private string FileLink(string relativePath)
-    {
-        var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relativePath));
-        return $"\u001b]8;;file://{fullPath}\u0007{relativePath}\u001b]8;;\u0007";
-    }
-
-    /// <summary>
-    /// Renders a Claude-Code-style operation display with tree connectors,
-    /// content previews, and inline diffs.
-    /// </summary>
-    private void RenderOperationDisplay(OperationDisplayEvent e)
-    {
-        Console.WriteLine();
-
-        switch (e.OperationType)
-        {
-            case "Write":
-                RenderWriteDisplay(e);
-                break;
-
-            case "Update":
-                RenderUpdateDisplay(e);
-                break;
-
-            case "Read":
-                Console.WriteLine($"\u001b[1m● Read(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-                if (Config.EnableTokenTracking && TokenTracker.LastOperation is { IsEstimate: true } readOp
-                    && readOp.OperationLabel.StartsWith("Read"))
-                {
-                    Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines ~{TokenTrackingService.FormatTokenCount(readOp.PromptTokens)} tokens\u001b[0m");
-                }
-                else
-                {
-                    Console.WriteLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
-                }
-                break;
-
-            case "Delete":
-                Console.WriteLine($"\u001b[1m● Delete(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-                Console.WriteLine($"  ⎿  \u001b[2mDeleted {e.LineCount} lines\u001b[0m");
-                break;
-
-            case "DeleteFolder":
-                Console.WriteLine($"\u001b[1m● DeleteFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-                Console.WriteLine($"  ⎿  \u001b[2mDeleted folder and all contents\u001b[0m");
-                break;
-
-            case "CreateFolder":
-                Console.WriteLine($"\u001b[1m● CreateFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-                Console.WriteLine($"  ⎿  \u001b[2mCreated directory\u001b[0m");
-                break;
-
-            case "List":
-                Console.WriteLine($"\u001b[2m● Listed project files\u001b[0m");
-                break;
-
-            case "Glob":
-                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{FileLink(e.FilePath)}\u001b[2m)\u001b[0m");
-                break;
-
-            case "Search":
-                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{FileLink(e.FilePath)}\"\u001b[2m)\u001b[0m");
-                break;
-        }
-    }
-
-    /// <summary>
-    /// Renders a new file write: header, line count, content preview, remaining lines.
-    /// </summary>
-    private void RenderWriteDisplay(OperationDisplayEvent e)
-    {
-        Console.WriteLine($"\u001b[1m● Write(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-        Console.WriteLine($"  ⎿  \u001b[2mWrote {e.LineCount} lines to {FileLink(e.FilePath)}\u001b[0m");
-
-        // Show content preview unless the user already reviewed the diff via approval
-        if (!e.ApprovalWasShown && !string.IsNullOrEmpty(e.ContentPreview))
-        {
-            foreach (var line in e.ContentPreview.Split('\n'))
-            {
-                var display = line.Length > 120 ? line[..120] + "..." : line;
-                Console.WriteLine($"\u001b[2m     {display}\u001b[0m");
-            }
-
-            if (e.RemainingLines > 0)
-            {
-                Console.WriteLine($"\u001b[2m     … +{e.RemainingLines} lines\u001b[0m");
-            }
-        }
-    }
-
-    /// <summary>
-    /// Renders an update to an existing file: header, change summary, inline diff.
-    /// </summary>
-    private void RenderUpdateDisplay(OperationDisplayEvent e)
-    {
-        Console.WriteLine($"\u001b[1m● Update(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-
-        // Build summary line: "Added N lines" / "Removed N lines" / "Added N, removed M lines"
-        var parts = new List<string>();
-        if (e.Additions > 0) parts.Add($"Added {e.Additions} line{(e.Additions != 1 ? "s" : "")}");
-        if (e.Deletions > 0) parts.Add($"Removed {e.Deletions} line{(e.Deletions != 1 ? "s" : "")}");
-        Console.WriteLine($"  ⎿  \u001b[2m{string.Join(", ", parts)}\u001b[0m");
-
-        // Show inline diff unless the user already reviewed via approval
-        if (!e.ApprovalWasShown && e.InlineDiff != null)
-        {
-            foreach (var d in e.InlineDiff)
-            {
-                var num = (d.NewLineNumber ?? d.OldLineNumber)?.ToString() ?? "";
-                var padNum = num.PadLeft(4);
-                var content = d.Content.Length > 120 ? d.Content[..120] + "..." : d.Content;
-
-                switch (d.LineType)
-                {
-                    case DiffLineType.Added:
-                        Console.WriteLine($"\u001b[32m      {padNum} + {content}\u001b[0m");
-                        break;
-                    case DiffLineType.Removed:
-                        Console.WriteLine($"\u001b[31m      {padNum} - {content}\u001b[0m");
-                        break;
-                    case DiffLineType.Unchanged:
-                        Console.WriteLine($"\u001b[2m      {padNum}   {content}\u001b[0m");
-                        break;
-                }
-            }
-        }
     }
 
     private async Task<bool> CheckOllamaConnectionAsync()
@@ -506,7 +291,7 @@
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
             {
-                HandleShellCommand(input.TrimStart()[1..].Trim());
+                Shell.HandleShellCommand(input.TrimStart()[1..].Trim());
                 continue;
             }
 
@@ -604,7 +389,7 @@
                 if (command == "command" || command.StartsWith("command "))
                 {
                     var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
-                    HandleShellCommand(shellCmd);
+                    Shell.HandleShellCommand(shellCmd);
                     continue;
                 }
 
@@ -721,14 +506,14 @@
             {
                 // Show our controllable spinner while waiting for first chunk
                 // This spinner can be stopped by HandleDiffApproval when it needs user input
-                StartSpinner();
+                Spinner.Start();
 
                 if (await enumerator.MoveNextAsync())
                 {
                     receivedFirstChunk = true;
                 }
 
-                StopSpinner();
+                Spinner.Stop();
 
                 // Buffer all chunks, then render as rich markdown
                 if (receivedFirstChunk)
@@ -763,9 +548,9 @@
                         if (showSpinnerBeforeNextChunk)
                         {
                             showSpinnerBeforeNextChunk = false;
-                            StartSpinner();
+                            Spinner.Start();
                             hasMore = await enumerator.MoveNextAsync();
-                            StopSpinner();
+                            Spinner.Stop();
                         }
                         else
                         {
@@ -811,7 +596,7 @@
             }
             finally
             {
-                StopSpinner();
+                Spinner.Stop();
                 await enumerator.DisposeAsync();
             }
 
@@ -819,7 +604,7 @@
         }
         catch (Exception ex)
         {
-            StopSpinner();
+            Spinner.Stop();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
         }
@@ -929,15 +714,15 @@
         switch (progressEvent.ProgressType)
         {
             case TaskProgressType.StepStarted:
-                StopSpinner();
-                SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
+                Spinner.Stop();
+                SpinnerService.SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
                 break;
 
             case TaskProgressType.StepCompleted:
-                StopSpinner();
-                SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
+                Spinner.Stop();
+                SpinnerService.SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 if (!string.IsNullOrEmpty(progressEvent.Message))
                 {
                     // Truncate long results for display
@@ -952,8 +737,8 @@
                 break;
 
             case TaskProgressType.StepFailed:
-                StopSpinner();
-                SetTaskbarError(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
+                Spinner.Stop();
+                SpinnerService.SetTaskbarError(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
@@ -978,13 +763,13 @@
                 break;
 
             case TaskProgressType.PlanCompleted:
-                StopSpinner();
-                ClearTaskbarProgress();
+                Spinner.Stop();
+                SpinnerService.ClearTaskbarProgress();
                 break;
 
             case TaskProgressType.PlanCancelled:
-                StopSpinner();
-                ClearTaskbarProgress();
+                Spinner.Stop();
+                SpinnerService.ClearTaskbarProgress();
                 break;
         }
     }
@@ -1026,91 +811,6 @@
             ? _lastAiResponse[..77] + "..."
             : _lastAiResponse.Replace("\n", " ");
         AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
-        AnsiConsole.WriteLine();
-    }
-
-    private void HandleShellCommand(string cmd)
-    {
-        if (string.IsNullOrWhiteSpace(cmd))
-        {
-            AnsiConsole.MarkupLine("[yellow]Usage:[/] !<command>  or  /command <command>");
-            AnsiConsole.MarkupLine("[dim]Examples: !ls -la, !git status, !cd ..[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        // Intercept cd so the AI agent stays aware of the new working directory
-        if (cmd == "cd" || cmd.StartsWith("cd "))
-        {
-            var target = cmd.Length > 2 ? cmd[3..].Trim() : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (string.IsNullOrWhiteSpace(target))
-                target = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-            try
-            {
-                var newDir = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), target));
-                if (!Directory.Exists(newDir))
-                {
-                    AnsiConsole.MarkupLine($"[red]cd: no such directory: {Spectre.Console.Markup.Escape(target)}[/]");
-                    AnsiConsole.WriteLine();
-                    return;
-                }
-
-                Directory.SetCurrentDirectory(newDir);
-                _projectRoot = newDir;
-                FileProvider.RefreshCache();
-
-                // OSC 9;9 — tell Windows Terminal the new CWD
-                Console.Write($"\u001b]9;9;{newDir}\u0007");
-
-                AnsiConsole.MarkupLine($"[green]Changed directory to[/] {Spectre.Console.Markup.Escape(newDir)}");
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]cd: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
-            }
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        // Run the command in a child process
-        try
-        {
-            var isWindows = OperatingSystem.IsWindows();
-            var escapedCmd = cmd.Replace("\"", "\\\"");
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? "/c " + cmd : "-c \"" + escapedCmd + "\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = Directory.GetCurrentDirectory()
-            };
-
-            using var proc = System.Diagnostics.Process.Start(psi);
-            if (proc == null)
-            {
-                AnsiConsole.MarkupLine("[red]Failed to start process.[/]");
-                AnsiConsole.WriteLine();
-                return;
-            }
-
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit(30_000);
-
-            if (!string.IsNullOrEmpty(stdout))
-                Console.Write(stdout);
-            if (!string.IsNullOrEmpty(stderr))
-                Console.Write($"\u001b[31m{stderr}\u001b[0m");
-            if (string.IsNullOrEmpty(stdout) && string.IsNullOrEmpty(stderr))
-                AnsiConsole.MarkupLine("[dim](no output)[/]");
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Shell error: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
-        }
         AnsiConsole.WriteLine();
     }
 
@@ -1212,249 +912,4 @@
         }
     }
 
-    private void RenderDiffPanel(string relativePath, List<DiffLine> displayLines, int additions, int deletions, bool isNewFile)
-    {
-        Console.WriteLine();
-
-        var header = $"\u250c\u2500 Diff: {FileLink(relativePath)} ";
-        var padLen = Math.Max(0, 50 - header.Length);
-        Console.WriteLine(header + new string('\u2500', padLen) + "\u2510");
-        Console.WriteLine("\u2502");
-
-        foreach (var line in displayLines)
-        {
-            var lineNum = "";
-
-            switch (line.LineType)
-            {
-                case DiffLineType.Removed:
-                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[31m{lineNum} - {line.Content}\u001b[0m");
-                    Console.WriteLine();
-                    break;
-
-                case DiffLineType.Added:
-                    lineNum = line.NewLineNumber.HasValue ? $"{line.NewLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[38;2;135;206;250m{lineNum} + {line.Content}\u001b[0m");
-                    Console.WriteLine();
-                    break;
-
-                case DiffLineType.Unchanged:
-                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[2m{lineNum}   {line.Content}\u001b[0m");
-                    Console.WriteLine();
-                    break;
-            }
-        }
-
-        Console.WriteLine("\u2502");
-        var fileLabel = isNewFile ? " (new file)" : "";
-        Console.WriteLine($"\u2502  {deletions} deletion(s), {additions} addition(s){fileLabel}");
-        Console.WriteLine("\u2514" + new string('\u2500', Math.Max(padLen + header.Length - 1, 40)) + "\u2518");
-        Console.WriteLine();
-    }
-
-    private Task<DiffApprovalResult> HandleDiffApproval(string relativePath, string? oldContent, string newContent)
-    {
-        // Stop the spinner so we have clean console output
-        StopSpinner();
-
-        // Compute diff
-        var diffLines = DiffService.ComputeDiff(oldContent, newContent);
-        var isNewFile = oldContent == null;
-        var displayLines = DiffService.CollapseContext(diffLines, 3);
-        var additions = diffLines.Count(l => l.LineType == DiffLineType.Added);
-        var deletions = diffLines.Count(l => l.LineType == DiffLineType.Removed);
-        var fileName = Path.GetFileName(relativePath);
-
-        // Always show the diff so the user can see what's changing
-        RenderDiffPanel(relativePath, displayLines, additions, deletions, isNewFile);
-
-        // If globally bypassed or this file is already approved, auto-approve without prompting
-        if (_globalWriteBypass || _approvedFiles.Contains(relativePath))
-        {
-            AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved[/]");
-            AnsiConsole.WriteLine();
-            StartSpinner();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
-        }
-
-        // Build choices for the SelectionPrompt — now safe since our spinner is stopped
-        var noAskLabel = isNewFile
-            ? "Approve - okay to write & modify files don't ask me again"
-            : $"Approve - Don't ask again to modify {fileName}";
-
-        var approvalChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Apply these changes?[/]")
-                .AddChoices(new[]
-                {
-                    "Approve",
-                    noAskLabel,
-                    "Deny",
-                    "Provide new instructions"
-                })
-        );
-
-        DiffApprovalResult result;
-
-        if (approvalChoice == "Approve")
-        {
-            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
-        }
-        else if (approvalChoice == noAskLabel)
-        {
-            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
-            if (isNewFile)
-            {
-                _globalWriteBypass = true;
-                AnsiConsole.MarkupLine("[dim]All future writes will be auto-approved for this session.[/]");
-            }
-            else
-            {
-                _approvedFiles.Add(relativePath);
-                AnsiConsole.MarkupLine($"[dim]Future modifications to {Spectre.Console.Markup.Escape(fileName)} will be auto-approved.[/]");
-            }
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
-        }
-        else if (approvalChoice == "Deny")
-        {
-            AnsiConsole.MarkupLine("[red]Changes denied.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
-        }
-        else // "Provide new instructions"
-        {
-            var instructions = AnsiConsole.Prompt(
-                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
-            );
-            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
-            result = new DiffApprovalResult
-            {
-                Response = DiffApprovalResponse.NewInstructions,
-                UserMessage = instructions
-            };
-        }
-
-        AnsiConsole.WriteLine();
-
-        // Resume spinner for the rest of the AI call
-        StartSpinner();
-
-        return Task.FromResult(result);
-    }
-
-    private Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
-    {
-        // Stop the spinner so we have clean console output
-        StopSpinner();
-
-        var fileName = Path.GetFileName(relativePath);
-        var isFolder = existingContent != null && existingContent.StartsWith("Folder:");
-
-        if (isFolder)
-        {
-            // Folder deletion — show folder listing instead of diff
-            Console.WriteLine();
-            Console.WriteLine($"\u001b[31m┌─ Delete Folder: {relativePath}/ ─────────────────────┐\u001b[0m");
-            Console.WriteLine("\u001b[31m│\u001b[0m");
-            foreach (var line in existingContent!.Split('\n'))
-            {
-                Console.WriteLine($"\u001b[31m│ {line}\u001b[0m");
-            }
-            Console.WriteLine("\u001b[31m│\u001b[0m");
-            Console.WriteLine($"\u001b[31m└──────────────────────────────────────────────────┘\u001b[0m");
-            Console.WriteLine();
-            AnsiConsole.MarkupLine($"[red]This will DELETE the folder and ALL its contents: {Spectre.Console.Markup.Escape(relativePath)}/[/]");
-            Console.WriteLine();
-        }
-        else
-        {
-            // File deletion — show diff as before
-            var diffLines = new List<DiffLine>();
-            if (!string.IsNullOrEmpty(existingContent))
-            {
-                var lines = existingContent.Split('\n');
-                for (int i = 0; i < lines.Length; i++)
-                {
-                    diffLines.Add(new DiffLine
-                    {
-                        LineType = DiffLineType.Removed,
-                        Content = lines[i].TrimEnd('\r'),
-                        OldLineNumber = i + 1
-                    });
-                }
-            }
-
-            var deletions = diffLines.Count;
-            var displayLines = DiffService.CollapseContext(diffLines, 3);
-
-            RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
-            AnsiConsole.MarkupLine($"[red]This will DELETE the file: {Spectre.Console.Markup.Escape(relativePath)}[/]");
-            Console.WriteLine();
-        }
-
-        // If globally bypassed, auto-approve
-        if (_globalWriteBypass)
-        {
-            AnsiConsole.MarkupLine($"[green]✓ Auto-approved deletion[/]");
-            AnsiConsole.WriteLine();
-            StartSpinner();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
-        }
-
-        var approvalChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Delete this file?[/]")
-                .AddChoices(new[]
-                {
-                    "Approve deletion",
-                    "Approve - okay to write, modify & delete files don't ask me again",
-                    "Deny",
-                    "Provide new instructions"
-                })
-        );
-
-        DiffApprovalResult result;
-
-        if (approvalChoice == "Approve deletion")
-        {
-            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
-        }
-        else if (approvalChoice.StartsWith("Approve - okay"))
-        {
-            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
-            _globalWriteBypass = true;
-            AnsiConsole.MarkupLine("[dim]All future writes and deletions will be auto-approved for this session.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
-        }
-        else if (approvalChoice == "Deny")
-        {
-            AnsiConsole.MarkupLine("[red]Deletion denied.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
-        }
-        else // "Provide new instructions"
-        {
-            var instructions = AnsiConsole.Prompt(
-                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
-            );
-            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
-            result = new DiffApprovalResult
-            {
-                Response = DiffApprovalResponse.NewInstructions,
-                UserMessage = instructions
-            };
-        }
-
-        AnsiConsole.WriteLine();
-
-        // Resume spinner for the rest of the AI call
-        StartSpinner();
-
-        return Task.FromResult(result);
-    }
 }
