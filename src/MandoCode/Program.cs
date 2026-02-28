@@ -102,7 +102,8 @@ class Program
                     "packages", "dist", "build", "__pycache__", ".idea", ".claude"
                 };
                 foreach (var dir in cfg.IgnoreDirectories) ignoreDirs.Add(dir);
-                return new FileAutocompleteProvider(projectRoot, ignoreDirs);
+                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+                return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);
             });
 
             // Configure console options

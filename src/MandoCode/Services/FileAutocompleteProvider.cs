@@ -6,14 +6,16 @@ namespace MandoCode.Services;
 /// </summary>
 public class FileAutocompleteProvider
 {
-    private readonly string _projectRoot;
+    private readonly ProjectRootAccessor _projectRootAccessor;
     private readonly HashSet<string> _ignoreDirectories;
     private List<string>? _cachedFiles;
     private List<string>? _cachedDirectories;
 
-    public FileAutocompleteProvider(string projectRoot, HashSet<string> ignoreDirectories)
+    private string ProjectRoot => _projectRootAccessor.ProjectRoot;
+
+    public FileAutocompleteProvider(ProjectRootAccessor projectRootAccessor, HashSet<string> ignoreDirectories)
     {
-        _projectRoot = Path.GetFullPath(projectRoot);
+        _projectRootAccessor = projectRootAccessor;
         _ignoreDirectories = ignoreDirectories;
     }
 
@@ -25,9 +27,10 @@ public class FileAutocompleteProvider
         if (_cachedFiles != null)
             return _cachedFiles;
 
-        var files = GetAllFilesRecursive(_projectRoot);
+        var root = ProjectRoot;
+        var files = GetAllFilesRecursive(root);
         _cachedFiles = files
-            .Select(f => Path.GetRelativePath(_projectRoot, f).Replace('\\', '/'))
+            .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/'))
             .OrderBy(f => f)
             .ToList();
 
@@ -42,9 +45,10 @@ public class FileAutocompleteProvider
         if (_cachedDirectories != null)
             return _cachedDirectories;
 
-        var dirs = GetAllDirectoriesRecursive(_projectRoot);
+        var root = ProjectRoot;
+        var dirs = GetAllDirectoriesRecursive(root);
         _cachedDirectories = dirs
-            .Select(d => Path.GetRelativePath(_projectRoot, d).Replace('\\', '/'))
+            .Select(d => Path.GetRelativePath(root, d).Replace('\\', '/'))
             .OrderBy(d => d)
             .ToList();
 
@@ -168,10 +172,11 @@ public class FileAutocompleteProvider
     {
         try
         {
-            var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relativePath));
+            var root = ProjectRoot;
+            var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
 
             // Security: ensure path stays within project root
-            if (!fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase))
+            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 return null;
 
             if (!File.Exists(fullPath))
@@ -193,10 +198,11 @@ public class FileAutocompleteProvider
     {
         try
         {
-            var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, relativePath));
+            var root = ProjectRoot;
+            var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
 
             // Security: ensure path stays within project root
-            if (!fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase))
+            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 return null;
 
             if (!Directory.Exists(fullPath))
