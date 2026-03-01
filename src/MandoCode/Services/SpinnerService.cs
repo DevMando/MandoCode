@@ -91,6 +91,11 @@ public class SpinnerService
         Console.Write($"\u001b]9;4;2;{percent}\u0007");
     }
 
+    public static void SetTaskbarWarning(int percent = 100)
+    {
+        Console.Write($"\u001b]9;4;4;{percent}\u0007");
+    }
+
     public static void ClearTaskbarProgress()
     {
         Console.Write("\u001b]9;4;0\u0007");

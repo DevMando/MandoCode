@@ -13,6 +13,7 @@
 @inject OperationDisplayRenderer OperationRenderer
 @inject DiffApprovalHandler DiffApproval
 @inject ShellCommandHandler Shell
+@inject TerminalThemeService ThemeService
 
 <Banner />
 
@@ -65,6 +66,8 @@
         if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
             return;
 
+        ThemeService.IsMusicTitleActive = true;
+
         var cts = new CancellationTokenSource();
         var token = cts.Token;
 
@@ -94,8 +97,13 @@
             catch (OperationCanceledException) { }
             finally
             {
-                // Restore default title
-                try { Console.Write("\u001b]0;MandoCode\u0007"); } catch { }
+                // Hand title bar back to status display
+                try
+                {
+                    ThemeService.IsMusicTitleActive = false;
+                    ThemeService.UpdateStatusTitle();
+                }
+                catch { }
             }
         });
 
@@ -153,6 +161,13 @@
         // Check Ollama connection synchronously — render depends on the result
         _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
 
+        // Detect terminal theme and apply curated palette
+        if (Config.EnableThemeCustomization)
+        {
+            ThemeService.DetectTheme();
+            ThemeService.ApplyPalette();
+        }
+
         // Ctrl+C cancels the active AI request instead of killing the process
         Console.CancelKeyPress += (_, e) =>
         {
@@ -162,7 +177,11 @@
                 e.Cancel = true;   // suppress default process termination
                 cts.Cancel();
             }
-            // If no active request, let the default Ctrl+C behavior (exit) proceed
+            else
+            {
+                // No active request — clean up palette before process exits
+                ThemeService.ResetPalette();
+            }
         };
     }
 
@@ -323,6 +342,7 @@
                 {
                     StopMusicVisualizer();
                     MusicPlayer.Dispose();
+                    ThemeService.Dispose();
                     AnsiConsole.WriteLine("Goodbye!");
                     Environment.Exit(0);
                     return;
@@ -359,6 +379,7 @@
                     table.AddRow("/music-list", "Show available tracks");
                     table.AddRow("/command", "Run a shell command (also: !<cmd>)");
                     table.AddRow("/copy", "Copy last AI response to clipboard");
+                    table.AddRow("/copy-code", "Copy code blocks from last response");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit, /quit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -390,6 +411,18 @@
                     continue;
                 }
 
+                if (command == "copy-code")
+                {
+                    HandleCopyCodeCommand();
+                    continue;
+                }
+
+                if (command == "rabbit")
+                {
+                    HandleRabbitCommand();
+                    continue;
+                }
+
                 // Music commands
                 if (command == "music")           { HandleMusicCommand("play"); continue; }
                 if (command == "music-stop")      { HandleMusicCommand("stop"); continue; }
@@ -416,6 +449,12 @@
                 AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
                 AnsiConsole.WriteLine();
                 continue;
+            }
+
+            // Matrix easter egg: play a cinematic moment for trigger phrases
+            if (ContainsMatrixTrigger(input))
+            {
+                PlayMatrixMoment(input);
             }
 
             // Check if this request needs task planning BEFORE injecting file content,
@@ -613,6 +652,9 @@
                             Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
                         }
                     }
+
+                    // Update title bar with latest model/project/token info
+                    ThemeService.UpdateStatusTitle();
                 }
             }
             finally
@@ -791,6 +833,7 @@
                     if (failedStep != null)
                     {
                         TaskPlanner.SkipStep(plan, failedStep);
+                        SpinnerService.SetTaskbarWarning(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                     }
                 }
                 break;
@@ -844,6 +887,190 @@
             ? _lastAiResponse[..77] + "..."
             : _lastAiResponse.Replace("\n", " ");
         AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private void HandleCopyCodeCommand()
+    {
+        if (string.IsNullOrEmpty(_lastAiResponse))
+        {
+            AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Extract fenced code blocks
+        var codeBlockPattern = @"```(?:\w*)\r?\n([\s\S]*?)```";
+        var matches = Regex.Matches(_lastAiResponse, codeBlockPattern);
+
+        if (matches.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No code blocks found in the last response.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var codeContent = string.Join("\n\n", matches.Cast<Match>().Select(m => m.Groups[1].Value.TrimEnd()));
+
+        // OSC 52 has a practical payload limit (~74,994 bytes base64)
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(codeContent));
+        if (base64.Length > 74_994)
+        {
+            // Truncate to fit
+            var maxBytes = 74_994 * 3 / 4; // approximate raw byte limit
+            codeContent = codeContent[..Math.Min(codeContent.Length, maxBytes)];
+            base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(codeContent));
+            AnsiConsole.MarkupLine("[yellow]Warning: Code blocks truncated to fit clipboard limit.[/]");
+        }
+
+        Console.Write($"\u001b]52;c;{base64}\u0007");
+
+        AnsiConsole.MarkupLine($"[green]Copied {matches.Count} code block(s) to clipboard[/] [dim]({codeContent.Length} chars)[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private void HandleRabbitCommand()
+    {
+        // Katakana-style characters for the digital rain
+        var rainChars = "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ012345789:・.\"=*+-<>¦╌ꜝ";
+        var rng = Random.Shared;
+        var width = Math.Min(Console.WindowWidth, 120);
+        var height = Math.Min(Console.WindowHeight - 2, 24);
+
+        // Each column has a drop position (head of the rain streak)
+        var drops = new int[width];
+        for (int i = 0; i < width; i++)
+            drops[i] = rng.Next(-height, 0); // stagger start positions
+
+        Console.CursorVisible = false;
+        Console.Clear();
+
+        // Phase 1: Digital rain (~14 frames)
+        for (int frame = 0; frame < 14; frame++)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("\u001b[H"); // cursor home
+
+            for (int row = 0; row < height; row++)
+            {
+                for (int col = 0; col < width; col++)
+                {
+                    int dropPos = drops[col];
+                    if (row == dropPos)
+                    {
+                        // Bright head of the streak
+                        sb.Append($"\u001b[97m{rainChars[rng.Next(rainChars.Length)]}\u001b[0m");
+                    }
+                    else if (row < dropPos && row > dropPos - 6)
+                    {
+                        // Green trail
+                        var fade = dropPos - row;
+                        var intensity = fade <= 2 ? "92" : fade <= 4 ? "32" : "2;32";
+                        sb.Append($"\u001b[{intensity}m{rainChars[rng.Next(rainChars.Length)]}\u001b[0m");
+                    }
+                    else
+                    {
+                        sb.Append(' ');
+                    }
+                }
+                if (row < height - 1) sb.Append('\n');
+            }
+            Console.Write(sb.ToString());
+
+            // Advance drops
+            for (int i = 0; i < width; i++)
+            {
+                drops[i] += rng.Next(1, 3);
+                if (drops[i] > height + 6)
+                    drops[i] = rng.Next(-4, 0);
+            }
+
+            Thread.Sleep(80);
+        }
+
+        // Phase 2: Fade to black, then reveal the rabbit
+        Console.Clear();
+        Thread.Sleep(300);
+
+        var centerY = height / 2 - 1;
+        var rabbit = "🐇";
+        var quote = "Follow the white rabbit.";
+        var rabbitX = Math.Max(0, (width - 2) / 2);
+        var quoteX = Math.Max(0, (width - quote.Length) / 2);
+
+        // Position and print rabbit
+        Console.SetCursorPosition(rabbitX, centerY);
+        Console.Write(rabbit);
+
+        Thread.Sleep(400);
+
+        // Print quote in green below rabbit
+        Console.SetCursorPosition(quoteX, centerY + 2);
+        Console.Write($"\u001b[32m{quote}\u001b[0m");
+
+        Thread.Sleep(1500);
+
+        // Clear and return
+        Console.Clear();
+        Console.CursorVisible = true;
+    }
+
+    private static readonly string[] _matrixTriggers =
+    {
+        "what is the matrix",
+        "red pill",
+        "follow the white rabbit",
+        "there is no spoon"
+    };
+
+    private static bool ContainsMatrixTrigger(string input)
+    {
+        var lower = input.ToLowerInvariant();
+        foreach (var trigger in _matrixTriggers)
+        {
+            if (lower.Contains(trigger))
+                return true;
+        }
+        return false;
+    }
+
+    private static void PlayMatrixMoment(string input)
+    {
+        var lower = input.ToLowerInvariant();
+        AnsiConsole.WriteLine();
+
+        if (lower.Contains("what is the matrix"))
+        {
+            AnsiConsole.MarkupLine("[green]Unfortunately, no one can be told what the Matrix is. You have to see it for yourself.[/]");
+            Thread.Sleep(1500);
+        }
+        else if (lower.Contains("there is no spoon"))
+        {
+            AnsiConsole.MarkupLine("[green]Then you'll see that it is not the spoon that bends, it is only yourself.[/]");
+            Thread.Sleep(1500);
+        }
+        else if (lower.Contains("red pill"))
+        {
+            AnsiConsole.MarkupLine("[green]Remember, all I'm offering is the truth. Nothing more.[/]");
+            Thread.Sleep(1500);
+        }
+        else if (lower.Contains("follow the white rabbit"))
+        {
+            // Small rabbit hopping across the screen
+            var width = Math.Min(Console.WindowWidth - 4, 60);
+            Console.CursorVisible = false;
+            for (int i = 0; i < width; i += 3)
+            {
+                Console.SetCursorPosition(i, Console.CursorTop);
+                Console.Write("  🐇");
+                Thread.Sleep(80);
+                Console.SetCursorPosition(i, Console.CursorTop);
+                Console.Write("    ");
+            }
+            Console.SetCursorPosition(0, Console.CursorTop);
+            Console.CursorVisible = true;
+        }
+
         AnsiConsole.WriteLine();
     }
 

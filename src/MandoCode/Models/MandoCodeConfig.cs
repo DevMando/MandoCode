@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MandoCode.Services;
 
 namespace MandoCode.Models;
 
@@ -86,6 +87,13 @@ public class MandoCodeConfig
     /// </summary>
     [JsonPropertyName("enableTokenTracking")]
     public bool EnableTokenTracking { get; set; } = true;
+
+    /// <summary>
+    /// Enable terminal theme detection and ANSI palette customization.
+    /// When enabled, MandoCode detects light/dark theme and applies a curated color palette.
+    /// </summary>
+    [JsonPropertyName("enableThemeCustomization")]
+    public bool EnableThemeCustomization { get; set; } = true;
 
     /// <summary>
     /// Music player preferences (volume, genre, autoplay).
@@ -208,7 +216,9 @@ public class MandoCodeConfig
     {
         Console.WriteLine("Current Configuration:");
         Console.WriteLine($"  Ollama Endpoint: {OllamaEndpoint}");
-        Console.WriteLine($"  Model Name: {GetEffectiveModelName()}");
+        var modelBase = GetEffectiveModelName().Split(':')[0];
+        var modelLink = FileLinkHelper.Hyperlink($"https://ollama.com/library/{modelBase}", GetEffectiveModelName());
+        Console.WriteLine($"  Model Name: {modelLink}");
         if (!string.IsNullOrWhiteSpace(ModelPath))
         {
             Console.WriteLine($"  Model Path: {ModelPath}");
@@ -225,6 +235,7 @@ public class MandoCodeConfig
         Console.WriteLine($"  Fallback Function Parsing: {(EnableFallbackFunctionParsing ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
+        Console.WriteLine($"  Theme Customization: {(EnableThemeCustomization ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Music Volume: {(int)(Music.Volume * 100)}%  Genre: {Music.Genre}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");
     }
