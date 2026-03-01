@@ -16,6 +16,8 @@ public static class CommandAutocomplete
         { "/help", "Show this help message" },
         { "/config", "Open configuration menu" },
         { "/copy", "Copy last AI response to clipboard" },
+        { "/copy-code", "Copy code blocks from last AI response" },
+        { "/command", "Run a shell command (also: !<cmd>)" },
         { "/clear", "Clear conversation history" },
         { "/learn", "Learn about LLMs and local AI models" },
         { "/music", "Play lofi/synthwave coding music" },
@@ -26,9 +28,7 @@ public static class CommandAutocomplete
         { "/music-lofi", "Switch to lofi genre" },
         { "/music-synthwave", "Switch to synthwave genre" },
         { "/music-list", "Show available tracks" },
-        { "/command", "Run a shell command (also: !<cmd>)" },
-        { "/exit", "Exit MandoCode" },
-        { "/quit", "Exit MandoCode" }
+        { "/exit", "Exit MandoCode" }
     };
 
     private static FileAutocompleteProvider? _fileProvider;

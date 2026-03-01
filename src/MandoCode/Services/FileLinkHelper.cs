@@ -14,4 +14,10 @@ public static class FileLinkHelper
         var fullPath = Path.GetFullPath(Path.Combine(projectRoot, relativePath));
         return $"\u001b]8;;file://{fullPath}\u0007{relativePath}\u001b]8;;\u0007";
     }
+
+    /// <summary>
+    /// Wraps arbitrary display text in an OSC 8 hyperlink for any URI.
+    /// </summary>
+    public static string Hyperlink(string uri, string displayText)
+        => $"\u001b]8;;{uri}\u0007{displayText}\u001b]8;;\u0007";
 }

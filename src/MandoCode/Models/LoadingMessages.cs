@@ -107,7 +107,12 @@ public static class LoadingMessages
         "Adventuring...",
         "Questing...",
         "Voyaging...",
-        "Wandering..."
+        "Wandering...",
+        "Following the white rabbit...",
+        "Decoding the Matrix...",
+        "Bending the spoon...",
+        "Taking the red pill...",
+        "Jacking in..."
     };
 
     /// <summary>

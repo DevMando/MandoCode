@@ -69,6 +69,15 @@ class Program
             // Register TokenTrackingService as singleton
             services.AddSingleton<TokenTrackingService>();
 
+            // Register TerminalThemeService as singleton
+            services.AddSingleton(provider =>
+            {
+                var cfg = provider.GetRequiredService<MandoCodeConfig>();
+                var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
+                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+                return new TerminalThemeService(cfg, tokenTracker, projectRootAccessor);
+            });
+
             // Register AIService as singleton
             services.AddSingleton(provider =>
             {
@@ -180,6 +189,7 @@ class Program
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
         Console.WriteLine("  • taskPlanning    - Enable/disable task planning (true/false)");
         Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
+        Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode config show");
@@ -257,6 +267,20 @@ class Program
                 {
                     config.EnableDiffApprovals = enableDiff;
                     Console.WriteLine($"✓ Diff approvals {(enableDiff ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
+                    return;
+                }
+                break;
+
+            case "themecustomization":
+            case "enablethemecustomization":
+                if (bool.TryParse(value, out var enableTheme))
+                {
+                    config.EnableThemeCustomization = enableTheme;
+                    Console.WriteLine($"✓ Theme customization {(enableTheme ? "enabled" : "disabled")}");
                 }
                 else
                 {

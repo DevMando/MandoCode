@@ -5,6 +5,12 @@
 
     protected override void OnInitialized()
     {
+        // Easter egg: 1-in-50 chance of a brief "Neo's monitor" glitch
+        if (Random.Shared.Next(50) == 0)
+        {
+            PlayMatrixGlitch();
+        }
+
         var gradientText = BuildGradientBanner();
 
         // Animation: (eyeColor, wavePhase)
@@ -198,5 +204,18 @@
         }
 
         return sb.ToString();
+    }
+
+    private static void PlayMatrixGlitch()
+    {
+        Console.Clear();
+        Thread.Sleep(400);
+        AnsiConsole.MarkupLine("[green]Wake up...[/]");
+        Thread.Sleep(800);
+        AnsiConsole.MarkupLine("[green]The Matrix has you...[/]");
+        Thread.Sleep(800);
+        AnsiConsole.MarkupLine("[green]Follow the white rabbit. 🐇[/]");
+        Thread.Sleep(1200);
+        Console.Clear();
     }
 }
