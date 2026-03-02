@@ -27,7 +27,7 @@ public class AIService
     private readonly string _systemPrompt;
     private MandoCodeConfig _config;
     private OllamaPromptExecutionSettings _settings;
-    private readonly string _projectRoot;
+    private readonly ProjectRootAccessor _projectRootAccessor;
     private readonly FunctionCompletionTracker _completionTracker = new();
     private FunctionInvocationFilter _functionFilter;
     private readonly TokenTrackingService _tokenTracker;
@@ -84,9 +84,9 @@ public class AIService
         }
     }
 
-    public AIService(string projectRoot, MandoCodeConfig config, TokenTrackingService tokenTracker)
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker)
     {
-        _projectRoot = projectRoot;
+        _projectRootAccessor = projectRootAccessor;
         _config = config;
         _tokenTracker = tokenTracker;
         _systemPrompt = SystemPrompts.MandoCodeAssistant;
@@ -123,7 +123,7 @@ public class AIService
             endpoint: new Uri(_config.OllamaEndpoint)
         );
 
-        var fileSystemPlugin = new FileSystemPlugin(_projectRoot);
+        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor);
         if (_config.IgnoreDirectories.Any())
         {
             fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);
@@ -135,7 +135,7 @@ public class AIService
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
         // Set up function invocation filter for UI events and deduplication
-        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRoot, _tokenTracker);
+        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker);
         _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
         _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
         _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();

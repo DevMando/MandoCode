@@ -36,8 +36,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// </summary>
     public Func<string, string?, Task<DiffApprovalResult>>? OnDeleteApprovalRequested { get; set; }
 
-    // Project root for resolving file paths when reading existing content
-    private readonly string? _projectRoot;
+    // Project root accessor for resolving file paths when reading existing content
+    private readonly ProjectRootAccessor? _projectRootAccessor;
+    private string? ProjectRoot => _projectRootAccessor?.ProjectRoot;
 
     // Optional token tracker for estimating file operation token costs
     private readonly TokenTrackingService? _tokenTracker;
@@ -79,12 +80,12 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     {
     }
 
-    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, string? projectRoot = null, TokenTrackingService? tokenTracker = null)
+    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, ProjectRootAccessor? projectRootAccessor = null, TokenTrackingService? tokenTracker = null)
     {
         // Read operations use shorter window (2s), writes use configured window
         _readDeduplicationWindow = TimeSpan.FromSeconds(2);
         _writeDeduplicationWindow = TimeSpan.FromSeconds(defaultDeduplicationWindowSeconds);
-        _projectRoot = projectRoot;
+        _projectRootAccessor = projectRootAccessor;
         _tokenTracker = tokenTracker;
     }
 
@@ -133,13 +134,13 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         bool approvalWasShown = false;
 
         // For write_file: capture old content and new-file flag before any approval or execution
-        if (context.Function.Name == "write_file" && !string.IsNullOrEmpty(_projectRoot))
+        if (context.Function.Name == "write_file" && !string.IsNullOrEmpty(ProjectRoot))
         {
             context.Arguments.TryGetValue("relativePath", out var pObj);
             var path = pObj?.ToString();
             if (!string.IsNullOrEmpty(path))
             {
-                var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, path));
+                var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, path));
                 capturedIsNewFile = !File.Exists(fullPath);
                 if (!capturedIsNewFile)
                 {
@@ -150,13 +151,13 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         }
 
         // For delete_file or delete_folder: capture existing content before approval or execution
-        if ((context.Function.Name == "delete_file" || context.Function.Name == "delete_folder") && !string.IsNullOrEmpty(_projectRoot))
+        if ((context.Function.Name == "delete_file" || context.Function.Name == "delete_folder") && !string.IsNullOrEmpty(ProjectRoot))
         {
             context.Arguments.TryGetValue("relativePath", out var pObj);
             var path = pObj?.ToString();
             if (!string.IsNullOrEmpty(path))
             {
-                var fullPath = Path.GetFullPath(Path.Combine(_projectRoot, path));
+                var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, path));
                 if (File.Exists(fullPath))
                 {
                     try { capturedOldContent = await File.ReadAllTextAsync(fullPath); }
