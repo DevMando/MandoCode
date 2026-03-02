@@ -229,8 +229,11 @@ public class DiffApprovalHandler
     {
         Console.WriteLine();
 
-        var header = $"\u250c\u2500 Diff: {FileLink(relativePath)} ";
-        var padLen = Math.Max(0, 50 - header.Length);
+        var fileLink = FileLink(relativePath);
+        var header = $"\u250c\u2500 Diff: {fileLink} ";
+        // Calculate padding from visible text length (excluding OSC 8 escape sequences)
+        var visibleHeader = $"\u250c\u2500 Diff: {relativePath} ";
+        var padLen = Math.Max(0, 50 - visibleHeader.Length);
         Console.WriteLine(header + new string('\u2500', padLen) + "\u2510");
         Console.WriteLine("\u2502");
 

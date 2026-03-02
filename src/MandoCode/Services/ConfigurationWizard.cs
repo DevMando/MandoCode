@@ -317,7 +317,7 @@ public class ConfigurationWizard
                 return new List<string>();
 
             var content = await response.Content.ReadAsStringAsync();
-            var json = JsonDocument.Parse(content);
+            using var json = JsonDocument.Parse(content);
 
             var models = new List<string>();
             if (json.RootElement.TryGetProperty("models", out var modelsArray))

@@ -8,8 +8,8 @@ public class FileAutocompleteProvider
 {
     private readonly ProjectRootAccessor _projectRootAccessor;
     private readonly HashSet<string> _ignoreDirectories;
-    private List<string>? _cachedFiles;
-    private List<string>? _cachedDirectories;
+    private volatile List<string>? _cachedFiles;
+    private volatile List<string>? _cachedDirectories;
 
     private string ProjectRoot => _projectRootAccessor.ProjectRoot;
 
@@ -175,8 +175,10 @@ public class FileAutocompleteProvider
             var root = ProjectRoot;
             var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
 
-            // Security: ensure path stays within project root
-            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            // Security: ensure path stays within project root with separator boundary
+            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
+                && !fullPath.Equals(root, StringComparison.OrdinalIgnoreCase))
                 return null;
 
             if (!File.Exists(fullPath))
@@ -201,8 +203,10 @@ public class FileAutocompleteProvider
             var root = ProjectRoot;
             var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
 
-            // Security: ensure path stays within project root
-            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            // Security: ensure path stays within project root with separator boundary
+            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
+                && !fullPath.Equals(root, StringComparison.OrdinalIgnoreCase))
                 return null;
 
             if (!Directory.Exists(fullPath))

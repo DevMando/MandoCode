@@ -7,8 +7,6 @@ namespace MandoCode.Models;
 /// </summary>
 public static class LoadingMessages
 {
-    private static readonly Random _random = new();
-
     private static readonly Spinner[] _spinners =
     {
         Spinner.Known.Dots,
@@ -61,7 +59,7 @@ public static class LoadingMessages
     /// </summary>
     public static Spinner GetRandomSpinner()
     {
-        return _spinners[_random.Next(_spinners.Length)];
+        return _spinners[Random.Shared.Next(_spinners.Length)];
     }
 
     private static readonly string[] _messages =
@@ -121,6 +119,6 @@ public static class LoadingMessages
     /// <returns>A fun loading message string</returns>
     public static string GetRandom()
     {
-        return _messages[_random.Next(_messages.Length)];
+        return _messages[Random.Shared.Next(_messages.Length)];
     }
 }

@@ -213,9 +213,19 @@ public static class SyntaxHighlighter
                 continue;
             }
 
-            // 5. Single character — escape and emit
-            sb.Append(Markup.Escape(code[pos].ToString()));
-            pos++;
+            // 5. Non-token characters — batch consecutive punctuation/whitespace/operators
+            var batchStart = pos;
+            while (pos < code.Length)
+            {
+                var ch = code[pos];
+                // Stop if this could start a comment, string, number, or identifier
+                if (ch == '/' || ch == '#' || ch == '"' || ch == '\'' || ch == '`' || ch == '@'
+                    || (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
+                    || (ch >= 'A' && ch <= 'Z') || ch == '_')
+                    break;
+                pos++;
+            }
+            sb.Append(Markup.Escape(code[batchStart..pos]));
         }
 
         return sb.ToString();

@@ -33,6 +33,12 @@ public class AIService
     private readonly TokenTrackingService _tokenTracker;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
+    // Named event handlers stored so we can detach them when rebuilding the kernel
+    private Action<FunctionCall>? _filterInvokedHandler;
+    private Action<FunctionExecutionResult>? _filterCompletedHandler;
+    private Action? _filterStartedHandler;
+    private Action? _filterFinishedHandler;
+
     /// <summary>
     /// Event raised when a function is about to be invoked.
     /// </summary>
@@ -101,11 +107,11 @@ public class AIService
     /// Reinitializes the AI service with a new configuration.
     /// Rebuilds the kernel with the updated model and settings.
     /// </summary>
-    public void Reinitialize(MandoCodeConfig config)
+    public async Task ReinitializeAsync(MandoCodeConfig config)
     {
         _config = config;
         BuildKernel();
-        ClearHistory();
+        await ClearHistoryAsync();
     }
 
     private void BuildKernel()
@@ -134,12 +140,25 @@ public class AIService
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
+        // Detach event handlers from old filter before creating a new one
+        if (_functionFilter != null)
+        {
+            if (_filterInvokedHandler != null) _functionFilter.OnFunctionInvoked -= _filterInvokedHandler;
+            if (_filterCompletedHandler != null) _functionFilter.OnFunctionCompleted -= _filterCompletedHandler;
+            if (_filterStartedHandler != null) _functionFilter.OnFunctionStarted -= _filterStartedHandler;
+            if (_filterFinishedHandler != null) _functionFilter.OnFunctionFinished -= _filterFinishedHandler;
+        }
+
         // Set up function invocation filter for UI events and deduplication
         _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker);
-        _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
-        _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
-        _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
-        _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
+        _filterInvokedHandler = call => OnFunctionInvoked?.Invoke(call);
+        _filterCompletedHandler = result => OnFunctionCompleted?.Invoke(result);
+        _filterStartedHandler = () => _completionTracker.RegisterStart();
+        _filterFinishedHandler = () => _completionTracker.RegisterCompletion();
+        _functionFilter.OnFunctionInvoked += _filterInvokedHandler;
+        _functionFilter.OnFunctionCompleted += _filterCompletedHandler;
+        _functionFilter.OnFunctionStarted += _filterStartedHandler;
+        _functionFilter.OnFunctionFinished += _filterFinishedHandler;
 
         // Wire diff approval callbacks through to the filter
         if (_onWriteApprovalRequested != null)
@@ -286,7 +305,9 @@ public class AIService
                 var rawResponse = result.Content ?? "No response from AI.";
 
                 // Check if the model output function calls as text instead of invoking them
-                response = await ProcessTextFunctionCallsAsync(rawResponse);
+                response = _config.EnableFallbackFunctionParsing
+                    ? await ProcessTextFunctionCallsAsync(rawResponse)
+                    : rawResponse;
 
                 // Add the response to history
                 if (!string.IsNullOrEmpty(response))
@@ -1030,9 +1051,9 @@ public class AIService
     /// Enters learn mode by clearing history and injecting the educator system prompt.
     /// The user can return to normal mode via /clear which restores the original system prompt.
     /// </summary>
-    public void EnterLearnMode()
+    public async Task EnterLearnModeAsync()
     {
-        _historyLock.Wait();
+        await _historyLock.WaitAsync();
         try
         {
             _chatHistory.Clear();
@@ -1047,20 +1068,20 @@ public class AIService
     /// <summary>
     /// Clears the chat history and starts a new conversation.
     /// </summary>
-    public void ClearHistory()
+    public async Task ClearHistoryAsync()
     {
-        _historyLock.Wait();
+        await _historyLock.WaitAsync();
         try
         {
             _chatHistory.Clear();
             _chatHistory.AddSystemMessage(_systemPrompt);
+            _functionFilter.ClearCache();
+            _tokenTracker.Reset();
         }
         finally
         {
             _historyLock.Release();
         }
-        _functionFilter.ClearCache(); // Clear deduplication cache
-        _tokenTracker.Reset();
     }
 
     /// <summary>

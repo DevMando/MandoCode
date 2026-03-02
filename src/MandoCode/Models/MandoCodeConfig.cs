@@ -4,6 +4,21 @@ using MandoCode.Services;
 
 namespace MandoCode.Models;
 
+// Shared serializer options to avoid repeated allocations
+internal static class ConfigJsonOptions
+{
+    internal static readonly JsonSerializerOptions ReadOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true
+    };
+
+    internal static readonly JsonSerializerOptions WriteOptions = new()
+    {
+        WriteIndented = true
+    };
+}
+
 /// <summary>
 /// Configuration for MandoCode.
 /// </summary>
@@ -113,11 +128,7 @@ public class MandoCodeConfig
             try
             {
                 var json = File.ReadAllText(configPath);
-                var config = JsonSerializer.Deserialize<MandoCodeConfig>(json, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    WriteIndented = true
-                });
+                var config = JsonSerializer.Deserialize<MandoCodeConfig>(json, ConfigJsonOptions.ReadOptions);
                 return config ?? new MandoCodeConfig();
             }
             catch (Exception ex)
@@ -138,18 +149,21 @@ public class MandoCodeConfig
     {
         configPath ??= GetDefaultConfigPath();
 
-        var directory = Path.GetDirectoryName(configPath);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+        try
         {
-            Directory.CreateDirectory(directory);
+            var directory = Path.GetDirectoryName(configPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(this, ConfigJsonOptions.WriteOptions);
+            File.WriteAllText(configPath, json);
         }
-
-        var json = JsonSerializer.Serialize(this, new JsonSerializerOptions
+        catch (Exception ex)
         {
-            WriteIndented = true
-        });
-
-        File.WriteAllText(configPath, json);
+            Console.WriteLine($"Warning: Failed to save config to {configPath}: {ex.Message}");
+        }
     }
 
     /// <summary>

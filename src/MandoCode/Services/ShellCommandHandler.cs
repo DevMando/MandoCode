@@ -84,8 +84,9 @@ public class ShellCommandHandler
                 return;
             }
 
+            var stderrTask = proc.StandardError.ReadToEndAsync();
             var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
+            var stderr = stderrTask.GetAwaiter().GetResult();
             proc.WaitForExit(30_000);
 
             if (!string.IsNullOrEmpty(stdout))

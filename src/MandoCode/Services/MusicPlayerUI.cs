@@ -29,7 +29,7 @@ public static class MusicPlayerUI
         }
 
         var trackName = track?.Name ?? "Unknown";
-        var genre = char.ToUpper(player.Genre[0]) + player.Genre[1..];
+        var genre = string.IsNullOrEmpty(player.Genre) ? "Unknown" : char.ToUpper(player.Genre[0]) + player.Genre[1..];
         var volumePercent = (int)(player.Volume * 100);
         var volumeBar = BuildVolumeBar(player.Volume);
         var stateIcon = player.IsPaused ? "\u23f8 Paused" : "\u25b6 Playing";
@@ -82,7 +82,7 @@ public static class MusicPlayerUI
         var grouped = tracks.GroupBy(t => t.Genre).OrderBy(g => g.Key);
         foreach (var group in grouped)
         {
-            var genreLabel = char.ToUpper(group.Key[0]) + group.Key[1..];
+            var genreLabel = string.IsNullOrEmpty(group.Key) ? "Unknown" : char.ToUpper(group.Key[0]) + group.Key[1..];
             Console.WriteLine($"  \u2502  [{genreLabel}]");
 
             foreach (var track in group)

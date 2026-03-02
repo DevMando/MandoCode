@@ -73,9 +73,9 @@ public static class CommandAutocomplete
                         input.Append(filteredCommands[selectedIndex]);
                         ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        AnsiConsole.Markup($"[cyan]{input}[/]");
+                        AnsiConsole.Markup($"[cyan]{Markup.Escape(input.ToString())}[/]");
                         autocompleteMode = AutocompleteMode.None;
                         continue;
                     }
@@ -115,9 +115,9 @@ public static class CommandAutocomplete
                         input.Append(filteredCommands[selectedIndex]);
                         ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        AnsiConsole.Markup($"[cyan]{input}[/]");
+                        AnsiConsole.Markup($"[cyan]{Markup.Escape(input.ToString())}[/]");
                         autocompleteMode = AutocompleteMode.None;
                     }
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
@@ -184,7 +184,7 @@ public static class CommandAutocomplete
                         pastedFullText = null;
                         input.Clear();
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
                         if (autocompleteMode != AutocompleteMode.None)
                         {
@@ -202,7 +202,7 @@ public static class CommandAutocomplete
 
                         // Update display
                         Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
                         Console.SetCursorPosition(cursorLeft, cursorTop);
 
                         if (input.Length > 0)
@@ -311,7 +311,7 @@ public static class CommandAutocomplete
 
                             // Redraw input line with paste summary
                             Console.SetCursorPosition(cursorLeft, cursorTop);
-                            Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+                            Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
                             Console.SetCursorPosition(cursorLeft, cursorTop);
                             Console.Write(input.ToString());
                             continue;
@@ -406,7 +406,7 @@ public static class CommandAutocomplete
         // Redraw
         ClearAutocompleteDisplay(ref cursorTop);
         Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
         Console.SetCursorPosition(cursorLeft, cursorTop);
         Console.Write(input.ToString());
     }
@@ -428,7 +428,7 @@ public static class CommandAutocomplete
         // Redraw input line
         ClearAutocompleteDisplay(ref cursorTop);
         Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(new string(' ', Console.WindowWidth - cursorLeft - 1));
+        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
         Console.SetCursorPosition(cursorLeft, cursorTop);
         Console.Write(input.ToString());
 
