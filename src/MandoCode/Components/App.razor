@@ -328,10 +328,20 @@
                 continue;
 
             // Re-render the submitted input in amber/yellow for old-school terminal feel
-            var curTop = Math.Max(0, Console.CursorTop - 1);
+            // Calculate how many terminal lines the prompt + input spans
+            var totalChars = input.Length + 2; // +2 for "> " prefix
+            var termWidth = Math.Max(1, Console.WindowWidth);
+            var linesUsed = (totalChars + termWidth - 1) / termWidth;
+            var curTop = Math.Max(0, Console.CursorTop - linesUsed);
+            Console.SetCursorPosition(0, curTop);
+            // Clear all lines the original input occupied
+            for (int i = 0; i < linesUsed; i++)
+            {
+                Console.Write(new string(' ', termWidth - 1));
+                if (i < linesUsed - 1) Console.WriteLine();
+            }
             Console.SetCursorPosition(0, curTop);
             Console.Write($"\u001b[33m> {input}\u001b[0m");
-            Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - input.Length - 3)));
             Console.WriteLine();
 
             // Shell escape: !<cmd> runs a shell command inline
