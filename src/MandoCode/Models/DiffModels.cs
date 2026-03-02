@@ -22,20 +22,6 @@ public class DiffLine
 }
 
 /// <summary>
-/// Result of computing a diff between two file versions.
-/// </summary>
-public class DiffResult
-{
-    public List<DiffLine> Lines { get; set; } = new();
-    public string FilePath { get; set; } = string.Empty;
-    public bool IsNewFile { get; set; }
-    public int OldLineCount { get; set; }
-    public int NewLineCount { get; set; }
-    public int Additions => Lines.Count(l => l.LineType == DiffLineType.Added);
-    public int Deletions => Lines.Count(l => l.LineType == DiffLineType.Removed);
-}
-
-/// <summary>
 /// User's response to a diff approval prompt.
 /// </summary>
 public enum DiffApprovalResponse

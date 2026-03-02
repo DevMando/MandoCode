@@ -18,7 +18,7 @@ class Program
         Console.InputEncoding = Encoding.UTF8;
 
         // Handle config commands first
-        if (args.Length > 0 && args[0].ToLower() == "config")
+        if (args.Length > 0 && args[0].ToLower() == "--config")
         {
             HandleConfigCommand(args.Skip(1).ToArray());
             return;
@@ -177,10 +177,10 @@ class Program
     {
         Console.WriteLine("MandoCode Configuration\n");
         Console.WriteLine("Commands:");
-        Console.WriteLine("  config show              - Display current configuration");
-        Console.WriteLine("  config init              - Create default configuration file");
-        Console.WriteLine("  config set <key> <value> - Set a configuration value");
-        Console.WriteLine("  config path              - Show configuration file location");
+        Console.WriteLine("  --config show              - Display current configuration");
+        Console.WriteLine("  --config init              - Create default configuration file");
+        Console.WriteLine("  --config set <key> <value> - Set a configuration value");
+        Console.WriteLine("  --config path              - Show configuration file location");
         Console.WriteLine();
         Console.WriteLine("Available Keys:");
         Console.WriteLine("  • endpoint        - Ollama endpoint URL");
@@ -193,10 +193,10 @@ class Program
         Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
-        Console.WriteLine("  mandocode config show");
-        Console.WriteLine("  mandocode config set endpoint http://localhost:11434");
-        Console.WriteLine("  mandocode config set model minimax-m2.5:cloud");
-        Console.WriteLine("  mandocode config set temperature 0.5");
+        Console.WriteLine("  mandocode --config show");
+        Console.WriteLine("  mandocode --config set endpoint http://localhost:11434");
+        Console.WriteLine("  mandocode --config set model minimax-m2.5:cloud");
+        Console.WriteLine("  mandocode --config set temperature 0.5");
     }
 
     static void SetConfigValue(string key, string value)
@@ -292,7 +292,7 @@ class Program
 
             default:
                 Console.WriteLine($"Unknown configuration key: {key}");
-                Console.WriteLine("Run 'mandocode config --help' for available keys");
+                Console.WriteLine("Run 'mandocode --config --help' for available keys");
                 return;
         }
 

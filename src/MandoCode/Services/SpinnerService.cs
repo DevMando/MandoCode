@@ -21,30 +21,28 @@ public class SpinnerService
         var message = LoadingMessages.GetRandom();
         var frames = new[] { "\u28fb", "\u28fd", "\u28fe", "\u28f7", "\u28ef", "\u28df", "\u28bf", "\u287f" };
 
-        var task = Task.Run(async () =>
-        {
-            var i = 0;
-            try
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    var frame = frames[i++ % frames.Length];
-                    Console.Write($"\r  {frame} {message}  ");
-                    await Task.Delay(80, token);
-                }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                // Clear the spinner line
-                Console.Write($"\r{new string(' ', message.Length + 10)}\r");
-            }
-        });
-
         lock (_spinnerLock)
         {
             _spinnerCts = cts;
-            _spinnerTask = task;
+            _spinnerTask = Task.Run(async () =>
+            {
+                var i = 0;
+                try
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        var frame = frames[i++ % frames.Length];
+                        Console.Write($"\r  {frame} {message}  ");
+                        await Task.Delay(80, token);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                finally
+                {
+                    // Clear the spinner line
+                    Console.Write($"\r{new string(' ', message.Length + 10)}\r");
+                }
+            });
         }
     }
 

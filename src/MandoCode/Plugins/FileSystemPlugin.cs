@@ -69,9 +69,10 @@ public class FileSystemPlugin
     {
         try
         {
+            var matcher = CreateMatcher(pattern);
             var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
             var matchingFiles = allFiles
-                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), pattern))
+                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), matcher))
                 .Select(f => Path.GetRelativePath(ProjectRoot, f))
                 .ToList();
 
@@ -245,9 +246,10 @@ public class FileSystemPlugin
     {
         try
         {
+            var matcher = CreateMatcher(pattern);
             var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
             var matchingFiles = allFiles
-                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), pattern))
+                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), matcher))
                 .ToList();
 
             var results = new List<string>();
@@ -289,7 +291,7 @@ public class FileSystemPlugin
     /// </summary>
     [KernelFunction("get_absolute_path")]
     [Description("Converts a relative file path to its absolute path on the filesystem. Use this when the user needs the full path to a file.")]
-    public async Task<string> GetAbsolutePath(
+    public Task<string> GetAbsolutePath(
         [Description("Relative path to the file from project root")] string relativePath)
     {
         try
@@ -298,14 +300,14 @@ public class FileSystemPlugin
 
             if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
             {
-                return $"Path does not exist: {fullPath}";
+                return Task.FromResult($"Path does not exist: {fullPath}");
             }
 
-            return await Task.FromResult($"Absolute path: {fullPath}");
+            return Task.FromResult($"Absolute path: {fullPath}");
         }
         catch (Exception ex)
         {
-            return $"Error getting absolute path for '{relativePath}': {ex.Message}";
+            return Task.FromResult($"Error getting absolute path for '{relativePath}': {ex.Message}");
         }
     }
 
@@ -332,14 +334,23 @@ public class FileSystemPlugin
         {
             // Skip directories we don't have access to
         }
+        catch (IOException)
+        {
+            // Skip directories with I/O errors (e.g., broken symlinks, locked files)
+        }
 
         return files;
     }
 
-    private bool MatchesPattern(string filePath, string pattern)
+    private static Matcher CreateMatcher(string pattern)
     {
         var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
         matcher.AddInclude(pattern);
+        return matcher;
+    }
+
+    private static bool MatchesPattern(string filePath, Matcher matcher)
+    {
         return matcher.Match(filePath).HasMatches;
     }
 

@@ -101,7 +101,7 @@ public class TaskPlannerService
             return true;
 
         // Rule 5: Multiple explicit tasks connected with "and" or "also" — only when request is substantial
-        if (wordCount >= 10 && StartsWithImperative(lower))
+        if (wordCount >= 10 && startsWithImperative)
         {
             var hasMultipleTasks = lower.Contains(" and then ") ||
                                   (lower.Contains(" also ") && lower.Contains(" and "));

@@ -58,7 +58,7 @@ Examples of good responses:
 CRITICAL: When you create or modify a file, the WriteFile function returns both relative and absolute paths.
 ALWAYS extract and show the user the absolute path from the function result.
 
-You are running completely offline with no token costs. Your goal is to help developers write better code efficiently.
+You are a local-first AI assistant powered by Ollama. Your goal is to help developers write better code efficiently.
 Remember: You are a LOCAL assistant. All operations happen on the user's machine. Be safe and respectful of their codebase.";
 
     /// <summary>

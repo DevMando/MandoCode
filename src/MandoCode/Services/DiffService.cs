@@ -32,6 +32,32 @@ public static class DiffService
             }).ToList();
         }
 
+        // Size guard: skip LCS for very large files to avoid O(n*m) memory/time explosion
+        if ((long)oldLines.Length * newLines.Length > 25_000_000L)
+        {
+            // Simple fallback: show all old lines as removed, all new lines as added
+            var fallback = new List<DiffLine>();
+            for (int i = 0; i < oldLines.Length; i++)
+            {
+                fallback.Add(new DiffLine
+                {
+                    LineType = DiffLineType.Removed,
+                    Content = oldLines[i],
+                    OldLineNumber = i + 1
+                });
+            }
+            for (int i = 0; i < newLines.Length; i++)
+            {
+                fallback.Add(new DiffLine
+                {
+                    LineType = DiffLineType.Added,
+                    Content = newLines[i],
+                    NewLineNumber = i + 1
+                });
+            }
+            return fallback;
+        }
+
         // Compute LCS table
         var lcs = ComputeLcsTable(oldLines, newLines);
 

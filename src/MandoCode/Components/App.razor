@@ -61,6 +61,13 @@
 
     private void StartMusicVisualizer()
     {
+        // Early-exit if a visualizer CTS is already active
+        lock (_musicVisLock)
+        {
+            if (_musicVisCts != null)
+                return;
+        }
+
         StopMusicVisualizer();
 
         if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
@@ -210,8 +217,10 @@
                     if (!continueAnyway)
                     {
                         AnsiConsole.WriteLine("Please configure a supported model:");
-                        AnsiConsole.WriteLine("  mandocode config set model qwen2.5-coder:14b");
+                        AnsiConsole.WriteLine("  mandocode --config set model qwen2.5-coder:14b");
                         AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
+                        ThemeService.ResetPalette();
+                        ThemeService.Dispose();
                         Environment.Exit(1);
                         return;
                     }
@@ -319,7 +328,7 @@
                 continue;
 
             // Re-render the submitted input in amber/yellow for old-school terminal feel
-            var curTop = Console.CursorTop - 1;
+            var curTop = Math.Max(0, Console.CursorTop - 1);
             Console.SetCursorPosition(0, curTop);
             Console.Write($"\u001b[33m> {input}\u001b[0m");
             Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - input.Length - 3)));
@@ -350,7 +359,7 @@
 
                 if (command == "clear")
                 {
-                    AI.ClearHistory();
+                    await AI.ClearHistoryAsync();
                     Console.Clear();
                     AnsiConsole.WriteLine("Conversation cleared.");
                     continue;
@@ -401,7 +410,7 @@
 
                 if (command == "learn")
                 {
-                    HandleLearnCommand();
+                    await HandleLearnCommandAsync();
                     continue;
                 }
 
@@ -445,7 +454,7 @@
                 }
 
                 // Unknown command
-                AnsiConsole.MarkupLine($"[red]Unknown command: {input}[/]");
+                AnsiConsole.MarkupLine($"[red]Unknown command: {Spectre.Console.Markup.Escape(input)}[/]");
                 AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
                 AnsiConsole.WriteLine();
                 continue;
@@ -680,8 +689,8 @@
         }
         finally
         {
-            _requestCts?.Dispose();
-            _requestCts = null;
+            var oldCts = Interlocked.Exchange(ref _requestCts, null);
+            oldCts?.Dispose();
         }
     }
 
@@ -850,7 +859,7 @@
         }
     }
 
-    private void HandleLearnCommand()
+    private async Task HandleLearnCommandAsync()
     {
         AnsiConsole.WriteLine();
         LearnContent.Display();
@@ -860,7 +869,7 @@
             var wantChat = AnsiConsole.Confirm("Chat with an AI educator to learn more?", false);
             if (wantChat)
             {
-                AI.EnterLearnMode();
+                await AI.EnterLearnModeAsync();
                 AnsiConsole.WriteLine();
                 AnsiConsole.MarkupLine("[green]AI Educator mode active![/]");
                 AnsiConsole.MarkupLine("[dim]Ask me anything about local AI! Type /clear to return to normal mode.[/]");
@@ -882,10 +891,6 @@
         var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
         Console.Write($"\u001b]52;c;{base64}\u0007");
 
-        // Truncate preview for display
-        var preview = _lastAiResponse.Length > 80
-            ? _lastAiResponse[..77] + "..."
-            : _lastAiResponse.Replace("\n", " ");
         AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
         AnsiConsole.WriteLine();
     }
@@ -1085,6 +1090,7 @@
             var parts = action.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length >= 2 && int.TryParse(parts[1], out var vol))
             {
+                vol = Math.Clamp(vol, 0, 100);
                 MusicPlayer.SetVolume(vol / 100f);
                 MusicPlayerUI.RenderStatus(MusicPlayer);
             }
@@ -1159,7 +1165,7 @@
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(Config);
-                AI.Reinitialize(updatedConfig);
+                await AI.ReinitializeAsync(updatedConfig);
                 AnsiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
                 break;

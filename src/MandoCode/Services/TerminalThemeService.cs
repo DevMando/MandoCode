@@ -43,8 +43,18 @@ public class TerminalThemeService : IDisposable
             // Send OSC 11 query
             Console.Write("\u001b]11;?\u0007");
 
-            // Poll for response with 500ms deadline
-            var deadline = DateTime.UtcNow.AddMilliseconds(500);
+            // Brief delay to let the terminal process the query
+            Thread.Sleep(50);
+
+            // Early exit if no response at all
+            if (!Console.KeyAvailable)
+            {
+                _isDarkTheme = true;
+                return;
+            }
+
+            // Poll for response with 200ms deadline
+            var deadline = DateTime.UtcNow.AddMilliseconds(200);
             var response = new System.Text.StringBuilder();
             var foundEsc = false;
 

@@ -12,7 +12,8 @@ public static class FileLinkHelper
     public static string FileLink(string projectRoot, string relativePath)
     {
         var fullPath = Path.GetFullPath(Path.Combine(projectRoot, relativePath));
-        return $"\u001b]8;;file://{fullPath}\u0007{relativePath}\u001b]8;;\u0007";
+        var fileUri = new Uri(fullPath).AbsoluteUri;
+        return $"\u001b]8;;{fileUri}\u0007{relativePath}\u001b]8;;\u0007";
     }
 
     /// <summary>

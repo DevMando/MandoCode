@@ -107,7 +107,7 @@ public class TokenTrackingService
         {
             < 1000 => count.ToString(),
             < 10_000 => $"{count / 1000.0:0.#}k",
-            < 1_000_000 => $"{count / 1000.0:0.#}k",
+            < 1_000_000 => $"{count / 1000:0}k",
             _ => $"{count / 1_000_000.0:0.#}M"
         };
     }

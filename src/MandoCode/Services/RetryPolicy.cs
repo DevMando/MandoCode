@@ -17,13 +17,16 @@ public static class RetryPolicy
     public static async Task<T> ExecuteWithRetryAsync<T>(
         Func<Task<T>> operation,
         int maxRetries = 2,
-        string? operationName = null)
+        string? operationName = null,
+        CancellationToken cancellationToken = default)
     {
         var delays = new[] { 500, 1000, 2000 }; // Exponential backoff in ms
         Exception? lastException = null;
 
         for (int attempt = 0; attempt <= maxRetries; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             try
             {
                 return await operation();
@@ -39,7 +42,7 @@ public static class RetryPolicy
                 System.Diagnostics.Debug.WriteLine(
                     $"[RetryPolicy] {operationName ?? "Operation"} failed (attempt {attempt + 1}/{maxRetries + 1}): {ex.Message}. Retrying in {delayMs}ms...");
 
-                await Task.Delay(delayMs);
+                await Task.Delay(delayMs, cancellationToken);
             }
         }
 
@@ -57,13 +60,14 @@ public static class RetryPolicy
     public static async Task ExecuteWithRetryAsync(
         Func<Task> operation,
         int maxRetries = 2,
-        string? operationName = null)
+        string? operationName = null,
+        CancellationToken cancellationToken = default)
     {
         await ExecuteWithRetryAsync(async () =>
         {
             await operation();
             return true;
-        }, maxRetries, operationName);
+        }, maxRetries, operationName, cancellationToken);
     }
 
     /// <summary>
@@ -76,10 +80,10 @@ public static class RetryPolicy
             return true;
 
         // Timeout errors are transient
-        if (ex is TaskCanceledException tce && tce.CancellationToken == default)
+        if (ex is TaskCanceledException tce && !tce.CancellationToken.IsCancellationRequested)
             return true;
 
-        if (ex is OperationCanceledException oce && oce.CancellationToken == default)
+        if (ex is OperationCanceledException oce && !oce.CancellationToken.IsCancellationRequested)
             return true;
 
         // Socket errors are transient

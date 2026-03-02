@@ -72,11 +72,11 @@ public class OperationDisplayRenderer
                 break;
 
             case "Glob":
-                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{FileLink(e.FilePath)}\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{e.FilePath}\u001b[2m)\u001b[0m");
                 break;
 
             case "Search":
-                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{FileLink(e.FilePath)}\"\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{e.FilePath}\"\u001b[2m)\u001b[0m");
                 break;
         }
     }

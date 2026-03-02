@@ -15,224 +15,19 @@ Covers architecture, security, thread safety, performance, and code quality.
 
 ---
 
-## High Priority
-
-### 1. App.razor Is a God Object (56 KB, 1460 lines)
-
-**File:** `Components/App.razor`
-
-The main application component handles everything: spinner management, music visualizer, taskbar progress, the interactive loop, file reference processing, AI requests, planned execution, config/learn/copy/shell commands, diff approvals, delete approvals, and all operation display rendering.
-
-This makes the file extremely hard to navigate, test, or extend.
-
-**Recommendation:** Extract into focused service classes:
-
-| New Class | Responsibility | Approx Lines Moved |
-|-----------|---------------|-------------------|
-| `SpinnerService` | Spinner lifecycle + taskbar progress (OSC 9;4) | ~80 |
-| `ShellCommandHandler` | `!cmd` / `/command` execution, `cd` interception | ~90 |
-| `DiffApprovalHandler` | Write/delete approval UI, diff panel rendering | ~200 |
-| `OperationDisplayRenderer` | `RenderOperationDisplay`, `RenderWriteDisplay`, `RenderUpdateDisplay` | ~120 |
-| `CommandRouter` | Main loop + slash command dispatch | ~150 |
-
-This would reduce App.razor to ~300 lines focused purely on component lifecycle and wiring.
-
----
-
-### 2. Thread Safety — `_recentCalls` Dictionary
-
-**File:** `Services/FunctionInvocationFilter.cs` — Line 45
-
-The deduplication cache is a plain `Dictionary<string, (DateTime, object?)>` but is accessed from concurrent function invocations (Semantic Kernel's `AllowConcurrentInvocation = true` in `AIService.cs:115`). Concurrent reads and writes to `Dictionary` can corrupt the internal data structure.
-
-**Current:**
-```csharp
-private readonly Dictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
-```
-
-**Fix:**
-```csharp
-private readonly ConcurrentDictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
-```
-
-Also update `CleanupOldEntries()` and `ClearCache()` to use `ConcurrentDictionary` methods (`TryRemove`, `Clear`).
-
----
-
-### 3. Thread Safety — `_chatHistory` Mutations
-
-**File:** `Services/AIService.cs`
-
-`ChatHistory` is mutated from multiple code paths without synchronization:
-- `ChatAsync()` — adds user message, then assistant message
-- `ChatStreamAsync()` — adds user message, then assistant message
-- `ExecutePlanStepAsync()` — adds plan step messages to main history
-- `ClearHistory()` — clears and re-adds system prompt
-- `EnterLearnMode()` — clears and adds educator prompt
-
-If a plan step runs while a UI-triggered clear happens, the collection can be corrupted.
-
-**Fix:** Add a `lock` around all `_chatHistory` mutations, or use a `SemaphoreSlim` for async-compatible locking.
-
----
-
-### 4. Path Traversal Security Gap
-
-**File:** `Plugins/FileSystemPlugin.cs` — Line 382
-
-The sandbox check uses `StartsWith` without ensuring a directory separator boundary:
-
-```csharp
-if (!fullPath.StartsWith(_projectRoot, StringComparison.OrdinalIgnoreCase))
-```
-
-If `_projectRoot` is `C:\projects\myapp`, a crafted path like `C:\projects\myappevil\secret.txt` passes the check because it starts with the same string prefix.
-
-**Fix:**
-```csharp
-private string GetFullPath(string relativePath)
-{
-    var fullPath = Path.Combine(_projectRoot, relativePath);
-    fullPath = Path.GetFullPath(fullPath);
-
-    // Ensure path is within project root with separator boundary
-    var normalizedRoot = _projectRoot.TrimEnd(Path.DirectorySeparatorChar)
-                       + Path.DirectorySeparatorChar;
-
-    if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
-        && !fullPath.Equals(_projectRoot, StringComparison.OrdinalIgnoreCase))
-    {
-        throw new InvalidOperationException(
-            $"Access denied: Path is outside project root: {relativePath}");
-    }
-
-    return fullPath;
-}
-```
-
----
-
 ## Medium Priority
 
-### 5. Blocking Async Calls
+### 1. Blocking Async Calls
 
 **File:** `Components/App.razor`
 
-**Line 220** — `.GetAwaiter().GetResult()` blocks the UI thread during initialization:
-```csharp
-_isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
-```
-
-**Lines 134, 204** — `task?.Wait(1000)` in `StopSpinner()` and `StopMusicVisualizer()` blocks the calling thread instead of awaiting.
+`.GetAwaiter().GetResult()` blocks the UI thread during initialization. `task?.Wait(1000)` in `StopSpinner()` and `StopMusicVisualizer()` blocks the calling thread instead of awaiting.
 
 **Fix:** Move connection check to `OnAfterRenderAsync` (already async). For spinner/visualizer, use `await` with a timeout or fire-and-forget with cancellation.
 
 ---
 
-### 6. `ChatStreamAsync` Lacks Retry Policy
-
-**File:** `Services/AIService.cs` — Line 263
-
-`ChatAsync()` wraps its call in `RetryPolicy.ExecuteWithRetryAsync()`, but `ChatStreamAsync()` — used for all direct user requests — does not. This means interactive prompts lack transient error resilience (HTTP failures, timeouts, socket errors) while plan steps have it.
-
-**Fix:** Wrap the `GetChatMessageContentAsync` call inside `ChatStreamAsync` with the same retry policy:
-```csharp
-var result = await RetryPolicy.ExecuteWithRetryAsync(
-    async () => await _chatService.GetChatMessageContentAsync(
-        _chatHistory, _settings, _kernel, cts.Token),
-    _config.MaxRetryAttempts,
-    "ChatStreamAsync"
-);
-```
-
----
-
-### 7. Duplicated Error Message Formatting
-
-**File:** `Services/AIService.cs`
-
-`ChatAsync()` (lines 239-250) has an inline error message for tool-support errors, and `FormatErrorMessage()` (lines 317-337) has a different, better-formatted version of the same error. `ChatStreamAsync` uses `FormatErrorMessage` but `ChatAsync` doesn't.
-
-**Fix:** Replace the inline error in `ChatAsync` with:
-```csharp
-catch (Exception ex)
-{
-    return FormatErrorMessage(ex);
-}
-```
-
----
-
-### 8. `NormalizeParameterName` Allocates a Dictionary Every Call
-
-**File:** `Services/AIService.cs` — Line 955
-
-A new `Dictionary<string, string>` with 12 entries is allocated on every single function parameter normalization call.
-
-**Current:**
-```csharp
-private string NormalizeParameterName(string paramName)
-{
-    var paramMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        { "pattern", "pattern" },
-        { "glob_pattern", "pattern" },
-        // ... 10 more entries
-    };
-    // ...
-}
-```
-
-**Fix:** Make it a static readonly field:
-```csharp
-private static readonly Dictionary<string, string> ParamMappings =
-    new(StringComparer.OrdinalIgnoreCase)
-{
-    { "pattern", "pattern" },
-    { "glob_pattern", "pattern" },
-    // ...
-};
-
-private static string NormalizeParameterName(string paramName)
-{
-    return ParamMappings.TryGetValue(paramName, out var normalized)
-        ? normalized
-        : paramName;
-}
-```
-
----
-
-### 9. Naive Glob Matching
-
-**File:** `Plugins/FileSystemPlugin.cs` — Lines 336-374
-
-`MatchesPattern` is hand-rolled and misses common glob patterns:
-
-| Pattern | Expected | Actual |
-|---------|----------|--------|
-| `src/*.cs` | Files in src/ only | Matches any path ending in `.cs` after stripping `**` |
-| `**/*.test.js` | Test files anywhere | Partially works, fragile |
-| `src/**/*.cs` | C# files under src/ | Works but only for two-segment `**` splits |
-| `?.txt` | Single char + .txt | No support for `?` wildcards |
-
-**Fix:** Replace with `Microsoft.Extensions.FileSystemGlobbing` (already part of .NET):
-```csharp
-using Microsoft.Extensions.FileSystemGlobbing;
-
-private bool MatchesPattern(string filePath, string pattern)
-{
-    var matcher = new Matcher();
-    matcher.AddInclude(pattern);
-    return matcher.Match(filePath).HasMatches;
-}
-```
-
-Or add the NuGet package `Microsoft.Extensions.FileSystemGlobbing` if not already referenced.
-
----
-
-### 10. No Cancellation Support for User Aborting AI Requests
+### 2. No Cancellation Support for User Aborting AI Requests
 
 **File:** `Components/App.razor` — `ProcessDirectRequestAsync`
 
@@ -244,15 +39,15 @@ There is no way for the user to cancel a long-running AI request (e.g., Ctrl+C).
 
 ## Low Priority
 
-### 11. Duplicate Ignore Directory Lists (3 Places)
+### 3. Duplicate Ignore Directory Lists (3 Places)
 
 The default ignore directory list appears in three separate locations:
 
 | File | Line | Context |
 |------|------|---------|
-| `Plugins/FileSystemPlugin.cs` | 12 | Hardcoded `HashSet` in field initializer |
-| `Program.cs` | 86 | Hardcoded `HashSet` in DI registration |
-| `Models/MandoCodeConfig.cs` | 197 | Hardcoded `List` in `CreateDefault()` |
+| `Plugins/FileSystemPlugin.cs` | 13 | Hardcoded `HashSet` in field initializer |
+| `Program.cs` | 108 | Hardcoded `HashSet` in DI registration |
+| `Models/MandoCodeConfig.cs` | `CreateDefault()` | Hardcoded `List` |
 
 **Fix:** Define once in `MandoCodeConfig`:
 ```csharp
@@ -267,17 +62,11 @@ Then reference `MandoCodeConfig.DefaultIgnoreDirectories` in all three locations
 
 ---
 
-### 12. Shell Command Output Can Exhaust Memory
+### 4. Shell Command Output Can Exhaust Memory
 
-**File:** `Components/App.razor` — Lines 1099-1100
+**File:** `Services/ShellCommandHandler.cs` — Line 87
 
-`ReadToEnd()` loads entire stdout/stderr into memory:
-```csharp
-var stdout = proc.StandardOutput.ReadToEnd();
-var stderr = proc.StandardError.ReadToEnd();
-```
-
-A command like `cat /dev/urandom` or a massive `git log` could exhaust memory.
+`ReadToEnd()` loads entire stdout/stderr into memory. A command like `cat /dev/urandom` or a massive `git log` could exhaust memory.
 
 **Fix:** Stream output line-by-line with a max buffer:
 ```csharp
@@ -295,11 +84,11 @@ if (outputBuilder.Length >= maxChars)
 
 ---
 
-### 13. Duplicate JSON Brace-Counting Logic
+### 5. Duplicate JSON Brace-Counting Logic
 
 **File:** `Services/AIService.cs`
 
-`ExtractJsonObject()` (line 665) and `RemoveFunctionCallJson()` (line 721) both implement identical brace-depth tracking with string/escape handling independently.
+`ExtractJsonObject()` and `RemoveFunctionCallJson()` both implement identical brace-depth tracking with string/escape handling independently.
 
 **Fix:** Extract a shared helper:
 ```csharp
@@ -313,9 +102,9 @@ Then call it from both `ExtractJsonObject` and `RemoveFunctionCallJson`.
 
 ---
 
-### 14. `FileSystemPlugin.GetAllFiles` Has No Caching
+### 6. `FileSystemPlugin.GetAllFiles` Has No Caching
 
-**File:** `Plugins/FileSystemPlugin.cs` — Line 309
+**File:** `Plugins/FileSystemPlugin.cs`
 
 `GetAllFiles()` does a full recursive directory walk every time `ListAllProjectFiles`, `ListFiles`, or `FindInFiles` is called. For large projects this is expensive.
 
@@ -323,9 +112,9 @@ Then call it from both `ExtractJsonObject` and `RemoveFunctionCallJson`.
 
 ---
 
-### 15. Minor: Awkward String Construction in `ReadFile`
+### 7. Minor: Awkward String Construction in `ReadFile`
 
-**File:** `Plugins/FileSystemPlugin.cs` — Line 109
+**File:** `Plugins/FileSystemPlugin.cs` — Line 110
 
 ```csharp
 $"{'='.ToString().PadRight(50, '=')}\n"
@@ -338,7 +127,7 @@ $"{new string('=', 50)}\n"
 
 ---
 
-### 16. Missing `IDisposable` on App.razor
+### 8. Missing `IDisposable` on App.razor
 
 **File:** `Components/App.razor`
 
@@ -359,9 +148,9 @@ public void Dispose()
 
 ---
 
-### 17. Process Exit Code Not Checked in Shell Commands
+### 9. Process Exit Code Not Checked in Shell Commands
 
-**File:** `Components/App.razor` — Line 1101
+**File:** `Services/ShellCommandHandler.cs` — Line 89
 
 `proc.WaitForExit(30_000)` returns a `bool` indicating whether the process exited within the timeout, but the return value is discarded. If the process hangs, the user gets no feedback.
 
@@ -376,9 +165,9 @@ if (!proc.WaitForExit(30_000))
 
 ---
 
-### 18. `FindInFiles` Reads All Files Into Memory
+### 10. `FindInFiles` Reads All Files Into Memory
 
-**File:** `Plugins/FileSystemPlugin.cs` — Line 254
+**File:** `Plugins/FileSystemPlugin.cs`
 
 `File.ReadAllLinesAsync` loads the entire contents of every matching file into memory. For a large codebase with many matches, this could be expensive.
 
@@ -390,21 +179,13 @@ if (!proc.WaitForExit(30_000))
 
 | # | Issue | Priority | File | Type |
 |---|-------|----------|------|------|
-| 1 | App.razor God Object (1460 lines) | **High** | `Components/App.razor` | Architecture |
-| 2 | Thread safety on `_recentCalls` | **High** | `Services/FunctionInvocationFilter.cs` | Concurrency |
-| 3 | Thread safety on `_chatHistory` | **High** | `Services/AIService.cs` | Concurrency |
-| 4 | Path traversal security gap | **High** | `Plugins/FileSystemPlugin.cs` | Security |
-| 5 | Blocking async calls | **Medium** | `Components/App.razor` | Performance |
-| 6 | Missing retry in `ChatStreamAsync` | **Medium** | `Services/AIService.cs` | Resilience |
-| 7 | Duplicated error message formatting | **Medium** | `Services/AIService.cs` | Code Quality |
-| 8 | Dict allocation per parameter call | **Medium** | `Services/AIService.cs` | Performance |
-| 9 | Naive glob matching | **Medium** | `Plugins/FileSystemPlugin.cs` | Correctness |
-| 10 | No Ctrl+C cancellation support | **Medium** | `Components/App.razor` | UX |
-| 11 | Duplicate ignore directory lists | **Low** | Multiple files | Maintainability |
-| 12 | Shell command OOM risk | **Low** | `Components/App.razor` | Edge Case |
-| 13 | Duplicate JSON brace-counting | **Low** | `Services/AIService.cs` | Code Quality |
-| 14 | No file list caching in plugin | **Low** | `Plugins/FileSystemPlugin.cs` | Performance |
-| 15 | Awkward string construction | **Low** | `Plugins/FileSystemPlugin.cs` | Code Quality |
-| 16 | Missing `IDisposable` | **Low** | `Components/App.razor` | Resource Leak |
-| 17 | Process exit code not checked | **Low** | `Components/App.razor` | Correctness |
-| 18 | `FindInFiles` memory usage | **Low** | `Plugins/FileSystemPlugin.cs` | Performance |
+| 1 | Blocking async calls | **Medium** | `Components/App.razor` | Performance |
+| 2 | No Ctrl+C cancellation support | **Medium** | `Components/App.razor` | UX |
+| 3 | Duplicate ignore directory lists | **Low** | Multiple files | Maintainability |
+| 4 | Shell command OOM risk | **Low** | `Services/ShellCommandHandler.cs` | Edge Case |
+| 5 | Duplicate JSON brace-counting | **Low** | `Services/AIService.cs` | Code Quality |
+| 6 | No file list caching in plugin | **Low** | `Plugins/FileSystemPlugin.cs` | Performance |
+| 7 | Awkward string construction | **Low** | `Plugins/FileSystemPlugin.cs` | Code Quality |
+| 8 | Missing `IDisposable` | **Low** | `Components/App.razor` | Resource Leak |
+| 9 | Process exit code not checked | **Low** | `Services/ShellCommandHandler.cs` | Correctness |
+| 10 | `FindInFiles` memory usage | **Low** | `Plugins/FileSystemPlugin.cs` | Performance |
