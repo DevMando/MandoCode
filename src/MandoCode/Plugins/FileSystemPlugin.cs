@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.SemanticKernel;
+using MandoCode.Services;
 
 namespace MandoCode.Plugins;
 
@@ -9,16 +10,17 @@ namespace MandoCode.Plugins;
 /// </summary>
 public class FileSystemPlugin
 {
-    private readonly string _projectRoot;
+    private readonly ProjectRootAccessor ProjectRootAccessor;
+    private string ProjectRoot => ProjectRootAccessor.ProjectRoot;
     private readonly HashSet<string> _ignoreDirectories = new()
     {
         ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
         "packages", "dist", "build", "__pycache__", ".idea"
     };
 
-    public FileSystemPlugin(string projectRoot)
+    public FileSystemPlugin(ProjectRootAccessor projectRootAccessor)
     {
-        _projectRoot = Path.GetFullPath(projectRoot);
+        ProjectRootAccessor = projectRootAccessor;
     }
 
     /// <summary>
@@ -41,8 +43,8 @@ public class FileSystemPlugin
     {
         try
         {
-            var files = await Task.Run(() => GetAllFiles(_projectRoot));
-            var relativeFiles = files.Select(f => Path.GetRelativePath(_projectRoot, f)).ToList();
+            var files = await Task.Run(() => GetAllFiles(ProjectRoot));
+            var relativeFiles = files.Select(f => Path.GetRelativePath(ProjectRoot, f)).ToList();
 
             if (!relativeFiles.Any())
             {
@@ -67,10 +69,10 @@ public class FileSystemPlugin
     {
         try
         {
-            var allFiles = await Task.Run(() => GetAllFiles(_projectRoot));
+            var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
             var matchingFiles = allFiles
-                .Where(f => MatchesPattern(Path.GetRelativePath(_projectRoot, f), pattern))
-                .Select(f => Path.GetRelativePath(_projectRoot, f))
+                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), pattern))
+                .Select(f => Path.GetRelativePath(ProjectRoot, f))
                 .ToList();
 
             if (!matchingFiles.Any())
@@ -243,9 +245,9 @@ public class FileSystemPlugin
     {
         try
         {
-            var allFiles = await Task.Run(() => GetAllFiles(_projectRoot));
+            var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
             var matchingFiles = allFiles
-                .Where(f => MatchesPattern(Path.GetRelativePath(_projectRoot, f), pattern))
+                .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), pattern))
                 .ToList();
 
             var results = new List<string>();
@@ -260,7 +262,7 @@ public class FileSystemPlugin
 
                 if (matches.Any())
                 {
-                    var relativePath = Path.GetRelativePath(_projectRoot, file);
+                    var relativePath = Path.GetRelativePath(ProjectRoot, file);
                     results.Add($"{relativePath}:");
                     foreach (var match in matches)
                     {
@@ -343,16 +345,16 @@ public class FileSystemPlugin
 
     private string GetFullPath(string relativePath)
     {
-        var fullPath = Path.Combine(_projectRoot, relativePath);
+        var fullPath = Path.Combine(ProjectRoot, relativePath);
         fullPath = Path.GetFullPath(fullPath);
 
         // Security check: ensure the path is within project root with separator boundary
         // Without the separator, "C:\projects\myapp" would match "C:\projects\myappevil"
-        var normalizedRoot = _projectRoot.TrimEnd(Path.DirectorySeparatorChar)
+        var normalizedRoot = ProjectRoot.TrimEnd(Path.DirectorySeparatorChar)
                            + Path.DirectorySeparatorChar;
 
         if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
-            && !fullPath.Equals(_projectRoot, StringComparison.OrdinalIgnoreCase))
+            && !fullPath.Equals(ProjectRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Access denied: Path is outside project root: {relativePath}");
         }

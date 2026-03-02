@@ -83,7 +83,8 @@ class Program
             {
                 var cfg = provider.GetRequiredService<MandoCodeConfig>();
                 var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
-                return new AIService(projectRoot, cfg, tokenTracker);
+                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+                return new AIService(projectRootAccessor, cfg, tokenTracker);
             });
 
             // Register TaskPlannerService as singleton
