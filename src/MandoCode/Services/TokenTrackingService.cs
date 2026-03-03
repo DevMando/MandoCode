@@ -49,7 +49,7 @@ public class TokenTrackingService
     /// <summary>
     /// Records real token usage from a model response.
     /// </summary>
-    public void RecordModelUsage(int promptTokens, int completionTokens, string label)
+    public void RecordModelUsage(int promptTokens, int completionTokens, string label, double? generationSeconds = null)
     {
         Interlocked.Add(ref _totalPromptTokens, promptTokens);
         Interlocked.Add(ref _totalCompletionTokens, completionTokens);
@@ -59,7 +59,8 @@ public class TokenTrackingService
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             OperationLabel = label,
-            IsEstimate = false
+            IsEstimate = false,
+            GenerationSeconds = generationSeconds
         };
 
         _lastOperation = info;

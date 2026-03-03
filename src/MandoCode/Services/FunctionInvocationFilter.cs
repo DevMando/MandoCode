@@ -36,6 +36,12 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// </summary>
     public Func<string, string?, Task<DiffApprovalResult>>? OnDeleteApprovalRequested { get; set; }
 
+    /// <summary>
+    /// Async callback for requesting user approval before executing a shell command.
+    /// Parameter: (command) → DiffApprovalResult.
+    /// </summary>
+    public Func<string, Task<DiffApprovalResult>>? OnCommandApprovalRequested { get; set; }
+
     // Project root accessor for resolving file paths when reading existing content
     private readonly ProjectRootAccessor? _projectRootAccessor;
     private string? ProjectRoot => _projectRootAccessor?.ProjectRoot;
@@ -234,6 +240,32 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             }
         }
 
+        // Intercept execute_command calls for approval
+        if (context.Function.Name == "execute_command" && OnCommandApprovalRequested != null)
+        {
+            approvalWasShown = true;
+            var approvalResult = await HandleCommandApprovalAsync(context);
+            if (approvalResult != null)
+            {
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(
+                    context.Function,
+                    approvalResult
+                );
+
+                var skipResult = new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = approvalResult.Length > 200 ? approvalResult[..200] + "..." : approvalResult,
+                    Success = true
+                };
+                OnFunctionCompleted?.Invoke(skipResult);
+
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+        }
+
         // Invoke the function
         try
         {
@@ -361,6 +393,17 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 {
                     OperationType = "Search",
                     FilePath = searchText?.ToString() ?? ""
+                };
+
+            case "execute_command":
+                arguments.TryGetValue("command", out var cmdArg);
+                var cmdStr = cmdArg?.ToString() ?? "";
+                return new OperationDisplayEvent
+                {
+                    OperationType = "Command",
+                    FilePath = cmdStr,
+                    ContentPreview = resultStr.Length > 500 ? resultStr[..500] + "..." : resultStr,
+                    ApprovalWasShown = approvalWasShown
                 };
 
             default:
@@ -547,6 +590,40 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Handles the command approval workflow. Returns a result message to use instead of executing,
+    /// or null if the command should proceed normally.
+    /// </summary>
+    private async Task<string?> HandleCommandApprovalAsync(FunctionInvocationContext context)
+    {
+        if (OnCommandApprovalRequested == null)
+            return null;
+
+        context.Arguments.TryGetValue("command", out var cmdObj);
+        var command = cmdObj?.ToString();
+
+        if (string.IsNullOrEmpty(command))
+            return null;
+
+        var approval = await OnCommandApprovalRequested(command);
+
+        switch (approval.Response)
+        {
+            case DiffApprovalResponse.Approved:
+            case DiffApprovalResponse.ApprovedNoAskAgain:
+                return null; // Proceed with the command
+
+            case DiffApprovalResponse.Denied:
+                return $"User denied the command '{command}'. Do not retry this command unless the user asks.";
+
+            case DiffApprovalResponse.NewInstructions:
+                return $"User rejected the command '{command}' and provided new instructions: {approval.UserMessage}";
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
     /// Determines if a function is a write operation (modifies files/folders).
     /// </summary>
     private bool IsWriteOperation(string? functionName)
@@ -555,7 +632,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
         return functionName.Contains("write", StringComparison.OrdinalIgnoreCase) ||
                functionName.Contains("create", StringComparison.OrdinalIgnoreCase) ||
-               functionName.Contains("delete", StringComparison.OrdinalIgnoreCase);
+               functionName.Contains("delete", StringComparison.OrdinalIgnoreCase) ||
+               functionName.Equals("execute_command", StringComparison.OrdinalIgnoreCase);
     }
 
     private string GetFunctionDescription(string? pluginName, string? functionName, IReadOnlyDictionary<string, object?> arguments)
@@ -606,6 +684,11 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     if (arguments.TryGetValue("relativePath", out var absPath))
                         return $"Getting absolute path for {absPath}";
                     return "Getting absolute path";
+
+                case "execute_command":
+                    if (arguments.TryGetValue("command", out var cmdDesc))
+                        return $"Executing: {cmdDesc}";
+                    return "Executing command";
 
                 default:
                     return $"{functionName}";

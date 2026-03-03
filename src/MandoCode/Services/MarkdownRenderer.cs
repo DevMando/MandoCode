@@ -30,6 +30,11 @@ public static class MarkdownRenderer
         @"(https?://[^\s)\]>""]+|(?<![@\w])[\w][\w.-]*\.(?:com|org|net|io|dev|edu|gov|co|app|ai|us|uk|de|fr|jp|au|ca|ru|br|in|xyz|tech|info|biz|me|tv|cc)\b(?:/[^\s)\]>""]*)?)",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    // Regex for detecting file paths (Windows absolute paths and Unix absolute paths)
+    private static readonly System.Text.RegularExpressions.Regex FilePathPattern = new(
+        @"([A-Za-z]:[/\\][^\s""'`<>|*?]+|/(?:mnt|home|usr|tmp|var|etc|opt)/[^\s""'`<>|*?]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>
     /// Wraps text in an OSC 8 clickable hyperlink.
     /// </summary>
@@ -335,7 +340,15 @@ public static class MarkdownRenderer
                     break;
 
                 case CodeInline code:
-                    Console.Write($"{Cyan}`{code.Content}`{FgReset}");
+                    var fileUri = TryGetFileUri(code.Content);
+                    if (fileUri != null)
+                    {
+                        Console.Write($"\u001b]8;;{fileUri}\u0007{Cyan}`{code.Content}`{FgReset}\u001b]8;;\u0007");
+                    }
+                    else
+                    {
+                        Console.Write($"{Cyan}`{code.Content}`{FgReset}");
+                    }
                     break;
 
                 case LinkInline link when link.IsImage:
@@ -438,26 +451,65 @@ public static class MarkdownRenderer
     /// </summary>
     private static void WriteLiteralWithLinks(string text)
     {
-        var lastIndex = 0;
+        // Collect all linkable matches (URLs and file paths) sorted by position
+        var matches = new List<(int Index, int Length, string Display, string Url)>();
+
         foreach (System.Text.RegularExpressions.Match match in UrlPattern.Matches(text))
         {
-            // Write text before the URL
-            if (match.Index > lastIndex)
-                Console.Write(text[lastIndex..match.Index]);
-
-            // Write the URL as a clickable hyperlink
-            // For bare domains (no http prefix), prepend https:// for the link target
-            var displayText = match.Value;
-            var linkUrl = displayText.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? displayText
-                : $"https://{displayText}";
-            WriteHyperlink(linkUrl, displayText);
-            lastIndex = match.Index + match.Length;
+            var display = match.Value;
+            var url = display.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? display
+                : $"https://{display}";
+            matches.Add((match.Index, match.Length, display, url));
         }
 
-        // Write remaining text after the last URL
+        foreach (System.Text.RegularExpressions.Match match in FilePathPattern.Matches(text))
+        {
+            var uri = TryGetFileUri(match.Value);
+            if (uri != null)
+                matches.Add((match.Index, match.Length, match.Value, uri));
+        }
+
+        // Sort by position and remove overlaps
+        matches.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+        var lastIndex = 0;
+        foreach (var (index, length, display, url) in matches)
+        {
+            if (index < lastIndex) continue; // skip overlapping match
+
+            if (index > lastIndex)
+                Console.Write(text[lastIndex..index]);
+
+            WriteHyperlink(url, display);
+            lastIndex = index + length;
+        }
+
         if (lastIndex < text.Length)
             Console.Write(text[lastIndex..]);
+    }
+
+    /// <summary>
+    /// Checks if text looks like a file path and returns a file:// URI, or null.
+    /// </summary>
+    private static string? TryGetFileUri(string text)
+    {
+        if (!FilePathPattern.IsMatch(text))
+            return null;
+
+        try
+        {
+            // Normalize backslashes for URI construction
+            var normalized = text.Replace('\\', '/');
+            if (!normalized.StartsWith("/"))
+                normalized = "/" + normalized;
+
+            return "file://" + normalized;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

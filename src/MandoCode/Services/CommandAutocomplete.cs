@@ -20,13 +20,12 @@ public static class CommandAutocomplete
         { "/command", "Run a shell command (also: !<cmd>)" },
         { "/clear", "Clear conversation history" },
         { "/learn", "Learn about LLMs and local AI models" },
-        { "/music", "Play lofi/synthwave coding music" },
+        { "/music", "Play music" },
         { "/music-stop", "Stop music playback" },
         { "/music-pause", "Pause/resume music" },
         { "/music-next", "Skip to next track" },
         { "/music-vol", "Set volume (0-100), e.g. /music-vol 70" },
-        { "/music-lofi", "Switch to lofi genre" },
-        { "/music-synthwave", "Switch to synthwave genre" },
+        { "/music-playlist", "Select a genre and start playing" },
         { "/music-list", "Show available tracks" },
         { "/exit", "Exit MandoCode" }
     };

@@ -163,6 +163,7 @@
         {
             AI.OnWriteApprovalRequested = DiffApproval.HandleDiffApproval;
             AI.OnDeleteApprovalRequested = DiffApproval.HandleDeleteApproval;
+            AI.OnCommandApprovalRequested = DiffApproval.HandleCommandApproval;
         }
 
         // Check Ollama connection synchronously — render depends on the result
@@ -251,7 +252,8 @@
             AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
         }
 
-        Spinner.Start();
+        // Show what the model is doing above the spinner in grey
+        Spinner.Start(call.Description);
     }
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
@@ -321,7 +323,7 @@
             // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
             StartMusicVisualizer();
 
-            AnsiConsole.Markup("[yellow]> [/]");
+            AnsiConsole.Markup("[rgb(255,200,80)]> [/]");
             var input = CommandAutocomplete.ReadLineWithAutocomplete();
 
             if (string.IsNullOrWhiteSpace(input))
@@ -341,7 +343,7 @@
                 if (i < linesUsed - 1) Console.WriteLine();
             }
             Console.SetCursorPosition(0, curTop);
-            Console.Write($"\u001b[33m> {input}\u001b[0m");
+            Console.Write($"\u001b[38;2;255;200;80m> {input}\u001b[0m");
             Console.WriteLine();
 
             // Shell escape: !<cmd> runs a shell command inline
@@ -447,8 +449,7 @@
                 if (command == "music-stop")      { HandleMusicCommand("stop"); continue; }
                 if (command == "music-pause")     { HandleMusicCommand("pause"); continue; }
                 if (command == "music-next")      { HandleMusicCommand("next"); continue; }
-                if (command == "music-lofi")      { HandleMusicCommand("lofi"); continue; }
-                if (command == "music-synthwave") { HandleMusicCommand("synthwave"); continue; }
+                if (command == "music-playlist")      { HandleMusicPlaySelection(); continue; }
                 if (command == "music-list")      { HandleMusicCommand("list"); continue; }
                 if (command.StartsWith("music-vol"))
                 {
@@ -532,7 +533,15 @@
                     TokenTracker.RecordEstimatedUsage(content.Length, $"@{filePath}");
                 }
 
-                AnsiConsole.MarkupLine($"[dim][[Attached]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}[/]");
+                // Show consistent operation display for @file reads
+                var lineCount = content.Split('\n').Length;
+                var readDisplay = new OperationDisplayEvent
+                {
+                    OperationType = "Read",
+                    FilePath = filePath,
+                    LineCount = lineCount
+                };
+                OperationRenderer.Render(readDisplay);
             }
             else
             {
@@ -665,7 +674,10 @@
                         {
                             var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
                             var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
-                            var tokenSummary = $"[{inLabel}, {outLabel}]";
+                            var tpsLabel = lastOp.TokensPerSecond.HasValue
+                                ? $": {lastOp.TokensPerSecond.Value:0.#} tok/s"
+                                : "";
+                            var tokenSummary = $"[{inLabel}, {outLabel}{tpsLabel}]";
                             var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
                             Console.WriteLine();
                             Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
@@ -1138,22 +1150,61 @@
                 MusicPlayerUI.RenderStatus(MusicPlayer);
                 break;
 
-            case "lofi":
-                MusicPlayer.Play("lofi");
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
-            case "synthwave":
-                MusicPlayer.Play("synthwave");
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
             case "list":
                 MusicPlayerUI.RenderTrackList(MusicPlayer);
                 break;
         }
 
         // Restart visualizer — it will auto-check if music is still active
+        StartMusicVisualizer();
+    }
+
+    private void HandleMusicPlaySelection()
+    {
+        StopMusicVisualizer();
+
+        var genres = MusicPlayer.GetAvailableGenres();
+
+        if (genres.Count == 0)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]No genres found.[/] Add mp3 files to [cyan]Audio/<genre>/[/] folders.");
+            AnsiConsole.WriteLine();
+            StartMusicVisualizer();
+            return;
+        }
+
+        if (genres.Count == 1)
+        {
+            MusicPlayer.Play(genres[0]);
+            MusicPlayerUI.RenderStatus(MusicPlayer);
+            StartMusicVisualizer();
+            return;
+        }
+
+        // Build choices: title-cased genre names + Shuffle All
+        var choices = genres
+            .Select(g => char.ToUpper(g[0]) + g[1..])
+            .ToList();
+        choices.Insert(0, "Shuffle All");
+
+        AnsiConsole.WriteLine();
+        var selected = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[green]Select a genre:[/]")
+                .AddChoices(choices)
+        );
+
+        if (selected == "Shuffle All")
+        {
+            MusicPlayer.Play(null);
+        }
+        else
+        {
+            MusicPlayer.Play(selected.ToLowerInvariant());
+        }
+
+        MusicPlayerUI.RenderStatus(MusicPlayer);
         StartMusicVisualizer();
     }
 

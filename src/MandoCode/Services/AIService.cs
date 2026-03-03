@@ -90,6 +90,24 @@ public class AIService
         }
     }
 
+    /// <summary>
+    /// Async callback for requesting user approval before executing a shell command.
+    /// Set this from the UI layer (App.razor) to enable command approvals.
+    /// </summary>
+    private Func<string, Task<DiffApprovalResult>>? _onCommandApprovalRequested;
+    public Func<string, Task<DiffApprovalResult>>? OnCommandApprovalRequested
+    {
+        get => _onCommandApprovalRequested;
+        set
+        {
+            _onCommandApprovalRequested = value;
+            if (_functionFilter != null)
+            {
+                _functionFilter.OnCommandApprovalRequested = value;
+            }
+        }
+    }
+
     public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker)
     {
         _projectRootAccessor = projectRootAccessor;
@@ -119,6 +137,7 @@ public class AIService
         _settings = new()
         {
             Temperature = (float)_config.Temperature,
+            NumPredict = _config.MaxTokens,
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
         };
 
@@ -168,6 +187,10 @@ public class AIService
         if (_onDeleteApprovalRequested != null)
         {
             _functionFilter.OnDeleteApprovalRequested = _onDeleteApprovalRequested;
+        }
+        if (_onCommandApprovalRequested != null)
+        {
+            _functionFilter.OnCommandApprovalRequested = _onCommandApprovalRequested;
         }
 
         _kernel.FunctionInvocationFilters.Add(_functionFilter);
@@ -308,6 +331,14 @@ public class AIService
                 response = _config.EnableFallbackFunctionParsing
                     ? await ProcessTextFunctionCallsAsync(rawResponse)
                     : rawResponse;
+
+                // Detect if the response was truncated due to hitting the token limit
+                if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
+                    && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
+                {
+                    response += "\n\n⚠ Response was cut off (hit the token limit). " +
+                               "You can say \"continue\" to keep going, or increase max tokens with /config.";
+                }
 
                 // Add the response to history
                 if (!string.IsNullOrEmpty(response))
@@ -1032,7 +1063,12 @@ public class AIService
                 var completionTokens = done.EvalCount;
                 if (promptTokens > 0 || completionTokens > 0)
                 {
-                    _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label);
+                    // EvalDuration is in nanoseconds — convert to seconds
+                    double? generationSeconds = done.EvalDuration > 0
+                        ? done.EvalDuration / 1_000_000_000.0
+                        : null;
+
+                    _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label, generationSeconds);
                 }
             }
         }

@@ -205,20 +205,20 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Controls the maximum length of AI responses.[/]");
-        AnsiConsole.MarkupLine("[dim]  2048: Fast, shorter responses[/]");
-        AnsiConsole.MarkupLine("[dim]  4096: Balanced (recommended)[/]");
-        AnsiConsole.MarkupLine("[dim]  8192: Longer, more detailed responses[/]");
+        AnsiConsole.MarkupLine("[dim]If a response hits this limit, it will be cut off with a warning.[/]");
         AnsiConsole.WriteLine();
 
         var maxTokens = AnsiConsole.Prompt(
-            new TextPrompt<int>("[cyan]Max tokens:[/]")
-                .DefaultValue(currentMaxTokens)
-                .ValidationErrorMessage("[red]Please enter a positive number[/]")
-                .Validate(tokens =>
+            new SelectionPrompt<int>()
+                .Title("[cyan]Max tokens:[/]")
+                .AddChoices(2048, 4096, 8192, 16384)
+                .UseConverter(tokens => tokens switch
                 {
-                    if (tokens > 0)
-                        return ValidationResult.Success();
-                    return ValidationResult.Error("[red]Max tokens must be positive[/]");
+                    2048  => "2048  - Quick Q&A, short answers",
+                    4096  => "4096  - General coding assistance (default)",
+                    8192  => "8192  - Multi-component generation, detailed code",
+                    16384 => "16384 - Full-page scaffolding, large file rewrites",
+                    _     => tokens.ToString()
                 })
         );
 
