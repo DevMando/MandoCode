@@ -4,7 +4,7 @@ namespace MandoCode.Services;
 
 /// <summary>
 /// Owns spinner animation lifecycle and taskbar progress.
-/// Thread-safe start/stop for the animated braille spinner.
+/// Thread-safe start/stop for the animated spinner with optional activity display.
 /// </summary>
 public class SpinnerService
 {
@@ -12,14 +12,24 @@ public class SpinnerService
     private Task? _spinnerTask;
     private readonly object _spinnerLock = new();
 
-    public void Start()
+    public void Start(string? activity = null)
     {
         Stop();
         SetTaskbarIndeterminate();
         var cts = new CancellationTokenSource();
         var token = cts.Token;
         var message = LoadingMessages.GetRandom();
-        var frames = new[] { "\u28fb", "\u28fd", "\u28fe", "\u28f7", "\u28ef", "\u28df", "\u28bf", "\u287f" };
+        var spinner = LoadingMessages.GetRandomSpinner();
+        var frames = spinner.Frames.ToArray();
+        var interval = (int)spinner.Interval.TotalMilliseconds;
+        var hasActivity = !string.IsNullOrEmpty(activity);
+
+        // Write activity line immediately on the calling thread so it's visible
+        // before the background spinner task gets scheduled
+        if (hasActivity)
+        {
+            Console.Write($"\u001b[2m  {activity}\u001b[0m\n");
+        }
 
         lock (_spinnerLock)
         {
@@ -32,15 +42,21 @@ public class SpinnerService
                     while (!token.IsCancellationRequested)
                     {
                         var frame = frames[i++ % frames.Length];
-                        Console.Write($"\r  {frame} {message}  ");
-                        await Task.Delay(80, token);
+                        Console.Write($"\r  \u001b[38;2;200;100;255m{frame}\u001b[0m \u001b[38;2;180;140;255m{message}\u001b[0m  ");
+                        await Task.Delay(interval, token);
                     }
                 }
                 catch (OperationCanceledException) { }
                 finally
                 {
                     // Clear the spinner line
-                    Console.Write($"\r{new string(' ', message.Length + 10)}\r");
+                    Console.Write($"\r\u001b[2K");
+                    // If we had an activity line, move cursor up and clear it too
+                    if (hasActivity)
+                    {
+                        Console.Write($"\u001b[A\u001b[2K");
+                    }
+                    Console.Write("\r");
                 }
             });
         }

@@ -68,6 +68,18 @@ public class MusicPlayerService : IDisposable
     }
 
     /// <summary>
+    /// Gets distinct genre names from all discovered tracks.
+    /// </summary>
+    public List<string> GetAvailableGenres()
+    {
+        return _tracks
+            .Select(t => t.Genre)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g)
+            .ToList();
+    }
+
+    /// <summary>
     /// Gets all available tracks, optionally filtered by genre.
     /// </summary>
     public List<MusicTrackInfo> GetAvailableTracks(string? genre = null)

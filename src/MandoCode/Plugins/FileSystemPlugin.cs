@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.SemanticKernel;
 using MandoCode.Services;
@@ -308,6 +309,92 @@ public class FileSystemPlugin
         catch (Exception ex)
         {
             return Task.FromResult($"Error getting absolute path for '{relativePath}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Executes a shell command in the project root directory.
+    /// </summary>
+    [KernelFunction("execute_command")]
+    [Description("Executes a shell command (e.g., git status, dotnet build, npm install). The command runs in the project root directory. Use this for git operations, build tools, package managers, and other CLI tasks.")]
+    public async Task<string> ExecuteCommand(
+        [Description("The shell command to execute (e.g., 'git status', 'dotnet build')")] string command)
+    {
+        try
+        {
+            // Intercept cd commands to update the project root
+            if (command == "cd" || command.StartsWith("cd "))
+            {
+                return HandleCdCommand(command);
+            }
+
+            var isWindows = OperatingSystem.IsWindows();
+            var escapedCmd = command.Replace("\"", "\\\"");
+            var psi = new ProcessStartInfo
+            {
+                FileName = isWindows ? "cmd.exe" : "/bin/bash",
+                Arguments = isWindows ? "/c " + command : "-c \"" + escapedCmd + "\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = ProjectRoot
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+            {
+                return "Error: Failed to start process.";
+            }
+
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            var stdout = await proc.StandardOutput.ReadToEndAsync();
+            var stderr = await stderrTask;
+
+            var exited = proc.WaitForExit(30_000);
+            if (!exited)
+            {
+                try { proc.Kill(); } catch { }
+                return "Error: Command timed out after 30 seconds.";
+            }
+
+            var output = string.Empty;
+            if (!string.IsNullOrEmpty(stdout))
+                output += stdout;
+            if (!string.IsNullOrEmpty(stderr))
+                output += (string.IsNullOrEmpty(output) ? "" : "\n") + stderr;
+            if (string.IsNullOrEmpty(output))
+                output = "(no output)";
+
+            return $"Exit code: {proc.ExitCode}\n{output}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error executing command: {ex.Message}";
+        }
+    }
+
+    private string HandleCdCommand(string command)
+    {
+        var target = command.Length > 2 ? command[3..].Trim() : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(target))
+            target = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        try
+        {
+            var newDir = Path.GetFullPath(Path.Combine(ProjectRoot, target));
+            if (!Directory.Exists(newDir))
+            {
+                return $"Error: No such directory: {target}";
+            }
+
+            Directory.SetCurrentDirectory(newDir);
+            ProjectRootAccessor.ProjectRoot = newDir;
+
+            return $"Changed directory to {newDir}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: {ex.Message}";
         }
     }
 

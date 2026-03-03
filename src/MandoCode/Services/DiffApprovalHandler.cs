@@ -114,6 +114,87 @@ public class DiffApprovalHandler
         return Task.FromResult(result);
     }
 
+    public Task<DiffApprovalResult> HandleCommandApproval(string command)
+    {
+        // Stop the spinner so we have clean console output
+        _spinner.Stop();
+
+        // Render command panel — size to fit the command text
+        var contentWidth = command.Length + 5; // "│  $ " prefix
+        var boxWidth = Math.Max(50, contentWidth + 2); // +2 for padding before ┐/┘
+        var headerText = "\u250c\u2500 Command ";
+        var topPad = Math.Max(0, boxWidth - headerText.Length - 1); // -1 for ┐
+        var bottomPad = Math.Max(0, boxWidth - 1); // -1 for ┘
+
+        Console.WriteLine();
+        Console.WriteLine($"\u001b[33m{headerText}{new string('\u2500', topPad)}\u2510\u001b[0m");
+        Console.WriteLine("\u001b[33m\u2502\u001b[0m");
+        Console.WriteLine($"\u001b[33m\u2502\u001b[0m  $ {command}");
+        Console.WriteLine("\u001b[33m\u2502\u001b[0m");
+        Console.WriteLine($"\u001b[33m\u2514{new string('\u2500', bottomPad)}\u2518\u001b[0m");
+        Console.WriteLine();
+
+        // If globally bypassed, auto-approve
+        if (_globalWriteBypass)
+        {
+            AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved command[/]");
+            AnsiConsole.WriteLine();
+            _spinner.Start();
+            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+        }
+
+        var approvalChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Run this command?[/]")
+                .AddChoices(new[]
+                {
+                    "Approve",
+                    "Approve - okay to run commands don't ask me again",
+                    "Deny",
+                    "Provide new instructions"
+                })
+        );
+
+        DiffApprovalResult result;
+
+        if (approvalChoice == "Approve")
+        {
+            AnsiConsole.MarkupLine("[green]Command approved.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+        }
+        else if (approvalChoice.StartsWith("Approve - okay"))
+        {
+            AnsiConsole.MarkupLine("[green]Command approved.[/]");
+            _globalWriteBypass = true;
+            AnsiConsole.MarkupLine("[dim]All future writes, deletions, and commands will be auto-approved for this session.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+        }
+        else if (approvalChoice == "Deny")
+        {
+            AnsiConsole.MarkupLine("[red]Command denied.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else // "Provide new instructions"
+        {
+            var instructions = AnsiConsole.Prompt(
+                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            );
+            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+            result = new DiffApprovalResult
+            {
+                Response = DiffApprovalResponse.NewInstructions,
+                UserMessage = instructions
+            };
+        }
+
+        AnsiConsole.WriteLine();
+
+        // Resume spinner for the rest of the AI call
+        _spinner.Start();
+
+        return Task.FromResult(result);
+    }
+
     public Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
     {
         // Stop the spinner so we have clean console output
@@ -230,11 +311,27 @@ public class DiffApprovalHandler
         Console.WriteLine();
 
         var fileLink = FileLink(relativePath);
-        var header = $"\u250c\u2500 Diff: {fileLink} ";
-        // Calculate padding from visible text length (excluding OSC 8 escape sequences)
-        var visibleHeader = $"\u250c\u2500 Diff: {relativePath} ";
-        var padLen = Math.Max(0, 50 - visibleHeader.Length);
-        Console.WriteLine(header + new string('\u2500', padLen) + "\u2510");
+        var visibleLabel = $"Diff: {relativePath}";
+
+        // Measure content widths to size box dynamically
+        var summaryLabel = isNewFile ? " (new file)" : "";
+        var summaryLine = $"  {deletions} deletion(s), {additions} addition(s){summaryLabel}";
+        var maxContentWidth = Math.Max(visibleLabel.Length + 4, summaryLine.Length + 1);
+        foreach (var line in displayLines)
+        {
+            var num = (line.NewLineNumber ?? line.OldLineNumber)?.ToString("0000") ?? "    ";
+            var prefix = line.LineType == DiffLineType.Unchanged ? "   " : " - ";
+            if (line.LineType == DiffLineType.Added) prefix = " + ";
+            var lineWidth = 2 + num.Length + prefix.Length + line.Content.Length;
+            maxContentWidth = Math.Max(maxContentWidth, lineWidth);
+        }
+        var innerWidth = Math.Max(48, maxContentWidth + 2);
+
+        // Top border with rounded corner
+        var topLabel = $"\u256d\u2500 Diff: {fileLink} ";
+        var visibleTopLabel = $"\u256d\u2500 Diff: {relativePath} ";
+        var topPad = Math.Max(0, innerWidth - visibleTopLabel.Length);
+        Console.WriteLine(topLabel + new string('\u2500', topPad) + "\u256e");
         Console.WriteLine("\u2502");
 
         foreach (var line in displayLines)
@@ -267,9 +364,8 @@ public class DiffApprovalHandler
         }
 
         Console.WriteLine("\u2502");
-        var fileLabel = isNewFile ? " (new file)" : "";
-        Console.WriteLine($"\u2502  {deletions} deletion(s), {additions} addition(s){fileLabel}");
-        Console.WriteLine("\u2514" + new string('\u2500', Math.Max(padLen + header.Length - 1, 40)) + "\u2518");
+        Console.WriteLine($"\u2502{summaryLine}");
+        Console.WriteLine("\u2570" + new string('\u2500', innerWidth) + "\u256f");
         Console.WriteLine();
     }
 }

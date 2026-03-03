@@ -40,7 +40,7 @@ public class OperationDisplayRenderer
                 break;
 
             case "Read":
-                Console.WriteLine($"\u001b[1m● Read(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mRead(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 if (_config.EnableTokenTracking && _tokenTracker.LastOperation is { IsEstimate: true } readOp
                     && readOp.OperationLabel.StartsWith("Read"))
                 {
@@ -53,30 +53,48 @@ public class OperationDisplayRenderer
                 break;
 
             case "Delete":
-                Console.WriteLine($"\u001b[1m● Delete(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mDelete(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mDeleted {e.LineCount} lines\u001b[0m");
                 break;
 
             case "DeleteFolder":
-                Console.WriteLine($"\u001b[1m● DeleteFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mDeleteFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mDeleted folder and all contents\u001b[0m");
                 break;
 
             case "CreateFolder":
-                Console.WriteLine($"\u001b[1m● CreateFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mCreateFolder(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
                 Console.WriteLine($"  ⎿  \u001b[2mCreated directory\u001b[0m");
                 break;
 
             case "List":
-                Console.WriteLine($"\u001b[2m● Listed project files\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[2mListed project files\u001b[0m");
                 break;
 
             case "Glob":
-                Console.WriteLine($"\u001b[2m● Glob(\u001b[0m{e.FilePath}\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[2mGlob(\u001b[0m{e.FilePath}\u001b[2m)\u001b[0m");
                 break;
 
             case "Search":
-                Console.WriteLine($"\u001b[2m● Search(\u001b[0m\"{e.FilePath}\"\u001b[2m)\u001b[0m");
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[2mSearch(\u001b[0m\"{e.FilePath}\"\u001b[2m)\u001b[0m");
+                break;
+
+            case "Command":
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mCommand(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                if (!e.ApprovalWasShown && !string.IsNullOrEmpty(e.ContentPreview))
+                {
+                    var lines = e.ContentPreview.Split('\n');
+                    var maxLines = Math.Min(lines.Length, 10);
+                    for (int i = 0; i < maxLines; i++)
+                    {
+                        var display = lines[i].Length > 120 ? lines[i][..120] + "..." : lines[i];
+                        Console.WriteLine($"\u001b[2m     {display}\u001b[0m");
+                    }
+                    if (lines.Length > maxLines)
+                    {
+                        Console.WriteLine($"\u001b[2m     … +{lines.Length - maxLines} lines\u001b[0m");
+                    }
+                }
                 break;
         }
     }
@@ -86,7 +104,7 @@ public class OperationDisplayRenderer
     /// </summary>
     private void RenderWriteDisplay(OperationDisplayEvent e)
     {
-        Console.WriteLine($"\u001b[1m● Write(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+        Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mWrite(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
         Console.WriteLine($"  ⎿  \u001b[2mWrote {e.LineCount} lines to {FileLink(e.FilePath)}\u001b[0m");
 
         // Show content preview unless the user already reviewed the diff via approval
@@ -110,7 +128,7 @@ public class OperationDisplayRenderer
     /// </summary>
     private void RenderUpdateDisplay(OperationDisplayEvent e)
     {
-        Console.WriteLine($"\u001b[1m● Update(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
+        Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mUpdate(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
 
         // Build summary line: "Added N lines" / "Removed N lines" / "Added N, removed M lines"
         var parts = new List<string>();

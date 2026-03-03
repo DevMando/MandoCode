@@ -29,4 +29,18 @@ public record TokenUsageInfo
     /// True when the token count is an estimate (e.g. chars/4 heuristic) rather than a real count.
     /// </summary>
     public bool IsEstimate { get; init; }
+
+    /// <summary>
+    /// Time in seconds the model spent generating output tokens (from Ollama EvalDuration).
+    /// Null when unavailable or for estimated operations.
+    /// </summary>
+    public double? GenerationSeconds { get; init; }
+
+    /// <summary>
+    /// Tokens per second for output generation, or null if timing unavailable.
+    /// </summary>
+    public double? TokensPerSecond =>
+        GenerationSeconds is > 0 && CompletionTokens > 0
+            ? CompletionTokens / GenerationSeconds.Value
+            : null;
 }
