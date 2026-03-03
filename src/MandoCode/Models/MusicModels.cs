@@ -25,6 +25,7 @@ public record MusicTrackInfo
     public string Name { get; init; } = "";
     public string Genre { get; init; } = "";
     public string FileName { get; init; } = "";
+    public string ResourceName { get; init; } = "";
     public string FilePath { get; init; } = "";
     public TimeSpan Duration { get; init; }
 }

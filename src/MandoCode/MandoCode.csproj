@@ -5,6 +5,23 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- dotnet tool settings -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>mandocode</ToolCommandName>
+    <PackageId>MandoCode</PackageId>
+
+    <!-- NuGet metadata -->
+    <Version>0.9.0</Version>
+    <Authors>Armando Fernandez (DevMando)</Authors>
+    <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
+    <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DevMando/MandoCode</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>ai;cli;coding-assistant;ollama;semantic-kernel;local-llm</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>MC.png</PackageIcon>
+    <ApplicationIcon>MC.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,7 +35,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Audio\**\*.mp3" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Audio\**\*.mp3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="MC.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

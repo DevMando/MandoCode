@@ -10,13 +10,16 @@ namespace MandoCode.Services;
 public class MusicPlayerService : IDisposable
 {
     private readonly MandoCodeConfig _config;
-    private readonly string _audioBasePath;
+    private readonly System.Reflection.Assembly _assembly;
+    private readonly string _userMusicPath;
     private readonly Random _random = new();
     private readonly object _lock = new();
 
     private WaveOutEvent? _waveOut;
     private LoopStream? _loopStream;
-    private AudioFileReader? _audioFileReader;
+    private MemoryStream? _resourceStream;
+    private Mp3FileReader? _mp3Reader;
+    private WaveChannel32? _volumeChannel;
     private List<MusicTrackInfo> _tracks = new();
     private bool _disposed;
 
@@ -28,41 +31,82 @@ public class MusicPlayerService : IDisposable
     public bool AudioAvailable { get; private set; } = true;
     public string? AudioError { get; private set; }
 
+    public string UserMusicPath => _userMusicPath;
+
     public MusicPlayerService(MandoCodeConfig config)
     {
         _config = config;
+        _assembly = typeof(MusicPlayerService).Assembly;
+        _userMusicPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".mandocode", "music");
 
-        // Resolve audio path relative to the application binary
-        var appDir = AppContext.BaseDirectory;
-        _audioBasePath = Path.Combine(appDir, "Audio");
-
+        EnsureUserMusicFolders();
         DiscoverTracks();
     }
 
     /// <summary>
-    /// Discovers all MP3 files in Audio/lofi/ and Audio/synthwave/ directories.
+    /// Creates ~/.mandocode/music/lofi/ and ~/.mandocode/music/synthwave/ if they don't exist.
+    /// </summary>
+    private void EnsureUserMusicFolders()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_userMusicPath, "lofi"));
+            Directory.CreateDirectory(Path.Combine(_userMusicPath, "synthwave"));
+        }
+        catch { /* non-critical */ }
+    }
+
+    /// <summary>
+    /// Discovers MP3 tracks from embedded resources and the user's ~/.mandocode/music/ folder.
+    /// Embedded resource names follow: {RootNamespace}.Audio.{genre}.{filename}.mp3
+    /// User tracks follow: ~/.mandocode/music/{genre}/{filename}.mp3
     /// </summary>
     private void DiscoverTracks()
     {
         _tracks.Clear();
 
-        if (!Directory.Exists(_audioBasePath))
-            return;
-
-        foreach (var genreDir in Directory.GetDirectories(_audioBasePath))
+        // 1. Embedded resources (bundled defaults)
+        var prefix = "MandoCode.Audio.";
+        foreach (var resourceName in _assembly.GetManifestResourceNames())
         {
-            var genre = Path.GetFileName(genreDir).ToLowerInvariant();
-            var mp3Files = Directory.GetFiles(genreDir, "*.mp3", SearchOption.TopDirectoryOnly);
+            if (!resourceName.StartsWith(prefix) || !resourceName.EndsWith(".mp3"))
+                continue;
 
-            foreach (var mp3 in mp3Files)
+            var afterPrefix = resourceName[prefix.Length..];
+            var firstDot = afterPrefix.IndexOf('.');
+            if (firstDot < 0) continue;
+
+            var genre = afterPrefix[..firstDot];
+            var trackFile = afterPrefix[(firstDot + 1)..];
+            var trackName = Path.GetFileNameWithoutExtension(trackFile).Replace('_', ' ');
+
+            _tracks.Add(new MusicTrackInfo
             {
-                _tracks.Add(new MusicTrackInfo
+                Name = trackName,
+                Genre = genre,
+                FileName = trackFile,
+                ResourceName = resourceName
+            });
+        }
+
+        // 2. User's custom tracks from ~/.mandocode/music/{genre}/*.mp3
+        if (Directory.Exists(_userMusicPath))
+        {
+            foreach (var genreDir in Directory.GetDirectories(_userMusicPath))
+            {
+                var genre = Path.GetFileName(genreDir).ToLowerInvariant();
+                foreach (var mp3 in Directory.GetFiles(genreDir, "*.mp3", SearchOption.TopDirectoryOnly))
                 {
-                    Name = Path.GetFileNameWithoutExtension(mp3),
-                    Genre = genre,
-                    FileName = Path.GetFileName(mp3),
-                    FilePath = mp3
-                });
+                    _tracks.Add(new MusicTrackInfo
+                    {
+                        Name = Path.GetFileNameWithoutExtension(mp3),
+                        Genre = genre,
+                        FileName = Path.GetFileName(mp3),
+                        FilePath = mp3
+                    });
+                }
             }
         }
     }
@@ -105,7 +149,7 @@ public class MusicPlayerService : IDisposable
             genreTracks = _tracks.ToList();
             if (genreTracks.Count == 0)
             {
-                AudioError = "No MP3 files found. Add .mp3 files to Audio/lofi/ or Audio/synthwave/ directories.";
+                AudioError = $"No MP3 files found. Drop .mp3 files into ~/.mandocode/music/{{genre}}/ (e.g. {_userMusicPath}/lofi/)";
                 return false;
             }
         }
@@ -114,7 +158,7 @@ public class MusicPlayerService : IDisposable
         MusicTrackInfo track;
         if (genreTracks.Count > 1 && CurrentTrack != null)
         {
-            var candidates = genreTracks.Where(t => t.FilePath != CurrentTrack.FilePath).ToList();
+            var candidates = genreTracks.Where(t => t != CurrentTrack).ToList();
             track = candidates[_random.Next(candidates.Count)];
         }
         else
@@ -126,7 +170,7 @@ public class MusicPlayerService : IDisposable
     }
 
     /// <summary>
-    /// Plays a specific track with looped playback.
+    /// Plays a specific track with looped playback. Supports both embedded resources and local files.
     /// </summary>
     private bool PlayTrack(MusicTrackInfo track)
     {
@@ -137,9 +181,33 @@ public class MusicPlayerService : IDisposable
 
             try
             {
-                _audioFileReader = new AudioFileReader(track.FilePath);
-                _audioFileReader.Volume = _config.Music.Volume;
-                _loopStream = new LoopStream(_audioFileReader);
+                if (!string.IsNullOrEmpty(track.FilePath))
+                {
+                    // Local file track
+                    _mp3Reader = new Mp3FileReader(track.FilePath);
+                }
+                else
+                {
+                    // Embedded resource track
+                    var stream = _assembly.GetManifestResourceStream(track.ResourceName);
+                    if (stream == null)
+                    {
+                        AudioError = $"Embedded audio resource not found: {track.ResourceName}";
+                        return false;
+                    }
+
+                    // Copy to MemoryStream for seeking support (required for looping)
+                    _resourceStream = new MemoryStream();
+                    stream.CopyTo(_resourceStream);
+                    _resourceStream.Position = 0;
+                    stream.Dispose();
+
+                    _mp3Reader = new Mp3FileReader(_resourceStream);
+                }
+
+                _volumeChannel = new WaveChannel32(_mp3Reader);
+                _volumeChannel.Volume = _config.Music.Volume;
+                _loopStream = new LoopStream(_volumeChannel);
 
                 _waveOut = new WaveOutEvent();
                 _waveOut.Init(_loopStream);
@@ -189,14 +257,18 @@ public class MusicPlayerService : IDisposable
             _waveOut?.Stop();
             _waveOut?.Dispose();
             _loopStream?.Dispose();
-            _audioFileReader?.Dispose();
+            _volumeChannel?.Dispose();
+            _mp3Reader?.Dispose();
+            _resourceStream?.Dispose();
         }
         catch { /* Swallow disposal errors */ }
         finally
         {
             _waveOut = null;
             _loopStream = null;
-            _audioFileReader = null;
+            _volumeChannel = null;
+            _mp3Reader = null;
+            _resourceStream = null;
         }
     }
 
@@ -242,9 +314,9 @@ public class MusicPlayerService : IDisposable
 
         lock (_lock)
         {
-            if (_audioFileReader != null)
+            if (_volumeChannel != null)
             {
-                _audioFileReader.Volume = volume;
+                _volumeChannel.Volume = volume;
             }
         }
 
