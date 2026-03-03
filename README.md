@@ -1,11 +1,16 @@
+<p align="center">
+  <img src="docs/images/MC.png" alt="MandoCode Logo" width="120">
+</p>
+
 <h1 align="center">MandoCode</h1>
 
 <p align="center">
-  <strong>Your AI coding assistant that runs entirely on your machine.</strong><br>
-  No API keys. No cloud. No tokens. Just you and your code.
+  <strong>Your AI coding assistant — run locally or in the cloud with Ollama.</strong><br>
+  No API keys required. Just you and your code.
 </p>
 
 <p align="center">
+  <a href="https://www.nuget.org/packages/MandoCode"><img src="https://img.shields.io/nuget/v/MandoCode?logo=nuget&color=blue" alt="NuGet"></a>
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
   <img src="https://img.shields.io/badge/.NET-8.0-blueviolet?logo=dotnet" alt=".NET 8.0">
   <img src="https://img.shields.io/badge/Ollama-Local%20LLM-black?logo=ollama" alt="Ollama">
@@ -17,17 +22,24 @@
   <img src="docs/images/hero-demo.gif" alt="MandoCode in action" width="800">
 </p>
 
-MandoCode is a fully local AI coding assistant powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). It gives you Claude-Code-style project awareness — reading, writing, searching, and planning across your entire codebase — without ever leaving your terminal or sending data to the cloud.
+MandoCode is an AI coding assistant powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). Run locally or connect to Ollama cloud — no API keys required. It gives you Claude-Code-style project awareness — reading, writing, searching, and planning across your entire codebase — without ever leaving your terminal.
 
 It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
 ---
 
-## Quick Start
+## Install
 
 ```bash
 # Prerequisites: .NET 8.0 SDK + Ollama installed and running
 
+dotnet tool install -g MandoCode
+mandocode
+```
+
+### Or build from source
+
+```bash
 git clone https://github.com/DevMando/MandoCode.git
 cd MandoCode
 dotnet build src/MandoCode/MandoCode.csproj
