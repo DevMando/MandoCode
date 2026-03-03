@@ -56,6 +56,12 @@ Implemented in `Components/App.razor` via `HandleShellCommand()`. Type `!<cmd>` 
 
 Implemented via `SetTaskbarProgress()`, `SetTaskbarIndeterminate()`, `SetTaskbarError()`, and `ClearTaskbarProgress()` helpers in `Components/App.razor`. Windows Terminal taskbar icon pulses during AI requests and fills step-by-step during task plan execution. Shows error state on step failure.
 
+### Web Search & Page Fetching
+
+**Status:** Shipped
+
+Implemented in `Plugins/WebSearchPlugin.cs` using `HttpClient` and `HtmlAgilityPack`. Two kernel functions: `search_web` (DuckDuckGo HTML search — parses titles, URLs, and snippets, unwraps `uddg=` redirect URLs) and `fetch_webpage` (fetches a URL, strips non-content HTML elements, extracts and collapses body text). No API keys or paid services required. Configurable via `enableWebSearch`. Full UI integration with `WebSearch(...)` and `WebFetch(...)` operation displays, function descriptions, and token tracking.
+
 ---
 
 ## Planned Features

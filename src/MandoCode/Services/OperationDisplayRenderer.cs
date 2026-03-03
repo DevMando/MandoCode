@@ -96,6 +96,42 @@ public class OperationDisplayRenderer
                     }
                 }
                 break;
+
+            case "WebSearch":
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mWebSearch(\u001b[0m\"{e.FilePath}\"\u001b[1m)\u001b[0m");
+                if (!string.IsNullOrEmpty(e.ContentPreview))
+                {
+                    var searchLines = e.ContentPreview.Split('\n');
+                    var maxSearchLines = Math.Min(searchLines.Length, 5);
+                    for (int i = 0; i < maxSearchLines; i++)
+                    {
+                        var display = searchLines[i].Length > 120 ? searchLines[i][..120] + "..." : searchLines[i];
+                        Console.WriteLine($"\u001b[2m     {display}\u001b[0m");
+                    }
+                    if (searchLines.Length > maxSearchLines)
+                    {
+                        Console.WriteLine($"\u001b[2m     … +{searchLines.Length - maxSearchLines} lines\u001b[0m");
+                    }
+                }
+                break;
+
+            case "WebFetch":
+                Console.WriteLine($"\u001b[32m●\u001b[0m \u001b[1mWebFetch(\u001b[0m{e.FilePath}\u001b[1m)\u001b[0m");
+                if (!string.IsNullOrEmpty(e.ContentPreview))
+                {
+                    var fetchLines = e.ContentPreview.Split('\n');
+                    var maxFetchLines = Math.Min(fetchLines.Length, 5);
+                    for (int i = 0; i < maxFetchLines; i++)
+                    {
+                        var display = fetchLines[i].Length > 120 ? fetchLines[i][..120] + "..." : fetchLines[i];
+                        Console.WriteLine($"\u001b[2m     {display}\u001b[0m");
+                    }
+                    if (fetchLines.Length > maxFetchLines)
+                    {
+                        Console.WriteLine($"\u001b[2m     … +{fetchLines.Length - maxFetchLines} lines\u001b[0m");
+                    }
+                }
+                break;
         }
     }
 

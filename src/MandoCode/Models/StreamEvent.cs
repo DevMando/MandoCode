@@ -43,7 +43,7 @@ public class FunctionExecutionResult : StreamEvent
 public class OperationDisplayEvent : StreamEvent
 {
     /// <summary>
-    /// Type of operation: Write, Update, Read, Delete, CreateFolder, Search, List, Glob
+    /// Type of operation: Write, Update, Read, Delete, CreateFolder, Search, List, Glob, WebSearch, WebFetch
     /// </summary>
     public string OperationType { get; set; } = string.Empty;
 
