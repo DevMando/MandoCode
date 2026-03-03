@@ -9,7 +9,9 @@
             PlayMatrixGlitch();
         }
 
-        var gradientText = BuildGradientBanner();
+        var version = typeof(Program).Assembly.GetName().Version;
+        var versionStr = version != null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "";
+        var gradientText = BuildGradientBanner(versionStr);
 
         // Animation: (eyeColor, wavePhase)
         // wavePhase 0 = no howl waves, 1-3 = expanding waves
@@ -165,7 +167,7 @@
         );
     }
 
-    private static string BuildGradientBanner()
+    private static string BuildGradientBanner(string version)
     {
         int maxWidth = _figletLines.Max(l => l.Length);
         var sb = new System.Text.StringBuilder();
@@ -199,6 +201,15 @@
 
             if (row < _figletLines.Length - 1)
                 sb.Append('\n');
+        }
+
+        // Version tag right-aligned under the figlet
+        if (!string.IsNullOrEmpty(version))
+        {
+            var pad = Math.Max(0, maxWidth - version.Length);
+            sb.Append('\n');
+            sb.Append(new string(' ', pad));
+            sb.Append($"[rgb(140,100,200)]{version}[/]");
         }
 
         return sb.ToString();

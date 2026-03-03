@@ -91,7 +91,7 @@ public static class MusicPlayerUI
         if (tracks.Count == 0)
         {
             Console.WriteLine($"  {LabelClr}No tracks found.{Rst}");
-            Console.WriteLine($"  {DimClr}Add .mp3 files to Audio/lofi/ or Audio/synthwave/ directories.{Rst}");
+            Console.WriteLine($"  {DimClr}Drop .mp3 files into ~/.mandocode/music/lofi/ or ~/.mandocode/music/synthwave/{Rst}");
             Console.WriteLine();
             return;
         }
@@ -107,7 +107,7 @@ public static class MusicPlayerUI
 
             foreach (var track in group)
             {
-                var playing = player.CurrentTrack?.FilePath == track.FilePath;
+                var playing = player.CurrentTrack == track;
                 var marker = playing ? $"{StateClr}\u25b6" : " ";
                 Console.WriteLine($"  {Border}\u2502 {marker} {TrackClr}\u266b {track.Name}{Rst}");
             }

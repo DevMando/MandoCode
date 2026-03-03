@@ -23,8 +23,8 @@ public static class LearnContent
                 new Markup("Large language models with [bold]publicly available weights[/] that run on your own machine."),
                 new Markup("Unlike cloud AI (ChatGPT, Claude), they are [green]free[/], [green]private[/], and [green]offline[/]."),
                 new Markup(""),
-                new Markup("Open-weight models give you full control — no API keys, no usage limits,"),
-                new Markup("no data leaving your computer. Your code stays on your machine.")
+                new Markup("Open-weight models give you full control — no API keys, no usage limits."),
+                new Markup("Run locally or use Ollama cloud. Your code, your choice.")
             ))
         {
             Border = BoxBorder.Rounded,
