@@ -406,6 +406,24 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     ApprovalWasShown = approvalWasShown
                 };
 
+            case "search_web":
+                arguments.TryGetValue("query", out var webQuery);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "WebSearch",
+                    FilePath = webQuery?.ToString() ?? "",
+                    ContentPreview = resultStr.Length > 500 ? resultStr[..500] + "..." : resultStr
+                };
+
+            case "fetch_webpage":
+                arguments.TryGetValue("url", out var webUrl);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "WebFetch",
+                    FilePath = webUrl?.ToString() ?? "",
+                    ContentPreview = resultStr.Length > 500 ? resultStr[..500] + "..." : resultStr
+                };
+
             default:
                 return null;
         }
@@ -695,6 +713,25 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             }
         }
 
+        if (pluginName == "WebSearch")
+        {
+            switch (functionName)
+            {
+                case "search_web":
+                    if (arguments.TryGetValue("query", out var searchQuery))
+                        return $"Searching the web for \"{searchQuery}\"";
+                    return "Searching the web";
+
+                case "fetch_webpage":
+                    if (arguments.TryGetValue("url", out var fetchUrl))
+                        return $"Fetching {fetchUrl}";
+                    return "Fetching webpage";
+
+                default:
+                    return $"{functionName}";
+            }
+        }
+
         return $"{pluginName ?? "Unknown"}.{functionName ?? "Unknown"}";
     }
 
@@ -798,6 +835,20 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
                     {
                         _tokenTracker.RecordEstimatedUsage(resultStr.Length, "List");
+                    }
+                    break;
+
+                case "search_web":
+                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
+                    {
+                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "WebSearch");
+                    }
+                    break;
+
+                case "fetch_webpage":
+                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
+                    {
+                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "WebFetch");
                     }
                     break;
             }

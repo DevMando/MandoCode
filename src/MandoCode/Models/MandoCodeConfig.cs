@@ -111,6 +111,13 @@ public class MandoCodeConfig
     public bool EnableThemeCustomization { get; set; } = true;
 
     /// <summary>
+    /// Enable web search and page fetching capabilities.
+    /// When enabled, the AI can search DuckDuckGo and fetch web pages.
+    /// </summary>
+    [JsonPropertyName("enableWebSearch")]
+    public bool EnableWebSearch { get; set; } = true;
+
+    /// <summary>
     /// Music player preferences (volume, genre, autoplay).
     /// </summary>
     [JsonPropertyName("music")]
@@ -250,6 +257,7 @@ public class MandoCodeConfig
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
         Console.WriteLine($"  Theme Customization: {(EnableThemeCustomization ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  Web Search: {(EnableWebSearch ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Music Volume: {(int)(Music.Volume * 100)}%  Genre: {Music.Genre}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");
     }

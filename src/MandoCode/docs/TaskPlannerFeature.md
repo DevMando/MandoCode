@@ -91,6 +91,7 @@ When a user includes `@file` references in a complex request, the file content i
 | `Services/FileAutocompleteProvider.cs` | File content reading for `@` references (used before planning) |
 | `Models/TaskPlan.cs` | Data models for plans and steps |
 | `Models/TaskProgressEvent.cs` | Progress event types for UI updates |
+| `Plugins/WebSearchPlugin.cs` | Web search and page fetching (search_web, fetch_webpage) |
 | `Models/SystemPrompts.cs` | Planning prompt, assistant prompt, learn mode prompt |
 
 ### TaskPlan Model

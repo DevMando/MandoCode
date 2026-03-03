@@ -191,6 +191,7 @@ class Program
         Console.WriteLine("  • taskPlanning    - Enable/disable task planning (true/false)");
         Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
         Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
+        Console.WriteLine("  • webSearch          - Enable/disable web search capabilities (true/false)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode --config show");
@@ -282,6 +283,20 @@ class Program
                 {
                     config.EnableThemeCustomization = enableTheme;
                     Console.WriteLine($"✓ Theme customization {(enableTheme ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
+                    return;
+                }
+                break;
+
+            case "websearch":
+            case "enablewebsearch":
+                if (bool.TryParse(value, out var enableWebSearch))
+                {
+                    config.EnableWebSearch = enableWebSearch;
+                    Console.WriteLine($"✓ Web search {(enableWebSearch ? "enabled" : "disabled")}");
                 }
                 else
                 {

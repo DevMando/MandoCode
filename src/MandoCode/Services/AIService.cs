@@ -156,6 +156,11 @@ public class AIService
 
         builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
 
+        if (_config.EnableWebSearch)
+        {
+            builder.Plugins.AddFromObject(new WebSearchPlugin(), "WebSearch");
+        }
+
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
