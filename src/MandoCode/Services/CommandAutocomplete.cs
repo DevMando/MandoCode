@@ -55,7 +55,6 @@ public static class CommandAutocomplete
         List<string> filteredCommands = new();
         List<string> filteredFiles = new();
         int atAnchorPos = -1;
-        string? pastedFullText = null; // holds full content when paste is detected
 
         while (true)
         {
@@ -103,7 +102,7 @@ public static class CommandAutocomplete
                         if (autocompleteMode != AutocompleteMode.None)
                             ClearAutocompleteDisplay(ref cursorTop);
                         Console.WriteLine();
-                        return pastedFullText ?? input.ToString();
+                        return input.ToString();
                     }
 
                 case ConsoleKey.Tab:
@@ -177,24 +176,6 @@ public static class CommandAutocomplete
                     continue;
 
                 case ConsoleKey.Backspace:
-                    if (pastedFullText != null)
-                    {
-                        // Clear the entire paste — start fresh
-                        pastedFullText = null;
-                        input.Clear();
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        if (autocompleteMode != AutocompleteMode.None)
-                        {
-                            ClearAutocompleteDisplay(ref cursorTop);
-                            Console.SetCursorPosition(cursorLeft, cursorTop);
-                        }
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
-                        continue;
-                    }
                     if (input.Length > 0)
                     {
                         input.Length--;
@@ -281,38 +262,34 @@ public static class CommandAutocomplete
                         // Detect paste: if more characters are immediately buffered, consume them all
                         if (Console.KeyAvailable)
                         {
-                            var pasteChars = new StringBuilder();
-                            pasteChars.Append(key.KeyChar);
+                            var bufferedChars = new List<char>();
+                            bufferedChars.Add(key.KeyChar);
 
                             while (Console.KeyAvailable)
                             {
                                 var pk = Console.ReadKey(intercept: true);
                                 if (pk.Key == ConsoleKey.Enter || pk.KeyChar == '\n' || pk.KeyChar == '\r')
-                                    pasteChars.Append(' '); // newlines → spaces
+                                    bufferedChars.Add(' '); // newlines → spaces
                                 else if (!char.IsControl(pk.KeyChar))
-                                    pasteChars.Append(pk.KeyChar);
+                                    bufferedChars.Add(pk.KeyChar);
                             }
 
-                            // Store full content: any text typed before + pasted chars
-                            var beforePaste = input.ToString();
-                            pastedFullText = beforePaste + pasteChars.ToString();
+                            // Only treat as paste if 5+ chars arrived at once; otherwise it's fast typing
+                            // Append all buffered chars normally (whether fast typing or paste)
+                            foreach (var c in bufferedChars)
+                            {
+                                input.Append(c);
+                                Console.Write(c);
+                            }
 
-                            // Update display to show summary
-                            input.Clear();
-                            input.Append($"[pasted {pastedFullText.Length} characters]");
-
-                            // Close any autocomplete
+                            // Close any autocomplete if open
                             if (autocompleteMode != AutocompleteMode.None)
+                            {
                                 ClearAutocompleteDisplay(ref cursorTop);
-                            autocompleteMode = AutocompleteMode.None;
-                            atAnchorPos = -1;
-                            selectedIndex = 0;
-
-                            // Redraw input line with paste summary
-                            Console.SetCursorPosition(cursorLeft, cursorTop);
-                            Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-                            Console.SetCursorPosition(cursorLeft, cursorTop);
-                            Console.Write(input.ToString());
+                                autocompleteMode = AutocompleteMode.None;
+                                atAnchorPos = -1;
+                                selectedIndex = 0;
+                            }
                             continue;
                         }
 
