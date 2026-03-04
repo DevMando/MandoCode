@@ -43,6 +43,38 @@ public static class CommandAutocomplete
     }
 
     /// <summary>
+    /// Redraws the entire input line and positions the console cursor.
+    /// Handles input that exceeds the terminal width by accounting for line wrapping.
+    /// </summary>
+    private static void RedrawInput(StringBuilder input, int cursorLeft, ref int cursorTop, int cursorPos)
+    {
+        var width = Console.WindowWidth;
+
+        // Calculate how many rows the old content might have occupied and clear them
+        // We clear from cursorTop to the end of the screen to handle shrinking input too
+        Console.SetCursorPosition(cursorLeft, cursorTop);
+        Console.Write("\x1b[J"); // clear from cursor to end of screen
+
+        // Write the input text (may wrap across multiple rows)
+        Console.SetCursorPosition(cursorLeft, cursorTop);
+        Console.Write(input.ToString());
+
+        // Position cursor accounting for wrapping
+        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+    }
+
+    /// <summary>
+    /// Positions the console cursor to match the logical cursor position in the input,
+    /// accounting for line wrapping when input exceeds terminal width.
+    /// </summary>
+    private static void SetCursorToPos(int cursorLeft, int cursorTop, int cursorPos)
+    {
+        var width = Console.WindowWidth;
+        var absolutePos = cursorLeft + cursorPos;
+        Console.SetCursorPosition(absolutePos % width, cursorTop + absolutePos / width);
+    }
+
+    /// <summary>
     /// Gets a command input from the user with autocomplete support.
     /// </summary>
     public static string ReadLineWithAutocomplete()
@@ -50,6 +82,7 @@ public static class CommandAutocomplete
         var input = new StringBuilder();
         var cursorLeft = Console.CursorLeft;
         var cursorTop = Console.CursorTop;
+        var cursorPos = 0;
         var autocompleteMode = AutocompleteMode.None;
         var selectedIndex = 0;
         List<string> filteredCommands = new();
@@ -69,6 +102,7 @@ public static class CommandAutocomplete
                         // Auto-complete with selected command
                         input.Clear();
                         input.Append(filteredCommands[selectedIndex]);
+                        cursorPos = input.Length;
                         ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
                         Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
@@ -85,11 +119,13 @@ public static class CommandAutocomplete
                             // Directory selected — drill into it
                             DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
                                 ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
+                            cursorPos = input.Length;
                         }
                         else
                         {
                             // Insert selected file path — do NOT submit
                             InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
+                            cursorPos = input.Length;
                             autocompleteMode = AutocompleteMode.None;
                             atAnchorPos = -1;
                             selectedIndex = 0;
@@ -98,7 +134,7 @@ public static class CommandAutocomplete
                     }
                     else
                     {
-                        // Submit the input — use full pasted content if available
+                        // Submit the input
                         if (autocompleteMode != AutocompleteMode.None)
                             ClearAutocompleteDisplay(ref cursorTop);
                         Console.WriteLine();
@@ -111,6 +147,7 @@ public static class CommandAutocomplete
                         // Auto-complete with selected command
                         input.Clear();
                         input.Append(filteredCommands[selectedIndex]);
+                        cursorPos = input.Length;
                         ClearAutocompleteDisplay(ref cursorTop);
                         Console.SetCursorPosition(cursorLeft, cursorTop);
                         Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
@@ -126,11 +163,13 @@ public static class CommandAutocomplete
                             // Directory selected — drill into it
                             DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
                                 ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
+                            cursorPos = input.Length;
                         }
                         else
                         {
                             // Insert selected file path — do NOT submit
                             InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
+                            cursorPos = input.Length;
                             autocompleteMode = AutocompleteMode.None;
                             atAnchorPos = -1;
                             selectedIndex = 0;
@@ -138,16 +177,70 @@ public static class CommandAutocomplete
                     }
                     continue;
 
+                case ConsoleKey.LeftArrow:
+                    if (cursorPos > 0)
+                    {
+                        if (autocompleteMode != AutocompleteMode.None)
+                        {
+                            ClearAutocompleteDisplay(ref cursorTop);
+                            autocompleteMode = AutocompleteMode.None;
+                            atAnchorPos = -1;
+                            selectedIndex = 0;
+                        }
+                        cursorPos--;
+                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                    }
+                    continue;
+
+                case ConsoleKey.RightArrow:
+                    if (cursorPos < input.Length)
+                    {
+                        if (autocompleteMode != AutocompleteMode.None)
+                        {
+                            ClearAutocompleteDisplay(ref cursorTop);
+                            autocompleteMode = AutocompleteMode.None;
+                            atAnchorPos = -1;
+                            selectedIndex = 0;
+                        }
+                        cursorPos++;
+                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                    }
+                    continue;
+
+                case ConsoleKey.Home:
+                    if (autocompleteMode != AutocompleteMode.None)
+                    {
+                        ClearAutocompleteDisplay(ref cursorTop);
+                        autocompleteMode = AutocompleteMode.None;
+                        atAnchorPos = -1;
+                        selectedIndex = 0;
+                    }
+                    cursorPos = 0;
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    continue;
+
+                case ConsoleKey.End:
+                    if (autocompleteMode != AutocompleteMode.None)
+                    {
+                        ClearAutocompleteDisplay(ref cursorTop);
+                        autocompleteMode = AutocompleteMode.None;
+                        atAnchorPos = -1;
+                        selectedIndex = 0;
+                    }
+                    cursorPos = input.Length;
+                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                    continue;
+
                 case ConsoleKey.UpArrow:
                     if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
                     {
                         selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredCommands.Count - 1;
-                        DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
                     }
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
                         selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredFiles.Count - 1;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                     }
                     continue;
 
@@ -155,12 +248,12 @@ public static class CommandAutocomplete
                     if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
                     {
                         selectedIndex = (selectedIndex + 1) % filteredCommands.Count;
-                        DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
                     }
                     else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
                     {
                         selectedIndex = (selectedIndex + 1) % filteredFiles.Count;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                     }
                     continue;
 
@@ -168,91 +261,37 @@ public static class CommandAutocomplete
                     if (autocompleteMode != AutocompleteMode.None)
                     {
                         ClearAutocompleteDisplay(ref cursorTop);
-                        Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
                         autocompleteMode = AutocompleteMode.None;
                         atAnchorPos = -1;
                         selectedIndex = 0;
                     }
                     continue;
 
-                case ConsoleKey.Backspace:
-                    if (input.Length > 0)
+                case ConsoleKey.Delete:
+                    if (cursorPos < input.Length)
                     {
-                        input.Length--;
+                        input.Remove(cursorPos, 1);
+                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
 
-                        // Update display
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        // Update autocomplete state after deletion
+                        UpdateAutocompleteAfterEdit(input, cursorLeft, ref cursorTop, cursorPos,
+                            ref autocompleteMode, ref atAnchorPos, ref selectedIndex,
+                            ref filteredCommands, ref filteredFiles);
+                    }
+                    continue;
 
-                        if (input.Length > 0)
-                        {
-                            Console.Write(input.ToString());
-                        }
+                case ConsoleKey.Backspace:
+                    if (cursorPos > 0)
+                    {
+                        cursorPos--;
+                        input.Remove(cursorPos, 1);
+                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
 
-                        // Update autocomplete state
-                        if (autocompleteMode == AutocompleteMode.File)
-                        {
-                            if (atAnchorPos >= input.Length)
-                            {
-                                // Deleted back to or past the @
-                                ClearAutocompleteDisplay(ref cursorTop);
-                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
-                                autocompleteMode = AutocompleteMode.None;
-                                atAnchorPos = -1;
-                                selectedIndex = 0;
-                            }
-                            else
-                            {
-                                // Re-filter with updated fragment
-                                var fragment = input.ToString().Substring(atAnchorPos + 1);
-                                filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
-                                if (filteredFiles.Any())
-                                {
-                                    selectedIndex = Math.Min(selectedIndex, filteredFiles.Count - 1);
-                                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                                }
-                                else
-                                {
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
-                                    autocompleteMode = AutocompleteMode.None;
-                                    atAnchorPos = -1;
-                                    selectedIndex = 0;
-                                }
-                            }
-                        }
-                        else if (input.Length > 0 && input[0] == '/')
-                        {
-                            filteredCommands = FilterCommands(input.ToString());
-                            if (filteredCommands.Any())
-                            {
-                                if (autocompleteMode != AutocompleteMode.None)
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                autocompleteMode = AutocompleteMode.Command;
-                                selectedIndex = Math.Min(selectedIndex, filteredCommands.Count - 1);
-                                DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
-                            }
-                            else
-                            {
-                                if (autocompleteMode != AutocompleteMode.None)
-                                {
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
-                                }
-                                autocompleteMode = AutocompleteMode.None;
-                            }
-                        }
-                        else
-                        {
-                            if (autocompleteMode != AutocompleteMode.None)
-                            {
-                                ClearAutocompleteDisplay(ref cursorTop);
-                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
-                            }
-                            autocompleteMode = AutocompleteMode.None;
-                            selectedIndex = 0;
-                        }
+                        // Update autocomplete state after deletion
+                        UpdateAutocompleteAfterEdit(input, cursorLeft, ref cursorTop, cursorPos,
+                            ref autocompleteMode, ref atAnchorPos, ref selectedIndex,
+                            ref filteredCommands, ref filteredFiles);
                     }
                     continue;
 
@@ -274,13 +313,11 @@ public static class CommandAutocomplete
                                     bufferedChars.Add(pk.KeyChar);
                             }
 
-                            // Only treat as paste if 5+ chars arrived at once; otherwise it's fast typing
-                            // Append all buffered chars normally (whether fast typing or paste)
-                            foreach (var c in bufferedChars)
-                            {
-                                input.Append(c);
-                                Console.Write(c);
-                            }
+                            // Insert all buffered chars at cursor position
+                            var text = new string(bufferedChars.ToArray());
+                            input.Insert(cursorPos, text);
+                            cursorPos += bufferedChars.Count;
+                            RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
 
                             // Close any autocomplete if open
                             if (autocompleteMode != AutocompleteMode.None)
@@ -293,15 +330,26 @@ public static class CommandAutocomplete
                             continue;
                         }
 
-                        input.Append(key.KeyChar);
-                        Console.Write(key.KeyChar);
+                        // Single character — insert at cursor position
+                        input.Insert(cursorPos, key.KeyChar);
+                        cursorPos++;
+
+                        // If inserting at end, just write the char; otherwise redraw from cursor
+                        if (cursorPos == input.Length)
+                        {
+                            Console.Write(key.KeyChar);
+                        }
+                        else
+                        {
+                            RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
+                        }
 
                         // Check for @ trigger: @ preceded by space or at position 0
                         if (key.KeyChar == '@' && _fileProvider != null
                             && autocompleteMode != AutocompleteMode.File
-                            && (input.Length == 1 || input[input.Length - 2] == ' '))
+                            && (cursorPos == 1 || input[cursorPos - 2] == ' '))
                         {
-                            atAnchorPos = input.Length - 1;
+                            atAnchorPos = cursorPos - 1;
                             filteredFiles = _fileProvider.FilterFiles("");
                             if (filteredFiles.Any())
                             {
@@ -309,7 +357,7 @@ public static class CommandAutocomplete
                                     ClearAutocompleteDisplay(ref cursorTop);
                                 autocompleteMode = AutocompleteMode.File;
                                 selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                             }
                         }
                         else if (autocompleteMode == AutocompleteMode.File && atAnchorPos >= 0)
@@ -321,12 +369,12 @@ public static class CommandAutocomplete
                             {
                                 ClearAutocompleteDisplay(ref cursorTop);
                                 selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                             }
                             else
                             {
                                 ClearAutocompleteDisplay(ref cursorTop);
-                                Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
                                 autocompleteMode = AutocompleteMode.None;
                                 atAnchorPos = -1;
                                 selectedIndex = 0;
@@ -342,14 +390,14 @@ public static class CommandAutocomplete
                                     ClearAutocompleteDisplay(ref cursorTop);
                                 autocompleteMode = AutocompleteMode.Command;
                                 selectedIndex = 0;
-                                DisplayAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredCommands, selectedIndex);
+                                DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
                             }
                             else
                             {
                                 if (autocompleteMode != AutocompleteMode.None)
                                 {
                                     ClearAutocompleteDisplay(ref cursorTop);
-                                    Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
                                 }
                                 autocompleteMode = AutocompleteMode.None;
                             }
@@ -358,12 +406,84 @@ public static class CommandAutocomplete
                         {
                             // Was in command mode but input no longer starts with /
                             ClearAutocompleteDisplay(ref cursorTop);
-                            Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
+                            SetCursorToPos(cursorLeft, cursorTop, cursorPos);
                             autocompleteMode = AutocompleteMode.None;
                         }
                     }
                     break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Updates autocomplete state after a character deletion (Backspace or Delete).
+    /// </summary>
+    private static void UpdateAutocompleteAfterEdit(
+        StringBuilder input, int cursorLeft, ref int cursorTop, int cursorPos,
+        ref AutocompleteMode autocompleteMode, ref int atAnchorPos, ref int selectedIndex,
+        ref List<string> filteredCommands, ref List<string> filteredFiles)
+    {
+        if (autocompleteMode == AutocompleteMode.File)
+        {
+            if (atAnchorPos >= input.Length)
+            {
+                // Deleted back to or past the @
+                ClearAutocompleteDisplay(ref cursorTop);
+                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                autocompleteMode = AutocompleteMode.None;
+                atAnchorPos = -1;
+                selectedIndex = 0;
+            }
+            else
+            {
+                // Re-filter with updated fragment
+                var fragment = input.ToString().Substring(atAnchorPos + 1);
+                filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
+                if (filteredFiles.Any())
+                {
+                    selectedIndex = Math.Min(selectedIndex, filteredFiles.Count - 1);
+                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                }
+                else
+                {
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                    autocompleteMode = AutocompleteMode.None;
+                    atAnchorPos = -1;
+                    selectedIndex = 0;
+                }
+            }
+        }
+        else if (input.Length > 0 && input[0] == '/')
+        {
+            filteredCommands = FilterCommands(input.ToString());
+            if (filteredCommands.Any())
+            {
+                if (autocompleteMode != AutocompleteMode.None)
+                    ClearAutocompleteDisplay(ref cursorTop);
+                autocompleteMode = AutocompleteMode.Command;
+                selectedIndex = Math.Min(selectedIndex, filteredCommands.Count - 1);
+                DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
+            }
+            else
+            {
+                if (autocompleteMode != AutocompleteMode.None)
+                {
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+                }
+                autocompleteMode = AutocompleteMode.None;
+            }
+        }
+        else
+        {
+            if (autocompleteMode != AutocompleteMode.None)
+            {
+                ClearAutocompleteDisplay(ref cursorTop);
+                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+            }
+            autocompleteMode = AutocompleteMode.None;
+            selectedIndex = 0;
         }
     }
 
@@ -460,7 +580,7 @@ public static class CommandAutocomplete
     /// <summary>
     /// Displays the command autocomplete dropdown.
     /// </summary>
-    private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> commands, int selectedIndex)
+    private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos, List<string> commands, int selectedIndex)
     {
         var totalLines = commands.Count + 3; // header + commands + footer + help
 
@@ -495,7 +615,7 @@ public static class CommandAutocomplete
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
         // Restore cursor to the input line
-        Console.SetCursorPosition(cursorLeft + inputLength, cursorTop);
+        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
 
     /// <summary>
@@ -515,7 +635,7 @@ public static class CommandAutocomplete
     /// and use cyan styling to distinguish them from files (yellow).
     /// browsePrefix is stripped from display paths to avoid redundant parent directories.
     /// </summary>
-    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int inputLength, List<string> files, int selectedIndex, string browsePrefix = "")
+    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos, List<string> files, int selectedIndex, string browsePrefix = "")
     {
         var totalLines = files.Count + 3; // header + files + footer + help
 
@@ -600,7 +720,7 @@ public static class CommandAutocomplete
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
         // Restore cursor to the input line
-        Console.SetCursorPosition(cursorLeft + inputLength, cursorTop);
+        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
 
     /// <summary>
