@@ -41,6 +41,11 @@
     }
 </Rows>
 
+@* Chat history accumulates in _messages for /copy and future VDOM rendering.
+   Display is handled imperatively via Console.Write(ansi) during the interactive loop.
+   VDOM rendering of chat history will be enabled in Phase 2 once the interactive loop
+   is fully decoupled from imperative stdout writes. *@
+
 @code {
     protected bool _isConnected { get; set; } = false;
     private bool _hasRendered = false;
@@ -48,6 +53,10 @@
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
+
+    // Chat history for VDOM rendering
+    private List<ChatMsg> _messages = new();
+    private List<string> _pendingOperations = new();
 
     // Cancellation for active AI requests — triggered by Ctrl+C
     private CancellationTokenSource? _requestCts;
@@ -263,7 +272,7 @@
 
         if (result.OperationDisplay != null)
         {
-            // Render Claude-Code-style operation display
+            // Render directly to stdout (capture deferred to Phase 2)
             OperationRenderer.Render(result.OperationDisplay);
         }
         else if (result.Success)
@@ -486,9 +495,14 @@
 
             if (needsPlanning)
             {
+                // Add user message to chat history
+                _messages.Add(new ChatMsg { Role = "user", Text = input });
                 await HandlePlannedExecutionAsync(processedInput);
                 continue;
             }
+
+            // Add user message to chat history
+            _messages.Add(new ChatMsg { Role = "user", Text = input });
 
             // Process AI request with streaming (non-command input)
             await ProcessDirectRequestAsync(processedInput);
@@ -664,6 +678,13 @@
                             // Fallback to raw text if markdown rendering fails
                             Console.Write(responseText);
                         }
+
+                        // Add to chat history (ANSI capture deferred to Phase 2)
+                        _messages.Add(new ChatMsg
+                        {
+                            Role = "assistant",
+                            Text = responseText
+                        });
                     }
 
                     // Show per-response token summary (right-aligned, tight to response)

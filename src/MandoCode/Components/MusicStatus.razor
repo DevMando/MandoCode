@@ -1,0 +1,22 @@
+@using MandoCode.Services
+@using MandoCode.Translators
+
+<div class="ansi-region" data-content="@_rendered" />
+
+@code {
+    [Parameter] public MusicPlayerService Player { get; set; } = default!;
+    [Parameter] public string RenderMode { get; set; } = "status";
+
+    private string _rendered = "";
+
+    protected override void OnParametersSet()
+    {
+        var renderable = RenderMode == "list"
+            ? MusicPlayerUI.BuildTrackListRenderable(Player)
+            : MusicPlayerUI.BuildStatusRenderable(Player);
+
+        _rendered = renderable is AnsiPassthroughRenderable passthrough
+            ? passthrough.Content
+            : "";
+    }
+}

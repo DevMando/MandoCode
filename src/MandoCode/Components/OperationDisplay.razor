@@ -1,0 +1,20 @@
+@using MandoCode.Models
+@using MandoCode.Services
+@using MandoCode.Translators
+
+<div class="ansi-region" data-content="@_rendered" />
+
+@code {
+    [Parameter] public OperationDisplayEvent Operation { get; set; } = default!;
+    [Parameter] public OperationDisplayRenderer Renderer { get; set; } = default!;
+
+    private string _rendered = "";
+
+    protected override void OnParametersSet()
+    {
+        var renderable = Renderer.BuildRenderable(Operation);
+        _rendered = renderable is AnsiPassthroughRenderable passthrough
+            ? passthrough.Content
+            : "";
+    }
+}

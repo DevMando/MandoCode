@@ -2,9 +2,11 @@ using MandoCode.Components;
 using MandoCode.Models;
 using MandoCode.Services;
 using MandoCode.Plugins;
+using MandoCode.Translators;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RazorConsole.Core;
+using RazorConsole.Core.Abstractions.Rendering;
 using System.Text;
 
 namespace MandoCode;
@@ -115,6 +117,9 @@ class Program
                 var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
                 return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);
             });
+
+            // Register AnsiPassthrough translator for VDOM integration
+            services.AddSingleton<ITranslationMiddleware, AnsiPassthroughTranslator>();
 
             // Configure console options
             services.Configure<ConsoleAppOptions>(options =>

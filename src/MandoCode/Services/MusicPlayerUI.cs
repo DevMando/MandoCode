@@ -1,4 +1,8 @@
+using System.Text;
 using MandoCode.Models;
+using MandoCode.Translators;
+using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace MandoCode.Services;
 
@@ -23,19 +27,26 @@ public static class MusicPlayerUI
     /// </summary>
     public static void RenderStatus(MusicPlayerService player)
     {
-        Console.WriteLine();
+        AnsiConsole.Write(BuildStatusRenderable(player));
+    }
+
+    /// <summary>
+    /// Builds the music status panel as an IRenderable.
+    /// </summary>
+    public static IRenderable BuildStatusRenderable(MusicPlayerService player)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
 
         if (!player.AudioAvailable && player.AudioError != null)
         {
-            RenderError(player.AudioError);
-            return;
+            return BuildErrorRenderable(player.AudioError);
         }
 
         var track = player.CurrentTrack;
         if (track == null && !player.IsPlaying && !player.IsPaused)
         {
-            RenderStopped();
-            return;
+            return BuildStoppedRenderable();
         }
 
         var trackName = track?.Name ?? "Unknown";
@@ -63,21 +74,23 @@ public static class MusicPlayerUI
         // Top border
         var headerLabel = "\u2552\u2550 \u266b MUSIC \u2550";
         var topPad = Math.Max(0, innerWidth - headerLabel.Length);
-        Console.WriteLine($"  {Border}{headerLabel}{new string('\u2550', topPad)}\u2555{Rst}");
+        sb.AppendLine($"  {Border}{headerLabel}{new string('\u2550', topPad)}\u2555{Rst}");
 
         // Track line: │{trackContent}{pad}{stateContent} │
         var trackPad = innerWidth - trackContent.Length - stateContent.Length - 1; // -1 for trailing space
         if (trackPad < 1) trackPad = 1;
-        Console.WriteLine($"  {Border}\u2502{NoteClr}{trackContent}{new string(' ', trackPad)}{StateClr}{stateContent} {Border}\u2502{Rst}");
+        sb.AppendLine($"  {Border}\u2502{NoteClr}{trackContent}{new string(' ', trackPad)}{StateClr}{stateContent} {Border}\u2502{Rst}");
 
         // Volume + genre line: │{volPrefix}{bar}{volSuffix}{pad}{genreLabel} │
         var volPad = innerWidth - volPrefix.Length - 10 - volSuffix.Length - genreLabel.Length - 1; // -1 for trailing space
         if (volPad < 1) volPad = 1;
-        Console.WriteLine($"  {Border}\u2502{LabelClr}{volPrefix}{volumeBar}{LabelClr}{volSuffix}{new string(' ', volPad)}{LabelClr}{genreLabel} {Border}\u2502{Rst}");
+        sb.AppendLine($"  {Border}\u2502{LabelClr}{volPrefix}{volumeBar}{LabelClr}{volSuffix}{new string(' ', volPad)}{LabelClr}{genreLabel} {Border}\u2502{Rst}");
 
         // Bottom border
-        Console.WriteLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
-        Console.WriteLine();
+        sb.AppendLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
+        sb.AppendLine();
+
+        return new AnsiPassthroughRenderable(sb.ToString());
     }
 
     /// <summary>
@@ -85,69 +98,90 @@ public static class MusicPlayerUI
     /// </summary>
     public static void RenderTrackList(MusicPlayerService player)
     {
-        Console.WriteLine();
+        AnsiConsole.Write(BuildTrackListRenderable(player));
+    }
+
+    /// <summary>
+    /// Builds the track listing panel as an IRenderable.
+    /// </summary>
+    public static IRenderable BuildTrackListRenderable(MusicPlayerService player)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
 
         var tracks = player.GetAvailableTracks();
         if (tracks.Count == 0)
         {
-            Console.WriteLine($"  {LabelClr}No tracks found.{Rst}");
-            Console.WriteLine($"  {DimClr}Drop .mp3 files into ~/.mandocode/music/lofi/ or ~/.mandocode/music/synthwave/{Rst}");
-            Console.WriteLine();
-            return;
+            sb.AppendLine($"  {LabelClr}No tracks found.{Rst}");
+            sb.AppendLine($"  {DimClr}Drop .mp3 files into ~/.mandocode/music/lofi/ or ~/.mandocode/music/synthwave/{Rst}");
+            sb.AppendLine();
+            return new AnsiPassthroughRenderable(sb.ToString());
         }
 
         var innerWidth = 44;
-        Console.WriteLine($"  {Border}\u2552\u2550 {Header}\u266b Tracks {Border}\u2550{new string('\u2550', innerWidth - 12)}\u2555{Rst}");
+        sb.AppendLine($"  {Border}\u2552\u2550 {Header}\u266b Tracks {Border}\u2550{new string('\u2550', innerWidth - 12)}\u2555{Rst}");
 
         var grouped = tracks.GroupBy(t => t.Genre).OrderBy(g => g.Key);
         foreach (var group in grouped)
         {
             var genreLabel = string.IsNullOrEmpty(group.Key) ? "Unknown" : char.ToUpper(group.Key[0]) + group.Key[1..];
-            Console.WriteLine($"  {Border}\u2502  {Header}[{genreLabel}]{Rst}");
+            sb.AppendLine($"  {Border}\u2502  {Header}[{genreLabel}]{Rst}");
 
             foreach (var track in group)
             {
                 var playing = player.CurrentTrack == track;
                 var marker = playing ? $"{StateClr}\u25b6" : " ";
-                Console.WriteLine($"  {Border}\u2502 {marker} {TrackClr}\u266b {track.Name}{Rst}");
+                sb.AppendLine($"  {Border}\u2502 {marker} {TrackClr}\u266b {track.Name}{Rst}");
             }
         }
 
-        Console.WriteLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
-        Console.WriteLine($"  {DimClr}{tracks.Count} track(s) total{Rst}");
-        Console.WriteLine();
+        sb.AppendLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
+        sb.AppendLine($"  {DimClr}{tracks.Count} track(s) total{Rst}");
+        sb.AppendLine();
+
+        return new AnsiPassthroughRenderable(sb.ToString());
     }
 
     /// <summary>
-    /// Renders a stopped state message.
+    /// Builds a stopped state message as an IRenderable.
     /// </summary>
-    private static void RenderStopped()
+    private static IRenderable BuildStoppedRenderable()
     {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+
         var innerWidth = 44;
-        Console.WriteLine($"  {Border}\u2552\u2550 {Header}\u266b MUSIC {Border}\u2550{new string('\u2550', innerWidth - 11)}\u2555{Rst}");
-        Console.WriteLine($"  {Border}\u2502  {LabelClr}\u23f9 Stopped{new string(' ', innerWidth - 12)}{Border}\u2502{Rst}");
-        Console.WriteLine($"  {Border}\u2502  {DimClr}Type /music to start playing{new string(' ', innerWidth - 31)}{Border}\u2502{Rst}");
-        Console.WriteLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
-        Console.WriteLine();
+        sb.AppendLine($"  {Border}\u2552\u2550 {Header}\u266b MUSIC {Border}\u2550{new string('\u2550', innerWidth - 11)}\u2555{Rst}");
+        sb.AppendLine($"  {Border}\u2502  {LabelClr}\u23f9 Stopped{new string(' ', innerWidth - 12)}{Border}\u2502{Rst}");
+        sb.AppendLine($"  {Border}\u2502  {DimClr}Type /music to start playing{new string(' ', innerWidth - 31)}{Border}\u2502{Rst}");
+        sb.AppendLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
+        sb.AppendLine();
+
+        return new AnsiPassthroughRenderable(sb.ToString());
     }
 
     /// <summary>
-    /// Renders an error message when audio is unavailable.
+    /// Builds an error message as an IRenderable when audio is unavailable.
     /// </summary>
-    private static void RenderError(string error)
+    private static IRenderable BuildErrorRenderable(string error)
     {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+
         var innerWidth = 44;
-        Console.WriteLine($"  {Border}\u2552\u2550 {Header}\u266b MUSIC {Border}\u2550{new string('\u2550', innerWidth - 11)}\u2555{Rst}");
-        Console.WriteLine($"  {Border}\u2502  \u001b[38;2;255;80;0m\u26a0 Audio not available{new string(' ', innerWidth - 22)}{Border}\u2502{Rst}");
+        sb.AppendLine($"  {Border}\u2552\u2550 {Header}\u266b MUSIC {Border}\u2550{new string('\u2550', innerWidth - 11)}\u2555{Rst}");
+        sb.AppendLine($"  {Border}\u2502  \u001b[38;2;255;80;0m\u26a0 Audio not available{new string(' ', innerWidth - 22)}{Border}\u2502{Rst}");
         foreach (var line in error.Split('\n'))
         {
             var trimmed = line.Length > (innerWidth - 5) ? line[..(innerWidth - 8)] + "..." : line;
             var pad = innerWidth - 3 - trimmed.Length;
             if (pad < 0) pad = 0;
-            Console.WriteLine($"  {Border}\u2502  {DimClr}{trimmed}{new string(' ', pad)}{Border}\u2502{Rst}");
+            sb.AppendLine($"  {Border}\u2502  {DimClr}{trimmed}{new string(' ', pad)}{Border}\u2502{Rst}");
         }
-        Console.WriteLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
-        Console.WriteLine();
+        sb.AppendLine($"  {Border}\u2558{new string('\u2550', innerWidth)}\u255b{Rst}");
+        sb.AppendLine();
+
+        return new AnsiPassthroughRenderable(sb.ToString());
     }
 
     /// <summary>

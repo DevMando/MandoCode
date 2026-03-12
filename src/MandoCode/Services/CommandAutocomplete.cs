@@ -50,8 +50,16 @@ public static class CommandAutocomplete
     {
         var width = Console.WindowWidth;
 
-        // Calculate how many rows the old content might have occupied and clear them
-        // We clear from cursorTop to the end of the screen to handle shrinking input too
+        // Calculate how many rows the input will occupy when wrapped
+        var totalChars = cursorLeft + input.Length;
+        var linesNeeded = (totalChars + width - 1) / width;
+
+        // Ensure the terminal buffer has enough rows below cursorTop.
+        // Without this, writing long pasted text that wraps past the screen bottom
+        // causes the terminal to scroll, making cursorTop stale and breaking cursor navigation.
+        EnsureBufferSpace(ref cursorTop, linesNeeded);
+
+        // Clear from cursorTop to the end of the screen to handle shrinking input too
         Console.SetCursorPosition(cursorLeft, cursorTop);
         Console.Write("\x1b[J"); // clear from cursor to end of screen
 
