@@ -41,10 +41,7 @@
     }
 </Rows>
 
-@* Chat history accumulates in _messages for /copy and future VDOM rendering.
-   Display is handled imperatively via Console.Write(ansi) during the interactive loop.
-   VDOM rendering of chat history will be enabled in Phase 2 once the interactive loop
-   is fully decoupled from imperative stdout writes. *@
+@* Input handled imperatively via RunInteractiveLoopAsync + Console.ReadKey *@
 
 @code {
     protected bool _isConnected { get; set; } = false;
@@ -53,6 +50,8 @@
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
+
+    // True while an AI request or command is processing — disables the input
 
     // Chat history for VDOM rendering
     private List<ChatMsg> _messages = new();
@@ -208,9 +207,6 @@
         {
             _hasRendered = true;
 
-            // Initialize file autocomplete
-            CommandAutocomplete.Initialize(FileProvider);
-
             // Validate that model supports function calling
             var (isValid, errorMessage) = await AI.ValidateModelAsync();
             if (!isValid && errorMessage != null)
@@ -243,7 +239,10 @@
                 }
             }
 
-            // Add a small delay to ensure UI is fully rendered
+            // Initialize file autocomplete
+            CommandAutocomplete.Initialize(FileProvider);
+
+            // Small delay to ensure UI is fully rendered before accepting input
             await Task.Delay(100);
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
         }

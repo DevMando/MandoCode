@@ -1,0 +1,294 @@
+@using MandoCode.Services
+@using Spectre.Console
+
+@* Autocomplete dropdown (rendered above the prompt) *@
+@if (_showDropdown && _filteredOptions.Any())
+{
+    <Select Options="@_filteredOptions.ToArray()"
+            Value="@_selectedValue"
+            ValueChanged="@((string v) => HandleOptionSelected(v))"
+            FocusedValue="@_focusedValue"
+            FocusedValueChanged="@((string v) => HandleFocusedChanged(v))"
+            SelectedOptionForeground="@(_mode == AutocompleteMode.Command ? Color.Cyan : Color.Yellow)"
+            SelectedOptionDecoration="Decoration.Bold"
+            OptionForeground="Color.Grey"
+            SelectedIndicator="@('>')"
+            UnselectedIndicator="@(' ')"
+            Expand="true" />
+}
+
+@* Our custom visual prompt line with rendered cursor *@
+<div class="ansi-region" data-content="@BuildPromptAnsi()" />
+
+@* Hidden TextInput — captures keyboard events only.
+   Minimal styling: no border, dim colors so it blends away. *@
+<TextInput @bind-Value="_inputValue"
+           OnInput="HandleInput"
+           OnSubmit="HandleSubmit"
+           Placeholder=" "
+           ValueColor="Color.Black"
+           PlaceholderColor="Color.Black"
+           BorderColor="Color.Black"
+           FocusedBorderColor="Color.Black"
+           DisabledBorderColor="Color.Black"
+           BorderStyle="BoxBorder.None"
+           Disabled="@Disabled"
+           Expand="true"
+           FocusOrder="0" />
+
+@code {
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    [Inject] private FileAutocompleteProvider FileProvider { get; set; } = default!;
+
+    private string _inputValue = "";
+    private bool _showDropdown = false;
+    private AutocompleteMode _mode = AutocompleteMode.None;
+    private List<string> _filteredOptions = new();
+    private string _selectedValue = "";
+    private string _focusedValue = "";
+    private int _atAnchorPos = -1;
+
+    private enum AutocompleteMode { None, Command, File }
+
+    // ── ANSI codes ──────────────────────────────────────────────
+    private const string Gold = "\x1b[38;2;255;200;80m";
+    private const string Dim = "\x1b[2m";
+    private const string Reset = "\x1b[0m";
+    private const string ReverseOn = "\x1b[7m";   // reverse video — visual cursor
+    private const string ReverseOff = "\x1b[27m";
+
+    /// <summary>
+    /// Builds the visual prompt line with a block cursor rendered as ANSI reverse video.
+    /// Example: "> hello world█" where █ is the cursor position.
+    /// </summary>
+    private string BuildPromptAnsi()
+    {
+        var text = _inputValue ?? "";
+
+        if (string.IsNullOrEmpty(text))
+        {
+            // Empty input — show prompt with blinking block cursor
+            return $"{Gold}> {ReverseOn} {ReverseOff}{Reset}  {Dim}type / for commands, @ for files{Reset}";
+        }
+
+        // Render: "> text█" with cursor at the end (reverse video space)
+        return $"{Gold}> {EscapeAnsi(text)}{ReverseOn} {ReverseOff}{Reset}";
+    }
+
+    /// <summary>
+    /// Escapes any ANSI-problematic characters in user input.
+    /// </summary>
+    private static string EscapeAnsi(string text)
+    {
+        return text.Replace("\x1b", "");
+    }
+
+    /// <summary>
+    /// Available commands with their descriptions.
+    /// </summary>
+    private static readonly Dictionary<string, string> Commands = new()
+    {
+        { "/help", "Show this help message" },
+        { "/config", "Open configuration menu" },
+        { "/copy", "Copy last AI response to clipboard" },
+        { "/copy-code", "Copy code blocks from last AI response" },
+        { "/command", "Run a shell command (also: !<cmd>)" },
+        { "/clear", "Clear conversation history" },
+        { "/learn", "Learn about LLMs and local AI models" },
+        { "/music", "Play music" },
+        { "/music-stop", "Stop music playback" },
+        { "/music-pause", "Pause/resume music" },
+        { "/music-next", "Skip to next track" },
+        { "/music-vol", "Set volume (0-100), e.g. /music-vol 70" },
+        { "/music-playlist", "Select a genre and start playing" },
+        { "/music-list", "Show available tracks" },
+        { "/exit", "Exit MandoCode" }
+    };
+
+    private void HandleInput(string value)
+    {
+        _inputValue = value;
+
+        // Detect @ trigger
+        var atPos = FindAtTrigger(value);
+        if (atPos >= 0)
+        {
+            _atAnchorPos = atPos;
+            _mode = AutocompleteMode.File;
+            var fragment = value.Substring(atPos + 1);
+            var files = FileProvider.FilterFiles(fragment);
+            _filteredOptions = FormatFileOptions(files);
+            _showDropdown = _filteredOptions.Any();
+            if (_showDropdown)
+            {
+                _focusedValue = _filteredOptions[0];
+                _selectedValue = "";
+            }
+        }
+        else if (value.StartsWith("/"))
+        {
+            _mode = AutocompleteMode.Command;
+            _atAnchorPos = -1;
+            _filteredOptions = FilterCommands(value);
+            _showDropdown = _filteredOptions.Any();
+            if (_showDropdown)
+            {
+                _focusedValue = _filteredOptions[0];
+                _selectedValue = "";
+            }
+        }
+        else
+        {
+            DismissDropdown();
+        }
+
+        StateHasChanged();
+    }
+
+    private void HandleSubmit(string value)
+    {
+        if (Disabled) return;
+
+        // If dropdown is showing, select the focused option instead of submitting
+        if (_showDropdown && _filteredOptions.Any() && !string.IsNullOrEmpty(_focusedValue))
+        {
+            HandleOptionSelected(_focusedValue);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(value)) return;
+
+        var submitted = value;
+        _inputValue = "";
+        DismissDropdown();
+        StateHasChanged();
+
+        OnSubmit.InvokeAsync(submitted);
+    }
+
+    private void HandleOptionSelected(string selected)
+    {
+        if (_mode == AutocompleteMode.Command)
+        {
+            var command = ExtractCommandFromOption(selected);
+            _inputValue = command;
+            DismissDropdown();
+            StateHasChanged();
+        }
+        else if (_mode == AutocompleteMode.File)
+        {
+            var filePath = ExtractFilePathFromOption(selected);
+
+            if (filePath.EndsWith('/'))
+            {
+                var before = _atAnchorPos >= 0 ? _inputValue.Substring(0, _atAnchorPos) : "";
+                _inputValue = $"{before}@{filePath}";
+
+                var files = FileProvider.FilterFiles(filePath);
+                _filteredOptions = FormatFileOptions(files);
+                _showDropdown = _filteredOptions.Any();
+                if (_showDropdown)
+                {
+                    _focusedValue = _filteredOptions[0];
+                    _selectedValue = "";
+                }
+                else
+                {
+                    DismissDropdown();
+                }
+                StateHasChanged();
+            }
+            else
+            {
+                var before = _atAnchorPos >= 0 ? _inputValue.Substring(0, _atAnchorPos) : "";
+                _inputValue = $"{before}@{filePath} ";
+                DismissDropdown();
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void HandleFocusedChanged(string value)
+    {
+        _focusedValue = value;
+    }
+
+    private void DismissDropdown()
+    {
+        _showDropdown = false;
+        _mode = AutocompleteMode.None;
+        _filteredOptions = new();
+        _selectedValue = "";
+        _focusedValue = "";
+        _atAnchorPos = -1;
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────
+
+    private static int FindAtTrigger(string value)
+    {
+        for (int i = value.Length - 1; i >= 0; i--)
+        {
+            if (value[i] == '@' && (i == 0 || value[i - 1] == ' '))
+                return i;
+        }
+        return -1;
+    }
+
+    private static List<string> FilterCommands(string input)
+    {
+        var query = input.ToLower();
+        return Commands
+            .Where(kv => kv.Key.ToLower().StartsWith(query))
+            .Select(kv => $"{kv.Key}  {kv.Value}")
+            .ToList();
+    }
+
+    private static List<string> FormatFileOptions(List<string> files)
+    {
+        return files.Select(f =>
+        {
+            if (f.EndsWith('/'))
+            {
+                var trimmed = f.TrimEnd('/');
+                var dirName = trimmed.Contains('/')
+                    ? trimmed.Substring(trimmed.LastIndexOf('/') + 1)
+                    : trimmed;
+                return $"{dirName}/  [{f.TrimEnd('/')}]";
+            }
+            else
+            {
+                var fileName = Path.GetFileName(f);
+                var dirPath = Path.GetDirectoryName(f)?.Replace('\\', '/') ?? "";
+                return string.IsNullOrEmpty(dirPath)
+                    ? fileName
+                    : $"{fileName}  [{dirPath}]";
+            }
+        }).ToList();
+    }
+
+    private static string ExtractCommandFromOption(string option)
+    {
+        var spaceIdx = option.IndexOf("  ");
+        return spaceIdx >= 0 ? option.Substring(0, spaceIdx) : option;
+    }
+
+    private static string ExtractFilePathFromOption(string option)
+    {
+        var bracketStart = option.IndexOf("  [");
+        if (bracketStart < 0)
+            return option.Trim();
+
+        var name = option.Substring(0, bracketStart).Trim();
+        var dirStart = bracketStart + 3;
+        var dirEnd = option.IndexOf(']', dirStart);
+        var dir = dirEnd >= 0 ? option.Substring(dirStart, dirEnd - dirStart) : "";
+
+        if (name.EndsWith('/'))
+            return $"{dir}/{name}".TrimStart('/');
+        else
+            return string.IsNullOrEmpty(dir) ? name : $"{dir}/{name}";
+    }
+}
