@@ -1,0 +1,19 @@
+@using MandoCode.Models
+
+@foreach (var opAnsi in Message.OperationAnsi)
+{
+    <div class="ansi-region" data-content="@opAnsi" />
+}
+
+@if (Message.Role == "user")
+{
+    <Markup Content="@($"[rgb(255,200,80)]> {Spectre.Console.Markup.Escape(Message.Text)}[/]")" />
+}
+else
+{
+    <div class="ansi-region" data-content="@Message.RenderedAnsi" />
+}
+
+@code {
+    [Parameter] public ChatMsg Message { get; set; } = default!;
+}

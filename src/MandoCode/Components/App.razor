@@ -41,6 +41,8 @@
     }
 </Rows>
 
+@* Input handled imperatively via RunInteractiveLoopAsync + Console.ReadKey *@
+
 @code {
     protected bool _isConnected { get; set; } = false;
     private bool _hasRendered = false;
@@ -48,6 +50,12 @@
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
+
+    // True while an AI request or command is processing — disables the input
+
+    // Chat history for VDOM rendering
+    private List<ChatMsg> _messages = new();
+    private List<string> _pendingOperations = new();
 
     // Cancellation for active AI requests — triggered by Ctrl+C
     private CancellationTokenSource? _requestCts;
@@ -199,9 +207,6 @@
         {
             _hasRendered = true;
 
-            // Initialize file autocomplete
-            CommandAutocomplete.Initialize(FileProvider);
-
             // Validate that model supports function calling
             var (isValid, errorMessage) = await AI.ValidateModelAsync();
             if (!isValid && errorMessage != null)
@@ -234,7 +239,10 @@
                 }
             }
 
-            // Add a small delay to ensure UI is fully rendered
+            // Initialize file autocomplete
+            CommandAutocomplete.Initialize(FileProvider);
+
+            // Small delay to ensure UI is fully rendered before accepting input
             await Task.Delay(100);
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
         }
@@ -263,7 +271,7 @@
 
         if (result.OperationDisplay != null)
         {
-            // Render Claude-Code-style operation display
+            // Render directly to stdout (capture deferred to Phase 2)
             OperationRenderer.Render(result.OperationDisplay);
         }
         else if (result.Success)
@@ -486,9 +494,14 @@
 
             if (needsPlanning)
             {
+                // Add user message to chat history
+                _messages.Add(new ChatMsg { Role = "user", Text = input });
                 await HandlePlannedExecutionAsync(processedInput);
                 continue;
             }
+
+            // Add user message to chat history
+            _messages.Add(new ChatMsg { Role = "user", Text = input });
 
             // Process AI request with streaming (non-command input)
             await ProcessDirectRequestAsync(processedInput);
@@ -664,6 +677,13 @@
                             // Fallback to raw text if markdown rendering fails
                             Console.Write(responseText);
                         }
+
+                        // Add to chat history (ANSI capture deferred to Phase 2)
+                        _messages.Add(new ChatMsg
+                        {
+                            Role = "assistant",
+                            Text = responseText
+                        });
                     }
 
                     // Show per-response token summary (right-aligned, tight to response)

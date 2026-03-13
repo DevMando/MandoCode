@@ -1,0 +1,24 @@
+@using MandoCode.Services
+
+@if (!string.IsNullOrEmpty(_display))
+{
+    <div class="ansi-region" data-content="@_display" />
+}
+
+@code {
+    [Parameter] public int TotalSessionTokens { get; set; }
+    [Parameter] public bool Enabled { get; set; }
+
+    private string _display = "";
+
+    protected override void OnParametersSet()
+    {
+        _display = "";
+        if (Enabled && TotalSessionTokens > 0)
+        {
+            var tokenDisplay = $"Total [{TokenTrackingService.FormatTokenCount(TotalSessionTokens)} tokens]";
+            var padding = Math.Max(0, Console.WindowWidth - tokenDisplay.Length - 1);
+            _display = $"\u001b[2m{new string(' ', padding)}{tokenDisplay}\u001b[0m\n";
+        }
+    }
+}
