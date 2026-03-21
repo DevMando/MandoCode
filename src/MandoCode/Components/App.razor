@@ -60,8 +60,9 @@
     private List<ChatMsg> _messages = new();
     private List<string> _pendingOperations = new();
 
-    // Cancellation for active AI requests — triggered by Ctrl+C
+    // Cancellation for active AI requests — triggered by Ctrl+C or Escape
     private CancellationTokenSource? _requestCts;
+    private CancellationTokenSource? _keyListenerCts;
 
     // Tracks recent function operations for contextual spinner messages
     private int _recentReadCount;
@@ -437,6 +438,7 @@
                 if (command == "clear")
                 {
                     await AI.ClearHistoryAsync();
+                    CommandAutocomplete.ClearHistory();
                     Console.Clear();
                     AnsiConsole.WriteLine("Conversation cleared.");
                     continue;
@@ -654,6 +656,54 @@
         return fullContext.ToString();
     }
 
+    /// <summary>
+    /// Starts a background task that listens for Escape key presses and cancels _requestCts.
+    /// Call StopCancelKeyListener() when the AI request completes to clean up.
+    /// </summary>
+    private void StartCancelKeyListener()
+    {
+        var listenerCts = new CancellationTokenSource();
+        _keyListenerCts = listenerCts;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                while (!listenerCts.Token.IsCancellationRequested)
+                {
+                    if (Console.KeyAvailable)
+                    {
+                        var key = Console.ReadKey(intercept: true);
+                        if (key.Key == ConsoleKey.Escape)
+                        {
+                            var cts = _requestCts;
+                            if (cts != null && !cts.IsCancellationRequested)
+                            {
+                                cts.Cancel();
+                            }
+                            break;
+                        }
+                    }
+                    await Task.Delay(50, listenerCts.Token);
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    /// <summary>
+    /// Stops the background Escape key listener.
+    /// </summary>
+    private void StopCancelKeyListener()
+    {
+        var cts = Interlocked.Exchange(ref _keyListenerCts, null);
+        if (cts != null)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+    }
+
     private async Task ProcessDirectRequestAsync(string input)
     {
         // Reset operation tracking for the new request
@@ -667,6 +717,7 @@
 
         _requestCts = new CancellationTokenSource();
         var token = _requestCts.Token;
+        StartCancelKeyListener();
 
         try
         {
@@ -801,6 +852,7 @@
         }
         finally
         {
+            StopCancelKeyListener();
             var oldCts = Interlocked.Exchange(ref _requestCts, null);
             oldCts?.Dispose();
         }
@@ -812,15 +864,37 @@
         AnsiConsole.MarkupLine("[cyan]This looks like a complex request. Creating a plan...[/]");
         AnsiConsole.WriteLine();
 
+        _requestCts = new CancellationTokenSource();
+        var token = _requestCts.Token;
+        StartCancelKeyListener();
+
         TaskPlan? plan = null;
 
-        // Create the plan with a spinner
-        await AnsiConsole.Status()
-            .Spinner(LoadingMessages.GetRandomSpinner())
-            .StartAsync("Analyzing request and creating plan...", async ctx =>
-            {
-                plan = await TaskPlanner.CreatePlanAsync(input);
-            });
+        try
+        {
+            // Create the plan with a spinner
+            await AnsiConsole.Status()
+                .Spinner(LoadingMessages.GetRandomSpinner())
+                .StartAsync("Analyzing request and creating plan...", async ctx =>
+                {
+                    plan = await TaskPlanner.CreatePlanAsync(input, token);
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            StopCancelKeyListener();
+            var oldCts = Interlocked.Exchange(ref _requestCts, null);
+            oldCts?.Dispose();
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]Plan creation cancelled.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Stop the key listener during user interaction (plan approval prompt)
+        StopCancelKeyListener();
+        var planCts = Interlocked.Exchange(ref _requestCts, null);
+        planCts?.Dispose();
 
         if (plan == null || plan.Steps.Count == 0)
         {
@@ -852,14 +926,32 @@
             return;
         }
 
-        // Execute the plan
+        // Execute the plan with cancellation support
+        _requestCts = new CancellationTokenSource();
+        var execToken = _requestCts.Token;
+        StartCancelKeyListener();
+
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[green]Executing plan...[/]");
         AnsiConsole.WriteLine();
 
-        await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan))
+        try
         {
-            await HandleProgressEventAsync(progressEvent, plan);
+            await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan, execToken))
+            {
+                await HandleProgressEventAsync(progressEvent, plan);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Spinner.Stop();
+            TaskPlanner.CancelPlan(plan);
+        }
+        finally
+        {
+            StopCancelKeyListener();
+            var oldCts = Interlocked.Exchange(ref _requestCts, null);
+            oldCts?.Dispose();
         }
 
         // Show summary
@@ -1356,6 +1448,7 @@
 
     public void Dispose()
     {
+        StopCancelKeyListener();
         StopMusicVisualizer();
         Spinner.Stop();
         var cts = Interlocked.Exchange(ref _requestCts, null);

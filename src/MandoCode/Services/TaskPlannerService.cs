@@ -174,7 +174,7 @@ public class TaskPlannerService
     /// <summary>
     /// Creates a task plan from a user request.
     /// </summary>
-    public async Task<TaskPlan> CreatePlanAsync(string userMessage)
+    public async Task<TaskPlan> CreatePlanAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         var plan = new TaskPlan
         {
@@ -185,7 +185,7 @@ public class TaskPlannerService
         try
         {
             // Get the plan from the AI using the planning prompt
-            var planResponse = await _aiService.GetPlanAsync(userMessage);
+            var planResponse = await _aiService.GetPlanAsync(userMessage, cancellationToken);
 
             // Parse the response into steps
             plan.Steps = ParsePlanResponse(planResponse);
@@ -222,7 +222,7 @@ public class TaskPlannerService
     /// <summary>
     /// Executes a task plan step by step, yielding progress events.
     /// </summary>
-    public async IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(TaskPlan plan)
+    public async IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(TaskPlan plan, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         plan.Status = TaskPlanStatus.InProgress;
         var previousResults = new List<string>();
@@ -231,6 +231,14 @@ public class TaskPlannerService
 
         foreach (var step in plan.Steps)
         {
+            // Check for cancellation before starting each step
+            if (cancellationToken.IsCancellationRequested)
+            {
+                CancelPlan(plan);
+                yield return TaskProgressEvent.PlanCancelled(plan);
+                yield break;
+            }
+
             // Skip if already completed or skipped
             if (step.Status == TaskStepStatus.Completed || step.Status == TaskStepStatus.Skipped)
                 continue;
@@ -245,13 +253,22 @@ public class TaskPlannerService
             try
             {
                 // Execute the step with context from previous results
-                var result = await _aiService.ExecutePlanStepAsync(step.Instruction, previousResults);
+                var result = await _aiService.ExecutePlanStepAsync(step.Instruction, previousResults, cancellationToken);
 
                 step.Result = result;
                 step.Status = TaskStepStatus.Completed;
                 previousResults.Add($"Step {step.StepNumber} ({step.Description}): {result}");
 
                 stepEvent = TaskProgressEvent.StepCompleted(plan, step, result);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // User cancelled — stop the entire plan immediately
+                step.Status = TaskStepStatus.Failed;
+                step.ErrorMessage = "Cancelled by user.";
+                shouldCancel = true;
+                CancelPlan(plan);
+                stepEvent = TaskProgressEvent.StepFailed(plan, step, "Cancelled by user.");
             }
             catch (Exception ex)
             {

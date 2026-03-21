@@ -235,21 +235,26 @@ public class AIService
     /// Sends a message to the AI and gets a response.
     /// Includes retry logic for transient connection errors.
     /// </summary>
-    public async Task<string> ChatAsync(string userMessage)
+    public async Task<string> ChatAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         // Add message under lock, then release before the long AI call
-        await _historyLock.WaitAsync();
+        await _historyLock.WaitAsync(cancellationToken);
         try { _chatHistory.AddUserMessage(userMessage); }
         finally { _historyLock.Release(); }
 
         try
         {
+            // Link caller's cancellation token with an internal 5-minute timeout
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
             // Get the response with automatic function calling, with retry for transient errors
             var response = await RetryPolicy.ExecuteWithRetryAsync(
                 async () => await _chatService.GetChatMessageContentAsync(
                     _chatHistory,
                     _settings,
-                    _kernel
+                    _kernel,
+                    linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
                 "ChatAsync"
@@ -293,6 +298,15 @@ public class AIService
             }
 
             return processedResponse;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return "Request cancelled.";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Error: Request timed out. The model took too long to respond.\n\n" +
+                   "Try breaking your request into smaller parts, or use a faster model.";
         }
         catch (Exception ex)
         {
@@ -415,7 +429,7 @@ public class AIService
     /// Gets a task plan from the AI for a complex request.
     /// Uses a longer timeout to allow the model to generate a complete plan.
     /// </summary>
-    public async Task<string> GetPlanAsync(string userMessage)
+    public async Task<string> GetPlanAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         // Use a separate chat history for planning (doesn't pollute main conversation)
         var planningHistory = new ChatHistory(SystemPrompts.TaskPlannerPrompt);
@@ -425,6 +439,7 @@ public class AIService
         {
             // Use a longer timeout for planning (90 seconds) - local models can be slow
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
 
             // Use simpler settings without function calling for faster planning
             var planSettings = new OllamaPromptExecutionSettings
@@ -437,7 +452,7 @@ public class AIService
                     planningHistory,
                     planSettings,
                     _kernel,
-                    cts.Token
+                    linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
                 "GetPlanAsync"
@@ -447,6 +462,10 @@ public class AIService
             ExtractAndRecordTokens(result, "Plan");
 
             return result.Content ?? "Failed to generate plan.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Planning cancelled.", cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -462,7 +481,7 @@ public class AIService
     /// Executes a single step of a task plan with function calling enabled.
     /// Uses previous step results as context for continuity.
     /// </summary>
-    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults)
+    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
     {
         // Build context from previous step results — only include last 2 steps
         // to keep token count manageable as plans grow
@@ -491,6 +510,7 @@ public class AIService
         {
             // Use the standard timeout for execution (5 minutes)
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
 
             // Allow concurrent function invocation within a step for parallel file operations
             var stepSettings = new OllamaPromptExecutionSettings
@@ -508,7 +528,7 @@ public class AIService
                     stepHistory,
                     stepSettings,
                     _kernel,
-                    cts.Token
+                    linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
                 "ExecutePlanStepAsync"
@@ -533,6 +553,10 @@ public class AIService
             // conversation history. The main history is for direct user requests.
 
             return processedResponse;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Step cancelled.", cancellationToken);
         }
         catch (OperationCanceledException)
         {
