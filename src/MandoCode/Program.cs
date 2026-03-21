@@ -108,11 +108,7 @@ class Program
             services.AddSingleton(provider =>
             {
                 var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                var ignoreDirs = new HashSet<string>
-                {
-                    ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
-                    "packages", "dist", "build", "__pycache__", ".idea", ".claude"
-                };
+                var ignoreDirs = new HashSet<string>(MandoCodeConfig.DefaultIgnoreDirectories);
                 foreach (var dir in cfg.IgnoreDirectories) ignoreDirs.Add(dir);
                 var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
                 return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);

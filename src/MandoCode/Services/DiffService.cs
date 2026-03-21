@@ -32,29 +32,36 @@ public static class DiffService
             }).ToList();
         }
 
-        // Size guard: skip LCS for very large files to avoid O(n*m) memory/time explosion
+        // Size guard: skip LCS for very large files to avoid O(n*m) memory/time explosion.
+        // Show a sampled diff: first N and last N lines from each side, with a marker in between.
         if ((long)oldLines.Length * newLines.Length > 25_000_000L)
         {
-            // Simple fallback: show all old lines as removed, all new lines as added
+            const int sampleSize = 50;
             var fallback = new List<DiffLine>();
-            for (int i = 0; i < oldLines.Length; i++)
-            {
-                fallback.Add(new DiffLine
-                {
-                    LineType = DiffLineType.Removed,
-                    Content = oldLines[i],
-                    OldLineNumber = i + 1
-                });
-            }
-            for (int i = 0; i < newLines.Length; i++)
-            {
-                fallback.Add(new DiffLine
-                {
-                    LineType = DiffLineType.Added,
-                    Content = newLines[i],
-                    NewLineNumber = i + 1
-                });
-            }
+
+            var oldHead = Math.Min(sampleSize, oldLines.Length);
+            var oldTail = Math.Min(sampleSize, Math.Max(0, oldLines.Length - sampleSize));
+            var newHead = Math.Min(sampleSize, newLines.Length);
+            var newTail = Math.Min(sampleSize, Math.Max(0, newLines.Length - sampleSize));
+
+            for (int i = 0; i < oldHead; i++)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Removed, Content = oldLines[i], OldLineNumber = i + 1 });
+
+            if (oldLines.Length > sampleSize * 2)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Unchanged, Content = $"... ({oldLines.Length - sampleSize * 2} lines omitted — file too large for full diff) ..." });
+
+            for (int i = oldLines.Length - oldTail; i < oldLines.Length; i++)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Removed, Content = oldLines[i], OldLineNumber = i + 1 });
+
+            for (int i = 0; i < newHead; i++)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Added, Content = newLines[i], NewLineNumber = i + 1 });
+
+            if (newLines.Length > sampleSize * 2)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Unchanged, Content = $"... ({newLines.Length - sampleSize * 2} lines omitted — file too large for full diff) ..." });
+
+            for (int i = newLines.Length - newTail; i < newLines.Length; i++)
+                fallback.Add(new DiffLine { LineType = DiffLineType.Added, Content = newLines[i], NewLineNumber = i + 1 });
+
             return fallback;
         }
 

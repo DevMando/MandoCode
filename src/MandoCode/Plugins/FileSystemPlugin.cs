@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.SemanticKernel;
+using MandoCode.Models;
 using MandoCode.Services;
 
 namespace MandoCode.Plugins;
@@ -13,11 +14,13 @@ public class FileSystemPlugin
 {
     private readonly ProjectRootAccessor ProjectRootAccessor;
     private string ProjectRoot => ProjectRootAccessor.ProjectRoot;
-    private readonly HashSet<string> _ignoreDirectories = new()
-    {
-        ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
-        "packages", "dist", "build", "__pycache__", ".idea"
-    };
+    private readonly HashSet<string> _ignoreDirectories = new(MandoCodeConfig.DefaultIgnoreDirectories);
+
+    // File list cache with TTL to avoid repeated full directory walks
+    private List<string>? _cachedFiles;
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private readonly object _cacheLock = new();
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
 
     public FileSystemPlugin(ProjectRootAccessor projectRootAccessor)
     {
@@ -39,12 +42,12 @@ public class FileSystemPlugin
     /// Lists all project files recursively, excluding ignored directories.
     /// </summary>
     [KernelFunction("list_all_project_files")]
-    [Description("Lists all project files recursively, excluding ignored directories like .git, node_modules, bin, obj, etc.")]
+    [Description("Lists all project files recursively, excluding ignored directories. Returns one relative file path per line. Use list_files_match_glob_pattern instead if you only need specific file types.")]
     public async Task<string> ListAllProjectFiles()
     {
         try
         {
-            var files = await Task.Run(() => GetAllFiles(ProjectRoot));
+            var files = await Task.Run(() => GetAllFilesCached());
             var relativeFiles = files.Select(f => Path.GetRelativePath(ProjectRoot, f)).ToList();
 
             if (!relativeFiles.Any())
@@ -71,7 +74,7 @@ public class FileSystemPlugin
         try
         {
             var matcher = CreateMatcher(pattern);
-            var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
+            var allFiles = await Task.Run(() => GetAllFilesCached());
             var matchingFiles = allFiles
                 .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), matcher))
                 .Select(f => Path.GetRelativePath(ProjectRoot, f))
@@ -94,7 +97,7 @@ public class FileSystemPlugin
     /// Reads the contents of a file.
     /// </summary>
     [KernelFunction("read_file_contents")]
-    [Description("Reads the complete contents of a file. Use relative path from project root.")]
+    [Description("Reads the contents of a file. Returns the file content as plain text. Use relative path from project root. Output is capped at 10,000 characters.")]
     public async Task<string> ReadFile(
         [Description("Relative path to the file from project root")] string relativePath)
     {
@@ -110,9 +113,12 @@ public class FileSystemPlugin
             var content = await File.ReadAllTextAsync(fullPath);
             var lineCount = content.Split('\n').Length;
 
-            return $"File: {relativePath} ({lineCount} lines)\n" +
-                   $"{'='.ToString().PadRight(50, '=')}\n" +
-                   $"{content}";
+            if (content.Length > 10_000)
+            {
+                content = content[..10_000] + $"\n... [truncated — file has {lineCount} lines total]";
+            }
+
+            return $"File: {relativePath} ({lineCount} lines)\n{content}";
         }
         catch (Exception ex)
         {
@@ -138,6 +144,7 @@ public class FileSystemPlugin
             }
 
             Directory.CreateDirectory(fullPath);
+            InvalidateCache();
 
             return Task.FromResult($"Successfully created folder:\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
         }
@@ -151,7 +158,7 @@ public class FileSystemPlugin
     /// Writes content to a file, creating it if it doesn't exist.
     /// </summary>
     [KernelFunction("write_file")]
-    [Description("Writes content to a file. Creates the file and directories if they don't exist. Overwrites existing files. Do NOT use this to create empty folders - use create_folder instead.")]
+    [Description("Writes content to a file (full overwrite). Creates the file and directories if they don't exist. For small edits to existing files, prefer edit_file instead — it's more efficient and produces cleaner diffs. Do NOT use this to create empty folders — use create_folder instead.")]
     public async Task<string> WriteFile(
         [Description("Relative path to the file from project root")] string relativePath,
         [Description("Content to write to the file")] string content)
@@ -167,6 +174,7 @@ public class FileSystemPlugin
             }
 
             await File.WriteAllTextAsync(fullPath, content);
+            InvalidateCache();
             var lineCount = content.Split('\n').Length;
 
             return $"Successfully wrote {lineCount} lines to:\n" +
@@ -176,6 +184,117 @@ public class FileSystemPlugin
         catch (Exception ex)
         {
             return $"Error writing file '{relativePath}': {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Edits a file by replacing a specific text fragment with new text.
+    /// </summary>
+    [KernelFunction("edit_file")]
+    [Description("Edits an existing file by finding and replacing a specific text fragment. Much more efficient than rewriting the entire file with write_file. The old_text must match exactly (including whitespace and indentation). Use this for targeted edits instead of write_file when modifying existing files.")]
+    public async Task<string> EditFile(
+        [Description("Relative path to the file from project root")] string relativePath,
+        [Description("The exact text to find in the file (must match exactly, including whitespace)")] string old_text,
+        [Description("The new text to replace it with")] string new_text)
+    {
+        try
+        {
+            var fullPath = GetFullPath(relativePath);
+
+            if (!File.Exists(fullPath))
+            {
+                return $"Error: File not found: {relativePath}";
+            }
+
+            var content = await File.ReadAllTextAsync(fullPath);
+            var index = content.IndexOf(old_text, StringComparison.Ordinal);
+
+            if (index < 0)
+            {
+                return $"Error: Could not find the specified text in {relativePath}. Make sure the old_text matches exactly, including whitespace and indentation.";
+            }
+
+            // Check for multiple occurrences
+            var secondIndex = content.IndexOf(old_text, index + old_text.Length, StringComparison.Ordinal);
+            if (secondIndex >= 0)
+            {
+                return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+            }
+
+            var newContent = content[..index] + new_text + content[(index + old_text.Length)..];
+            await File.WriteAllTextAsync(fullPath, newContent);
+            InvalidateCache();
+
+            var lineCount = newContent.Split('\n').Length;
+            return $"Successfully edited {relativePath} ({lineCount} lines)\n" +
+                   $"Replaced {old_text.Split('\n').Length} lines with {new_text.Split('\n').Length} lines.\n" +
+                   $"Absolute path: {fullPath}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error editing file '{relativePath}': {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Searches file contents using a text pattern (grep-like).
+    /// </summary>
+    [KernelFunction("grep_files")]
+    [Description("Searches for a text pattern across all project files (like grep). Returns matching file paths, line numbers, and line content. Case-insensitive. Results capped at 50 matches.")]
+    public async Task<string> GrepFiles(
+        [Description("Text or pattern to search for across all project files")] string searchText)
+    {
+        try
+        {
+            var allFiles = await Task.Run(() => GetAllFilesCached());
+            var results = new List<string>();
+            var matchCount = 0;
+            const int maxMatches = 50;
+
+            foreach (var file in allFiles)
+            {
+                if (matchCount >= maxMatches) break;
+
+                try
+                {
+                    using var reader = new StreamReader(file);
+                    string? line;
+                    int lineNum = 0;
+                    var fileHasMatch = false;
+
+                    while ((line = await reader.ReadLineAsync()) != null)
+                    {
+                        lineNum++;
+                        if (line.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!fileHasMatch)
+                            {
+                                results.Add($"\n{Path.GetRelativePath(ProjectRoot, file)}:");
+                                fileHasMatch = true;
+                            }
+                            results.Add($"  {lineNum}: {line.Trim()}");
+                            matchCount++;
+                            if (matchCount >= maxMatches) break;
+                        }
+                    }
+                }
+                catch { /* skip unreadable files */ }
+            }
+
+            if (results.Count == 0)
+            {
+                return $"No matches found for '{searchText}' across project files.";
+            }
+
+            var header = matchCount >= maxMatches
+                ? $"Found {matchCount}+ matches for '{searchText}' (showing first {maxMatches}):"
+                : $"Found {matchCount} match(es) for '{searchText}':";
+
+            return header + string.Join("\n", results);
+        }
+        catch (Exception ex)
+        {
+            return $"Error searching files: {ex.Message}";
         }
     }
 
@@ -197,6 +316,7 @@ public class FileSystemPlugin
             }
 
             File.Delete(fullPath);
+            InvalidateCache();
 
             return Task.FromResult($"Successfully deleted file:\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
         }
@@ -227,6 +347,7 @@ public class FileSystemPlugin
             var dirCount = Directory.GetDirectories(fullPath, "*", SearchOption.AllDirectories).Length;
 
             Directory.Delete(fullPath, recursive: true);
+            InvalidateCache();
 
             return Task.FromResult($"Successfully deleted folder ({fileCount} files, {dirCount} subdirectories):\nRelative path: {relativePath}\nAbsolute path: {fullPath}");
         }
@@ -240,7 +361,7 @@ public class FileSystemPlugin
     /// Searches for text within files.
     /// </summary>
     [KernelFunction("search_text_in_files")]
-    [Description("Searches for text within files matching a pattern. Returns file paths and line numbers where text is found.")]
+    [Description("Searches for text within files matching a glob pattern. Case-insensitive. Returns file paths and line numbers. Use grep_files instead for searching ALL files without a glob filter.")]
     public async Task<string> FindInFiles(
         [Description("Glob pattern to match files (e.g., '*.cs', '*.js')")] string pattern,
         [Description("Text to search for")] string searchText)
@@ -248,38 +369,54 @@ public class FileSystemPlugin
         try
         {
             var matcher = CreateMatcher(pattern);
-            var allFiles = await Task.Run(() => GetAllFiles(ProjectRoot));
+            var allFiles = await Task.Run(() => GetAllFilesCached());
             var matchingFiles = allFiles
                 .Where(f => MatchesPattern(Path.GetRelativePath(ProjectRoot, f), matcher))
                 .ToList();
 
             var results = new List<string>();
+            var matchCount = 0;
+            const int maxMatches = 50;
 
             foreach (var file in matchingFiles)
             {
-                var lines = await File.ReadAllLinesAsync(file);
-                var matches = lines
-                    .Select((line, index) => new { line, index })
-                    .Where(x => x.line.Contains(searchText, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                if (matchCount >= maxMatches) break;
 
-                if (matches.Any())
+                try
                 {
-                    var relativePath = Path.GetRelativePath(ProjectRoot, file);
-                    results.Add($"{relativePath}:");
-                    foreach (var match in matches)
+                    using var reader = new StreamReader(file);
+                    string? line;
+                    int lineNum = 0;
+                    var fileHasMatch = false;
+
+                    while ((line = await reader.ReadLineAsync()) != null)
                     {
-                        results.Add($"  Line {match.index + 1}: {match.line.Trim()}");
+                        lineNum++;
+                        if (line.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!fileHasMatch)
+                            {
+                                results.Add($"{Path.GetRelativePath(ProjectRoot, file)}:");
+                                fileHasMatch = true;
+                            }
+                            results.Add($"  Line {lineNum}: {line.Trim()}");
+                            matchCount++;
+                            if (matchCount >= maxMatches) break;
+                        }
                     }
                 }
+                catch { /* skip unreadable files */ }
             }
 
-            if (!results.Any())
+            if (results.Count == 0)
             {
                 return $"No matches found for '{searchText}' in files matching '{pattern}'";
             }
 
-            return string.Join("\n", results);
+            var header = matchCount >= maxMatches
+                ? $"Found {matchCount}+ matches (showing first {maxMatches}):\n"
+                : "";
+            return header + string.Join("\n", results);
         }
         catch (Exception ex)
         {
@@ -316,7 +453,7 @@ public class FileSystemPlugin
     /// Executes a shell command in the project root directory.
     /// </summary>
     [KernelFunction("execute_command")]
-    [Description("Executes a shell command (e.g., git status, dotnet build, npm install). The command runs in the project root directory. Use this for git operations, build tools, package managers, and other CLI tasks.")]
+    [Description("Executes a shell command (e.g., git status, dotnet build, npm install). Runs in the project root directory. 30-second timeout. Output capped at 5000 characters. Avoid long-running commands.")]
     public async Task<string> ExecuteCommand(
         [Description("The shell command to execute (e.g., 'git status', 'dotnet build')")] string command)
     {
@@ -333,7 +470,7 @@ public class FileSystemPlugin
             var psi = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? "/c " + command : "-c \"" + escapedCmd + "\"",
+                Arguments = isWindows ? "/c \"" + escapedCmd + "\"" : "-c \"" + escapedCmd + "\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -364,6 +501,13 @@ public class FileSystemPlugin
                 output += (string.IsNullOrEmpty(output) ? "" : "\n") + stderr;
             if (string.IsNullOrEmpty(output))
                 output = "(no output)";
+
+            // Cap output to prevent context blowup from large command results
+            const int maxOutputChars = 5000;
+            if (output.Length > maxOutputChars)
+            {
+                output = output[..maxOutputChars] + "\n... [output truncated at 5000 characters]";
+            }
 
             return $"Exit code: {proc.ExitCode}\n{output}";
         }
@@ -398,12 +542,52 @@ public class FileSystemPlugin
         }
     }
 
-    private List<string> GetAllFiles(string directory)
+    /// <summary>
+    /// Returns the cached file list, refreshing if expired or invalidated.
+    /// </summary>
+    private List<string> GetAllFilesCached()
     {
+        lock (_cacheLock)
+        {
+            if (_cachedFiles != null && DateTime.UtcNow < _cacheExpiry)
+                return _cachedFiles;
+        }
+
+        var files = GetAllFiles(ProjectRoot);
+
+        lock (_cacheLock)
+        {
+            _cachedFiles = files;
+            _cacheExpiry = DateTime.UtcNow + CacheTtl;
+        }
+
+        return files;
+    }
+
+    /// <summary>
+    /// Invalidates the file cache (call after write/delete operations).
+    /// </summary>
+    private void InvalidateCache()
+    {
+        lock (_cacheLock)
+        {
+            _cachedFiles = null;
+            _cacheExpiry = DateTime.MinValue;
+        }
+    }
+
+    private List<string> GetAllFiles(string directory, HashSet<string>? visited = null)
+    {
+        visited ??= new(StringComparer.OrdinalIgnoreCase);
         var files = new List<string>();
 
         try
         {
+            // Guard against symlink cycles by tracking visited directories
+            var realPath = Path.GetFullPath(directory);
+            if (!visited.Add(realPath))
+                return files;
+
             // Add files in current directory
             files.AddRange(Directory.GetFiles(directory));
 
@@ -413,7 +597,7 @@ public class FileSystemPlugin
                 var dirName = Path.GetFileName(subDir);
                 if (!_ignoreDirectories.Contains(dirName))
                 {
-                    files.AddRange(GetAllFiles(subDir));
+                    files.AddRange(GetAllFiles(subDir, visited));
                 }
             }
         }
@@ -443,6 +627,11 @@ public class FileSystemPlugin
 
     private string GetFullPath(string relativePath)
     {
+        // Strip redundant project root prefix from the relative path.
+        // Some models include the project root in the path (e.g. "src/App/bin/Debug/net8.0/Games/file.js"
+        // when ProjectRoot is already ".../src/App/bin/Debug/net8.0"), causing Path.Combine to double up.
+        relativePath = StripRedundantRootPrefix(relativePath);
+
         var fullPath = Path.Combine(ProjectRoot, relativePath);
         fullPath = Path.GetFullPath(fullPath);
 
@@ -458,5 +647,33 @@ public class FileSystemPlugin
         }
 
         return fullPath;
+    }
+
+    /// <summary>
+    /// Detects when the model includes part of the project root in a relative path
+    /// and strips the redundant prefix. For example, if ProjectRoot ends with
+    /// "src/MandoCode/bin/Debug/net8.0" and relativePath is
+    /// "src/MandoCode/bin/Debug/net8.0/Games/file.js", returns "Games/file.js".
+    /// </summary>
+    private string StripRedundantRootPrefix(string relativePath)
+    {
+        var normalizedRelative = relativePath.Replace('\\', '/').TrimStart('/');
+        var normalizedRoot = ProjectRoot.Replace('\\', '/');
+        var rootParts = normalizedRoot.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Try progressively longer suffixes of the project root path.
+        // If the relative path starts with a matching suffix, strip it.
+        for (int i = 0; i < rootParts.Length; i++)
+        {
+            var suffix = string.Join('/', rootParts.Skip(i));
+            if (normalizedRelative.StartsWith(suffix + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                var stripped = normalizedRelative[(suffix.Length + 1)..];
+                if (!string.IsNullOrEmpty(stripped))
+                    return stripped;
+            }
+        }
+
+        return relativePath;
     }
 }

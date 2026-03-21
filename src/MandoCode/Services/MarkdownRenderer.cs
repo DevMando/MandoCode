@@ -31,8 +31,9 @@ public static class MarkdownRenderer
 
     // Regex for detecting bare URLs and bare domain names in literal text
     private static readonly System.Text.RegularExpressions.Regex UrlPattern = new(
-        @"(https?://[^\s)\]>""]+|(?<![@\w])[\w][\w.-]*\.(?:com|org|net|io|dev|edu|gov|co|app|ai|us|uk|de|fr|jp|au|ca|ru|br|in|xyz|tech|info|biz|me|tv|cc)\b(?:/[^\s)\]>""]*)?)",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
+        @"(https?://[^\s)\]>""]{1,2000}|(?<![@\w])[\w][\w.-]{0,250}\.(?:com|org|net|io|dev|edu|gov|co|app|ai|us|uk|de|fr|jp|au|ca|ru|br|in|xyz|tech|info|biz|me|tv|cc)\b(?:/[^\s)\]>""]{0,2000})?)",
+        System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromSeconds(2));
 
     // Regex for detecting file paths (Windows absolute paths and Unix absolute paths)
     private static readonly System.Text.RegularExpressions.Regex FilePathPattern = new(

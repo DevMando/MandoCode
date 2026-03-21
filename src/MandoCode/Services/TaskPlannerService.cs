@@ -11,6 +11,7 @@ public class TaskPlannerService
 {
     private readonly AIService _aiService;
     private readonly MandoCodeConfig _config;
+    private readonly object _planStatusLock = new();
 
     /// <summary>
     /// Imperative verbs that indicate a complex action request (must appear at start).
@@ -259,20 +260,25 @@ public class TaskPlannerService
                 stepEvent = TaskProgressEvent.StepFailed(plan, step, ex.Message);
 
                 // Check if we should continue (step failure handling is done in UI)
-                if (plan.Status == TaskPlanStatus.Cancelled)
+                // Lock protects against concurrent status modification from UI thread
+                lock (_planStatusLock)
                 {
-                    shouldCancel = true;
-                }
-                else
-                {
-                    // If not cancelled, the UI has decided to continue (skip this step)
-                    step.Status = TaskStepStatus.Skipped;
+                    if (plan.Status == TaskPlanStatus.Cancelled)
+                    {
+                        shouldCancel = true;
+                    }
+                    else
+                    {
+                        // If not cancelled, the UI has decided to continue (skip this step)
+                        step.Status = TaskStepStatus.Skipped;
+                    }
                 }
             }
 
             // Wait for all function invocations to complete before moving to next step
-            // Uses event-based tracking with 30s timeout as safety net
-            await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
+            // Uses event-based tracking with 5s timeout as safety net
+            // (functions typically complete before the AI response returns)
+            await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
             // Yield outside try/catch
             if (stepEvent != null)
@@ -319,8 +325,11 @@ public class TaskPlannerService
     /// </summary>
     public void CancelPlan(TaskPlan plan)
     {
-        plan.Status = TaskPlanStatus.Cancelled;
-        plan.ExecutionSummary = "Plan cancelled by user.";
+        lock (_planStatusLock)
+        {
+            plan.Status = TaskPlanStatus.Cancelled;
+            plan.ExecutionSummary = "Plan cancelled by user.";
+        }
     }
 
     /// <summary>
@@ -488,7 +497,7 @@ public class TaskPlannerService
                 var content = match.Groups[2].Value.Trim();
 
                 // Split on " - " or ": " to separate description from instruction
-                var parts = Regex.Split(content, @"\s*[-:]\s*", RegexOptions.None, TimeSpan.FromSeconds(1));
+                var parts = Regex.Split(content, @"[\s]*[-:][\s]*", RegexOptions.None, TimeSpan.FromSeconds(1));
                 var description = parts[0].Trim();
                 var instruction = parts.Length > 1 ? string.Join(" ", parts.Skip(1)).Trim() : description;
 

@@ -270,11 +270,7 @@ public class ConfigurationWizard
                     break;
 
                 case "Reset to defaults":
-                    currentIgnoreDirectories = new List<string>
-                    {
-                        ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
-                        "packages", "dist", "build", "__pycache__", ".idea"
-                    };
+                    currentIgnoreDirectories = new List<string>(MandoCodeConfig.DefaultIgnoreDirectories);
                     AnsiConsole.MarkupLine("[green]✓ Reset to defaults[/]");
                     break;
             }

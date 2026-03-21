@@ -25,6 +25,16 @@ internal static class ConfigJsonOptions
 public class MandoCodeConfig
 {
     /// <summary>
+    /// Canonical list of directories to ignore during file operations.
+    /// Referenced by FileSystemPlugin, FileAutocompleteProvider, and CreateDefault().
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultIgnoreDirectories = new[]
+    {
+        ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
+        "packages", "dist", "build", "__pycache__", ".idea", ".claude"
+    };
+
+    /// <summary>
     /// Ollama endpoint URL.
     /// </summary>
     [JsonPropertyName("ollamaEndpoint")]
@@ -221,11 +231,7 @@ public class MandoCodeConfig
             ModelName = "minimax-m2.5:cloud",
             Temperature = 0.7,
             MaxTokens = 4096,
-            IgnoreDirectories = new List<string>
-            {
-                ".git", "node_modules", "bin", "obj", ".vs", ".vscode",
-                "packages", "dist", "build", "__pycache__", ".idea"
-            },
+            IgnoreDirectories = new List<string>(DefaultIgnoreDirectories),
             EnableTaskPlanning = true
         };
     }

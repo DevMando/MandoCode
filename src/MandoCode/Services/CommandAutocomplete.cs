@@ -355,7 +355,7 @@ public static class CommandAutocomplete
                         // Check for @ trigger: @ preceded by space or at position 0
                         if (key.KeyChar == '@' && _fileProvider != null
                             && autocompleteMode != AutocompleteMode.File
-                            && (cursorPos == 1 || input[cursorPos - 2] == ' '))
+                            && (cursorPos == 1 || (cursorPos >= 2 && input[cursorPos - 2] == ' ')))
                         {
                             atAnchorPos = cursorPos - 1;
                             filteredFiles = _fileProvider.FilterFiles("");

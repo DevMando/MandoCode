@@ -14,6 +14,7 @@
 @inject DiffApprovalHandler DiffApproval
 @inject ShellCommandHandler Shell
 @inject TerminalThemeService ThemeService
+@implements IDisposable
 
 <Banner />
 
@@ -45,8 +46,10 @@
 
 @code {
     protected bool _isConnected { get; set; } = false;
+    private bool _connectionChecked = false;
     private bool _hasRendered = false;
     private string? _modelWarning = null;
+    private bool _modelError = false;
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
@@ -59,6 +62,11 @@
 
     // Cancellation for active AI requests — triggered by Ctrl+C
     private CancellationTokenSource? _requestCts;
+
+    // Tracks recent function operations for contextual spinner messages
+    private int _recentReadCount;
+    private readonly List<string> _recentReadFiles = new();
+    private string? _lastOperationType;
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
@@ -176,6 +184,7 @@
 
         // Check Ollama connection synchronously — render depends on the result
         _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
+        _connectionChecked = true;
 
         // Detect terminal theme and apply curated palette
         if (Config.EnableThemeCustomization)
@@ -233,9 +242,15 @@
                 }
                 else
                 {
-                    // Hard error (model not found)
+                    // Hard error (model not found) — enter limited mode
+                    _modelError = true;
                     _modelWarning = errorMessage;
-                    return;
+                    AnsiConsole.WriteLine();
+                    AnsiConsole.MarkupLine("[yellow]You can fix this by:[/]");
+                    AnsiConsole.MarkupLine("[dim]  1. Pull the model:[/] ollama pull <model-name>");
+                    AnsiConsole.MarkupLine("[dim]  2. Run[/] /config [dim]to select a different model[/]");
+                    AnsiConsole.MarkupLine("[dim]  3. Make sure Ollama is running:[/] ollama serve");
+                    AnsiConsole.WriteLine();
                 }
             }
 
@@ -252,6 +267,9 @@
     {
         // Pause the spinner so the message renders on a clean line
         Spinner.Stop();
+
+        // Track operation type for contextual spinner messages
+        _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
         // Suppress display for known FileSystem operations — they will be shown
         // as rich operation displays when OnFunctionCompleted fires
@@ -273,6 +291,21 @@
         {
             // Render directly to stdout (capture deferred to Phase 2)
             OperationRenderer.Render(result.OperationDisplay);
+
+            // Track consecutive reads for contextual spinner messages
+            if (result.OperationDisplay.OperationType == "Read")
+            {
+                _recentReadCount++;
+                var fileName = Path.GetFileName(result.OperationDisplay.FilePath);
+                if (!string.IsNullOrEmpty(fileName))
+                    _recentReadFiles.Add(fileName);
+            }
+            else
+            {
+                // Non-read operation resets the read tracker
+                _recentReadCount = 0;
+                _recentReadFiles.Clear();
+            }
         }
         else if (result.Success)
         {
@@ -290,7 +323,31 @@
             FileProvider.RefreshCache();
         }
 
-        Spinner.Start();
+        // Show contextual spinner message based on what just happened
+        var activity = GetContextualActivity(result);
+        Spinner.Start(activity);
+    }
+
+    /// <summary>
+    /// Generates a contextual activity message for the spinner based on recent operations.
+    /// </summary>
+    private string? GetContextualActivity(FunctionExecutionResult result)
+    {
+        var opType = result.OperationDisplay?.OperationType ?? _lastOperationType ?? "";
+
+        return opType switch
+        {
+            "Read" when _recentReadCount >= 2 => $"Analyzing {_recentReadCount} files...",
+            "Read" => "Analyzing file...",
+            "Write" or "Update" => "Applying changes...",
+            "Search" => "Reviewing search results...",
+            "Glob" => "Scanning project structure...",
+            "WebSearch" => "Processing search results...",
+            "WebFetch" => "Reading web content...",
+            "Delete" => "Continuing...",
+            "Command" => "Processing command output...",
+            _ => null
+        };
     }
 
     /// <summary>
@@ -479,6 +536,14 @@
                 continue;
             }
 
+            // Block AI requests when model is not available
+            if (_modelError)
+            {
+                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [cyan]/config[/] to select a model, or pull one with [cyan]ollama pull <model-name>[/].");
+                AnsiConsole.WriteLine();
+                continue;
+            }
+
             // Matrix easter egg: play a cinematic moment for trigger phrases
             if (ContainsMatrixTrigger(input))
             {
@@ -591,6 +656,11 @@
 
     private async Task ProcessDirectRequestAsync(string input)
     {
+        // Reset operation tracking for the new request
+        _recentReadCount = 0;
+        _recentReadFiles.Clear();
+        _lastOperationType = null;
+
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[green]MandoCode:[/]");
         AnsiConsole.WriteLine();
@@ -607,7 +677,7 @@
             {
                 // Show our controllable spinner while waiting for first chunk
                 // This spinner can be stopped by HandleDiffApproval when it needs user input
-                Spinner.Start();
+                Spinner.Start("Thinking...");
 
                 if (await enumerator.MoveNextAsync())
                 {
@@ -841,9 +911,13 @@
         {
             case TaskProgressType.StepStarted:
                 Spinner.Stop();
+                _recentReadCount = 0;
+                _recentReadFiles.Clear();
+                _lastOperationType = null;
                 SpinnerService.SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
+                Spinner.Start("Working...");
                 break;
 
             case TaskProgressType.StepCompleted:
@@ -1249,6 +1323,27 @@
                 await AI.ReinitializeAsync(updatedConfig);
                 AnsiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
+
+                // Re-validate the model after config change
+                var (isValid, errorMessage) = await AI.ValidateModelAsync();
+                if (isValid)
+                {
+                    if (_modelError)
+                    {
+                        _modelError = false;
+                        _modelWarning = null;
+                        AnsiConsole.MarkupLine("[green]✓ Model validated successfully! You can now use MandoCode.[/]");
+                        AnsiConsole.WriteLine();
+                    }
+                }
+                else
+                {
+                    _modelError = true;
+                    _modelWarning = errorMessage;
+                    AnsiConsole.MarkupLine($"[yellow]Warning:[/] {errorMessage}");
+                    AnsiConsole.MarkupLine("[dim]Pull the model or run /config again to select a different one.[/]");
+                    AnsiConsole.WriteLine();
+                }
                 break;
 
             case "View current configuration":
@@ -1257,6 +1352,16 @@
                 AnsiConsole.WriteLine();
                 break;
         }
+    }
+
+    public void Dispose()
+    {
+        StopMusicVisualizer();
+        Spinner.Stop();
+        var cts = Interlocked.Exchange(ref _requestCts, null);
+        cts?.Dispose();
+        MusicPlayer?.Dispose();
+        ThemeService?.Dispose();
     }
 
 }
