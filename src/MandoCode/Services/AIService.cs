@@ -235,44 +235,57 @@ public class AIService
     /// Sends a message to the AI and gets a response.
     /// Includes retry logic for transient connection errors.
     /// </summary>
-    public async Task<string> ChatAsync(string userMessage)
+    public async Task<string> ChatAsync(string userMessage, CancellationToken cancellationToken = default)
     {
-        await _historyLock.WaitAsync();
+        // Add message under lock, then release before the long AI call
+        await _historyLock.WaitAsync(cancellationToken);
+        try { _chatHistory.AddUserMessage(userMessage); }
+        finally { _historyLock.Release(); }
+
         try
         {
-            _chatHistory.AddUserMessage(userMessage);
+            // Link caller's cancellation token with an internal 5-minute timeout
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
+            // Get the response with automatic function calling, with retry for transient errors
+            var response = await RetryPolicy.ExecuteWithRetryAsync(
+                async () => await _chatService.GetChatMessageContentAsync(
+                    _chatHistory,
+                    _settings,
+                    _kernel,
+                    linkedCts.Token
+                ),
+                _config.MaxRetryAttempts,
+                "ChatAsync"
+            );
+
+            // Extract token usage from the response
+            ExtractAndRecordTokens(response, "Chat");
+
+            // Add the final response to history
+            await _historyLock.WaitAsync();
             try
             {
-                // Get the response with automatic function calling, with retry for transient errors
-                var response = await RetryPolicy.ExecuteWithRetryAsync(
-                    async () => await _chatService.GetChatMessageContentAsync(
-                        _chatHistory,
-                        _settings,
-                        _kernel
-                    ),
-                    _config.MaxRetryAttempts,
-                    "ChatAsync"
-                );
-
-                // Extract token usage from the response
-                ExtractAndRecordTokens(response, "Chat");
-
-                // Add the final response to history
                 if (!string.IsNullOrEmpty(response.Content))
                 {
                     _chatHistory.AddAssistantMessage(response.Content);
                 }
+            }
+            finally { _historyLock.Release(); }
 
-                var rawResponse = response.Content ?? "No response from AI.";
+            var rawResponse = response.Content ?? "No response from AI.";
 
-                // Check if the model output function calls as text instead of invoking them
-                var processedResponse = _config.EnableFallbackFunctionParsing
-                    ? await ProcessTextFunctionCallsAsync(rawResponse)
-                    : rawResponse;
+            // Check if the model output function calls as text instead of invoking them
+            var processedResponse = _config.EnableFallbackFunctionParsing
+                ? await ProcessTextFunctionCallsAsync(rawResponse)
+                : rawResponse;
 
-                // Update history with processed response
-                if (!string.IsNullOrEmpty(processedResponse) && processedResponse != rawResponse)
+            // Update history with processed response
+            if (!string.IsNullOrEmpty(processedResponse) && processedResponse != rawResponse)
+            {
+                await _historyLock.WaitAsync();
+                try
                 {
                     // Remove the raw response and add processed one
                     if (_chatHistory.Count > 0 && _chatHistory.Last().Role == AuthorRole.Assistant)
@@ -281,17 +294,23 @@ public class AIService
                     }
                     _chatHistory.AddAssistantMessage(processedResponse);
                 }
+                finally { _historyLock.Release(); }
+            }
 
-                return processedResponse;
-            }
-            catch (Exception ex)
-            {
-                return FormatErrorMessage(ex);
-            }
+            return processedResponse;
         }
-        finally
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            _historyLock.Release();
+            return "Request cancelled.";
+        }
+        catch (OperationCanceledException)
+        {
+            return "Error: Request timed out. The model took too long to respond.\n\n" +
+                   "Try breaking your request into smaller parts, or use a faster model.";
+        }
+        catch (Exception ex)
+        {
+            return FormatErrorMessage(ex);
         }
     }
 
@@ -305,75 +324,75 @@ public class AIService
     {
         string response;
 
+        // Add message under lock, then release before the long AI call
         await _historyLock.WaitAsync(cancellationToken);
+        try { _chatHistory.AddUserMessage(userMessage); }
+        finally { _historyLock.Release(); }
+
         try
         {
-            _chatHistory.AddUserMessage(userMessage);
+            // Link caller's cancellation token with an internal 5-minute timeout
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
+            var result = await RetryPolicy.ExecuteWithRetryAsync(
+                async () => await _chatService.GetChatMessageContentAsync(
+                    _chatHistory,
+                    _settings,
+                    _kernel,
+                    linkedCts.Token
+                ),
+                _config.MaxRetryAttempts,
+                "ChatStreamAsync"
+            );
+
+            // Extract token usage from the response
+            ExtractAndRecordTokens(result, "Chat");
+
+            var rawResponse = result.Content ?? "No response from AI.";
+
+            // Check if the model output function calls as text instead of invoking them
+            response = _config.EnableFallbackFunctionParsing
+                ? await ProcessTextFunctionCallsAsync(rawResponse)
+                : rawResponse;
+
+            // Detect if the response was truncated due to hitting the token limit
+            if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
+                && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
+            {
+                response += "\n\n⚠ Response was cut off (hit the token limit). " +
+                           "You can say \"continue\" to keep going, or increase max tokens with /config.";
+            }
+
+            // Add the response to history under lock
+            await _historyLock.WaitAsync();
             try
             {
-                // Link caller's cancellation token with an internal 5-minute timeout
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-                var result = await RetryPolicy.ExecuteWithRetryAsync(
-                    async () => await _chatService.GetChatMessageContentAsync(
-                        _chatHistory,
-                        _settings,
-                        _kernel,
-                        linkedCts.Token
-                    ),
-                    _config.MaxRetryAttempts,
-                    "ChatStreamAsync"
-                );
-
-                // Extract token usage from the response
-                ExtractAndRecordTokens(result, "Chat");
-
-                var rawResponse = result.Content ?? "No response from AI.";
-
-                // Check if the model output function calls as text instead of invoking them
-                response = _config.EnableFallbackFunctionParsing
-                    ? await ProcessTextFunctionCallsAsync(rawResponse)
-                    : rawResponse;
-
-                // Detect if the response was truncated due to hitting the token limit
-                if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
-                    && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
-                {
-                    response += "\n\n⚠ Response was cut off (hit the token limit). " +
-                               "You can say \"continue\" to keep going, or increase max tokens with /config.";
-                }
-
-                // Add the response to history
                 if (!string.IsNullOrEmpty(response))
                 {
                     _chatHistory.AddAssistantMessage(response);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                response = "Request cancelled.";
-            }
-            catch (OperationCanceledException)
-            {
-                response = "Error: Request timed out. The model took too long to respond.\n\n" +
-                          "Try breaking your request into smaller parts, or use a faster model.";
-            }
-            catch (HttpRequestException ex)
-            {
-                response = $"Error: Connection to Ollama failed.\n\n" +
-                          $"Details: {ex.Message}\n\n" +
-                          "Make sure Ollama is running: ollama serve";
-            }
-            catch (Exception ex)
-            {
-                response = FormatErrorMessage(ex);
-            }
+            finally { _historyLock.Release(); }
         }
-        finally
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            _historyLock.Release();
+            response = "Request cancelled.";
+        }
+        catch (OperationCanceledException)
+        {
+            response = "Error: Request timed out. The model took too long to respond.\n\n" +
+                      "Try breaking your request into smaller parts, or use a faster model.";
+        }
+        catch (HttpRequestException ex)
+        {
+            response = $"Error: Connection to Ollama failed.\n\n" +
+                      $"Details: {ex.Message}\n\n" +
+                      "Make sure Ollama is running: ollama serve";
+        }
+        catch (Exception ex)
+        {
+            response = FormatErrorMessage(ex);
         }
 
         // Yield outside the lock — response is fully computed
@@ -410,7 +429,7 @@ public class AIService
     /// Gets a task plan from the AI for a complex request.
     /// Uses a longer timeout to allow the model to generate a complete plan.
     /// </summary>
-    public async Task<string> GetPlanAsync(string userMessage)
+    public async Task<string> GetPlanAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         // Use a separate chat history for planning (doesn't pollute main conversation)
         var planningHistory = new ChatHistory(SystemPrompts.TaskPlannerPrompt);
@@ -420,6 +439,7 @@ public class AIService
         {
             // Use a longer timeout for planning (90 seconds) - local models can be slow
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
 
             // Use simpler settings without function calling for faster planning
             var planSettings = new OllamaPromptExecutionSettings
@@ -432,7 +452,7 @@ public class AIService
                     planningHistory,
                     planSettings,
                     _kernel,
-                    cts.Token
+                    linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
                 "GetPlanAsync"
@@ -442,6 +462,10 @@ public class AIService
             ExtractAndRecordTokens(result, "Plan");
 
             return result.Content ?? "Failed to generate plan.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Planning cancelled.", cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -457,16 +481,21 @@ public class AIService
     /// Executes a single step of a task plan with function calling enabled.
     /// Uses previous step results as context for continuity.
     /// </summary>
-    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults)
+    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
     {
-        // Build context from previous step results
+        // Build context from previous step results — only include last 2 steps
+        // to keep token count manageable as plans grow
         var contextBuilder = new System.Text.StringBuilder();
         contextBuilder.AppendLine(_systemPrompt);
 
-        if (previousResults.Any())
+        var recentResults = previousResults.Count > 2
+            ? previousResults.Skip(previousResults.Count - 2).ToList()
+            : previousResults;
+
+        if (recentResults.Any())
         {
             contextBuilder.AppendLine("\n--- Results from Previous Steps ---");
-            foreach (var result in previousResults)
+            foreach (var result in recentResults)
             {
                 contextBuilder.AppendLine(result);
             }
@@ -481,15 +510,15 @@ public class AIService
         {
             // Use the standard timeout for execution (5 minutes)
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
 
-            // Use settings that disable concurrent invocation for plan steps
-            // This ensures functions complete sequentially before moving to next step
+            // Allow concurrent function invocation within a step for parallel file operations
             var stepSettings = new OllamaPromptExecutionSettings
             {
                 Temperature = (float)_config.Temperature,
                 FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
                     autoInvoke: true,
-                    options: new() { AllowConcurrentInvocation = false }
+                    options: new() { AllowConcurrentInvocation = true }
                 )
             };
 
@@ -499,7 +528,7 @@ public class AIService
                     stepHistory,
                     stepSettings,
                     _kernel,
-                    cts.Token
+                    linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
                 "ExecutePlanStepAsync"
@@ -511,27 +540,23 @@ public class AIService
 
             var response = result.Content ?? "Step completed (no response content).";
 
-            // Wait for any auto-invoked functions to complete using the completion tracker
-            await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
+            // Wait for any auto-invoked functions to complete — 5s safety net
+            // (functions typically complete before the AI response returns)
+            await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
             // Check if the model output function calls as text instead of invoking them
             var processedResponse = _config.EnableFallbackFunctionParsing
                 ? await ProcessTextFunctionCallsAsync(response)
                 : response;
 
-            // Also add to main history so user can see the full conversation
-            await _historyLock.WaitAsync();
-            try
-            {
-                _chatHistory.AddUserMessage($"[Plan Step] {stepInstruction}");
-                _chatHistory.AddAssistantMessage(processedResponse);
-            }
-            finally
-            {
-                _historyLock.Release();
-            }
+            // Plan steps use their own isolated history — don't bloat the main
+            // conversation history. The main history is for direct user requests.
 
             return processedResponse;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Step cancelled.", cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -739,12 +764,14 @@ public class AIService
     /// <summary>
     /// Extracts a JSON object starting at the given index by counting brace depth.
     /// </summary>
-    private string ExtractJsonObject(string text, int startIndex)
+    /// <summary>
+    /// Finds the bounds (start, end exclusive) of a JSON object starting at the given index.
+    /// Handles nested braces and string escaping. Returns null if no valid object found.
+    /// </summary>
+    private static (int Start, int End)? FindJsonObjectBounds(string text, int startIndex)
     {
         if (startIndex >= text.Length || text[startIndex] != '{')
-        {
-            return string.Empty;
-        }
+            return null;
 
         var depth = 0;
         var inString = false;
@@ -754,42 +781,29 @@ public class AIService
         {
             var c = text[i];
 
-            if (escapeNext)
-            {
-                escapeNext = false;
-                continue;
-            }
-
-            if (c == '\\' && inString)
-            {
-                escapeNext = true;
-                continue;
-            }
-
-            if (c == '"')
-            {
-                inString = !inString;
-                continue;
-            }
+            if (escapeNext) { escapeNext = false; continue; }
+            if (c == '\\' && inString) { escapeNext = true; continue; }
+            if (c == '"') { inString = !inString; continue; }
 
             if (!inString)
             {
-                if (c == '{')
-                {
-                    depth++;
-                }
+                if (c == '{') depth++;
                 else if (c == '}')
                 {
                     depth--;
                     if (depth == 0)
-                    {
-                        return text.Substring(startIndex, i - startIndex + 1);
-                    }
+                        return (startIndex, i + 1);
                 }
             }
         }
 
-        return string.Empty;
+        return null;
+    }
+
+    private string ExtractJsonObject(string text, int startIndex)
+    {
+        var bounds = FindJsonObjectBounds(text, startIndex);
+        return bounds.HasValue ? text[bounds.Value.Start..bounds.Value.End] : string.Empty;
     }
 
     /// <summary>
@@ -801,65 +815,18 @@ public class AIService
         var namePattern = @"\{\s*""name""\s*:\s*""[^""]+""";
         var matches = Regex.Matches(text, namePattern);
 
-        // Process in reverse order to maintain indices
         var jsonRanges = new List<(int Start, int End)>();
 
         foreach (Match match in matches)
         {
-            // Find the complete JSON object
-            var startIndex = match.Index;
-            var depth = 0;
-            var inString = false;
-            var escapeNext = false;
-            var endIndex = startIndex;
-
-            for (int i = startIndex; i < text.Length; i++)
+            var bounds = FindJsonObjectBounds(text, match.Index);
+            if (bounds.HasValue)
             {
-                var c = text[i];
-
-                if (escapeNext)
-                {
-                    escapeNext = false;
-                    continue;
-                }
-
-                if (c == '\\' && inString)
-                {
-                    escapeNext = true;
-                    continue;
-                }
-
-                if (c == '"')
-                {
-                    inString = !inString;
-                    continue;
-                }
-
-                if (!inString)
-                {
-                    if (c == '{')
-                    {
-                        depth++;
-                    }
-                    else if (c == '}')
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            endIndex = i;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (endIndex > startIndex)
-            {
-                jsonRanges.Add((startIndex, endIndex + 1));
+                jsonRanges.Add(bounds.Value);
             }
         }
 
-        // Remove ranges in reverse order
+        // Remove ranges in reverse order to maintain indices
         foreach (var (start, end) in jsonRanges.OrderByDescending(r => r.Start))
         {
             result = result.Remove(start, end - start);

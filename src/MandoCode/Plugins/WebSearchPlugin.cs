@@ -228,6 +228,9 @@ public class WebSearchPlugin
         return rawUrl;
     }
 
+    // Pre-compiled regex for collapsing inline whitespace
+    private static readonly Regex InlineWhitespacePattern = new(@"[ \t]+", RegexOptions.Compiled);
+
     /// <summary>
     /// Collapses excessive whitespace in extracted text content.
     /// </summary>
@@ -257,7 +260,7 @@ public class WebSearchPlugin
             else
             {
                 // Collapse inline whitespace (tabs, multiple spaces)
-                var collapsed = Regex.Replace(line, @"[ \t]+", " ");
+                var collapsed = InlineWhitespacePattern.Replace(line, " ");
                 result.Add(collapsed);
                 lastWasEmpty = false;
             }

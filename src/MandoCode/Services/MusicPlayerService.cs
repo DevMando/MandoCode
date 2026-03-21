@@ -189,7 +189,7 @@ public class MusicPlayerService : IDisposable
                 else
                 {
                     // Embedded resource track
-                    var stream = _assembly.GetManifestResourceStream(track.ResourceName);
+                    using var stream = _assembly.GetManifestResourceStream(track.ResourceName);
                     if (stream == null)
                     {
                         AudioError = $"Embedded audio resource not found: {track.ResourceName}";
@@ -200,7 +200,6 @@ public class MusicPlayerService : IDisposable
                     _resourceStream = new MemoryStream();
                     stream.CopyTo(_resourceStream);
                     _resourceStream.Position = 0;
-                    stream.Dispose();
 
                     _mp3Reader = new Mp3FileReader(_resourceStream);
                 }
@@ -361,23 +360,34 @@ public class LoopStream : WaveStream
     public override long Position
     {
         get => _source.Position;
-        set => _source.Position = value;
+        set
+        {
+            if (!_source.CanSeek)
+                throw new NotSupportedException("Source stream does not support seeking");
+            _source.Position = value;
+        }
     }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
         int totalRead = 0;
+        int loopResets = 0;
         while (totalRead < count)
         {
             int read = _source.Read(buffer, offset + totalRead, count - totalRead);
             if (read == 0)
             {
-                if (_source.Position == 0)
+                if (_source.Position == 0 || loopResets >= 3)
                 {
-                    // Source is empty — avoid infinite loop
+                    // Source is empty or stuck — avoid infinite loop
                     break;
                 }
                 _source.Position = 0; // Loop back to start
+                loopResets++;
+            }
+            else
+            {
+                loopResets = 0;
             }
             totalRead += read;
         }

@@ -139,8 +139,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         bool capturedIsNewFile = false;
         bool approvalWasShown = false;
 
-        // For write_file: capture old content and new-file flag before any approval or execution
-        if (context.Function.Name == "write_file" && !string.IsNullOrEmpty(ProjectRoot))
+        // For write_file or edit_file: capture old content and new-file flag before any approval or execution
+        if ((context.Function.Name == "write_file" || context.Function.Name == "edit_file") && !string.IsNullOrEmpty(ProjectRoot))
         {
             context.Arguments.TryGetValue("relativePath", out var pObj);
             var path = pObj?.ToString();
@@ -184,6 +184,43 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     }
                     catch { }
                 }
+            }
+        }
+
+        // Intercept edit_file calls for diff approval — construct the new file content
+        // from the find/replace to show a proper diff
+        if (context.Function.Name == "edit_file" && OnWriteApprovalRequested != null && capturedOldContent != null)
+        {
+            context.Arguments.TryGetValue("old_text", out var oldTextObj);
+            context.Arguments.TryGetValue("new_text", out var newTextObj);
+            context.Arguments.TryGetValue("relativePath", out var editPathObj);
+            var oldText = oldTextObj?.ToString() ?? "";
+            var newText = newTextObj?.ToString() ?? "";
+            var editPath = editPathObj?.ToString() ?? "";
+
+            // Build the full new content by applying the replacement
+            var newContent = capturedOldContent.Replace(oldText, newText);
+
+            approvalWasShown = true;
+            var editApproval = await OnWriteApprovalRequested(editPath, capturedOldContent, newContent);
+
+            if (editApproval.Response != DiffApprovalResponse.Approved &&
+                editApproval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
+            {
+                var resultMsg = editApproval.Response == DiffApprovalResponse.Denied
+                    ? $"User denied the edit to '{editPath}'. Do not retry unless the user asks."
+                    : $"User rejected the edit to '{editPath}' and provided new instructions: {editApproval.UserMessage}";
+
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, resultMsg);
+                OnFunctionCompleted?.Invoke(new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = resultMsg.Length > 200 ? resultMsg[..200] + "..." : resultMsg,
+                    Success = true
+                });
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
             }
         }
 
@@ -349,6 +386,17 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             case "write_file":
                 return BuildWriteDisplay(arguments, capturedOldContent, capturedIsNewFile, approvalWasShown);
 
+            case "edit_file":
+                return BuildEditDisplay(arguments, capturedOldContent, approvalWasShown);
+
+            case "grep_files":
+                arguments.TryGetValue("searchText", out var grepSearchText);
+                return new OperationDisplayEvent
+                {
+                    OperationType = "Search",
+                    FilePath = grepSearchText?.ToString() ?? ""
+                };
+
             case "read_file_contents":
                 return BuildReadDisplay(arguments, resultStr);
 
@@ -508,6 +556,34 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Builds display event for edit operations (find/replace).
+    /// </summary>
+    private OperationDisplayEvent BuildEditDisplay(
+        IReadOnlyDictionary<string, object?> arguments,
+        string? oldContent,
+        bool approvalWasShown)
+    {
+        arguments.TryGetValue("relativePath", out var pathObj);
+        arguments.TryGetValue("old_text", out var oldTextObj);
+        arguments.TryGetValue("new_text", out var newTextObj);
+        var filePath = pathObj?.ToString() ?? "";
+        var oldText = oldTextObj?.ToString() ?? "";
+        var newText = newTextObj?.ToString() ?? "";
+
+        var addedLines = newText.Split('\n').Length;
+        var removedLines = oldText.Split('\n').Length;
+
+        return new OperationDisplayEvent
+        {
+            OperationType = "Update",
+            FilePath = filePath,
+            Additions = addedLines,
+            Deletions = removedLines,
+            ApprovalWasShown = approvalWasShown
+        };
+    }
+
+    /// <summary>
     /// Builds display event for delete operations.
     /// </summary>
     private OperationDisplayEvent BuildDeleteDisplay(
@@ -649,6 +725,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (string.IsNullOrEmpty(functionName)) return false;
 
         return functionName.Contains("write", StringComparison.OrdinalIgnoreCase) ||
+               functionName.Contains("edit", StringComparison.OrdinalIgnoreCase) ||
                functionName.Contains("create", StringComparison.OrdinalIgnoreCase) ||
                functionName.Contains("delete", StringComparison.OrdinalIgnoreCase) ||
                functionName.Equals("execute_command", StringComparison.OrdinalIgnoreCase);
@@ -692,6 +769,16 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     if (arguments.TryGetValue("pattern", out var pattern))
                         return $"Finding files matching '{pattern}'";
                     return "Listing files";
+
+                case "edit_file":
+                    if (arguments.TryGetValue("relativePath", out var editPath))
+                        return $"Editing {editPath}";
+                    return "Editing file";
+
+                case "grep_files":
+                    if (arguments.TryGetValue("searchText", out var grepText))
+                        return $"Searching all files for '{grepText}'";
+                    return "Searching all files";
 
                 case "search_text_in_files":
                     if (arguments.TryGetValue("searchText", out var searchText))

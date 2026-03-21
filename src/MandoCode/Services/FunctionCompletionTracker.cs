@@ -92,12 +92,12 @@ public class FunctionCompletionTracker : IDisposable
     }
 
     /// <summary>
-    /// Waits for all pending function executions to complete with default 30s timeout.
+    /// Waits for all pending function executions to complete with default 5s timeout.
     /// </summary>
     /// <returns>True if all functions completed within timeout, false otherwise.</returns>
     public Task<bool> WaitForAllCompletionsAsync()
     {
-        return WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
+        return WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
     }
 
     /// <summary>

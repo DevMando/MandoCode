@@ -69,7 +69,7 @@ public class ShellCommandHandler
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? "/c " + cmd : "-c \"" + escapedCmd + "\"",
+                Arguments = isWindows ? "/c \"" + escapedCmd + "\"" : "-c \"" + escapedCmd + "\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -84,17 +84,46 @@ public class ShellCommandHandler
                 return;
             }
 
-            var stderrTask = proc.StandardError.ReadToEndAsync();
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = stderrTask.GetAwaiter().GetResult();
-            proc.WaitForExit(30_000);
+            // Stream output line-by-line with a cap to prevent OOM
+            const int maxChars = 100_000;
+            var totalChars = 0;
+            var hasOutput = false;
 
-            if (!string.IsNullOrEmpty(stdout))
-                Console.Write(stdout);
+            // Read stderr in background
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            // Stream stdout line-by-line
+            string? line;
+            while ((line = proc.StandardOutput.ReadLine()) != null)
+            {
+                if (totalChars < maxChars)
+                {
+                    Console.WriteLine(line);
+                    totalChars += line.Length + 1;
+                }
+                hasOutput = true;
+            }
+
+            if (totalChars >= maxChars)
+            {
+                AnsiConsole.MarkupLine("[yellow][output truncated at 100k characters][/]");
+            }
+
+            var stderr = stderrTask.GetAwaiter().GetResult();
             if (!string.IsNullOrEmpty(stderr))
+            {
                 Console.Write($"\u001b[31m{stderr}\u001b[0m");
-            if (string.IsNullOrEmpty(stdout) && string.IsNullOrEmpty(stderr))
+                hasOutput = true;
+            }
+
+            if (!hasOutput)
                 AnsiConsole.MarkupLine("[dim](no output)[/]");
+
+            if (!proc.WaitForExit(30_000))
+            {
+                try { proc.Kill(); } catch { }
+                AnsiConsole.MarkupLine("[yellow]Command timed out after 30 seconds.[/]");
+            }
         }
         catch (Exception ex)
         {

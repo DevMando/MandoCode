@@ -32,6 +32,11 @@ public static class CommandAutocomplete
 
     private static FileAutocompleteProvider? _fileProvider;
 
+    // Command history for up/down arrow navigation
+    private static readonly List<string> _history = new();
+    private static int _historyIndex = -1;
+    private static string? _savedInput;
+
     private enum AutocompleteMode { None, Command, File }
 
     /// <summary>
@@ -40,6 +45,38 @@ public static class CommandAutocomplete
     public static void Initialize(FileAutocompleteProvider provider)
     {
         _fileProvider = provider;
+    }
+
+    /// <summary>
+    /// Adds an input to the command history. Skips empty inputs and consecutive duplicates.
+    /// Resets the history navigation index.
+    /// </summary>
+    private static void AddToHistory(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return;
+
+        // Skip consecutive duplicates
+        if (_history.Count > 0 && _history[^1] == input)
+        {
+            _historyIndex = -1;
+            _savedInput = null;
+            return;
+        }
+
+        _history.Add(input);
+        _historyIndex = -1;
+        _savedInput = null;
+    }
+
+    /// <summary>
+    /// Clears the command history.
+    /// </summary>
+    public static void ClearHistory()
+    {
+        _history.Clear();
+        _historyIndex = -1;
+        _savedInput = null;
     }
 
     /// <summary>
@@ -97,6 +134,10 @@ public static class CommandAutocomplete
         List<string> filteredFiles = new();
         int atAnchorPos = -1;
 
+        // Reset history navigation for each new prompt
+        _historyIndex = -1;
+        _savedInput = null;
+
         while (true)
         {
             var key = Console.ReadKey(intercept: true);
@@ -146,7 +187,9 @@ public static class CommandAutocomplete
                         if (autocompleteMode != AutocompleteMode.None)
                             ClearAutocompleteDisplay(ref cursorTop);
                         Console.WriteLine();
-                        return input.ToString();
+                        var submitted = input.ToString();
+                        AddToHistory(submitted);
+                        return submitted;
                     }
 
                 case ConsoleKey.Tab:
@@ -250,6 +293,24 @@ public static class CommandAutocomplete
                         selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredFiles.Count - 1;
                         DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
                     }
+                    else if (autocompleteMode == AutocompleteMode.None && _history.Count > 0)
+                    {
+                        // Navigate backward through command history
+                        if (_historyIndex == -1)
+                        {
+                            // Save current input before entering history
+                            _savedInput = input.ToString();
+                            _historyIndex = _history.Count - 1;
+                        }
+                        else if (_historyIndex > 0)
+                        {
+                            _historyIndex--;
+                        }
+                        input.Clear();
+                        input.Append(_history[_historyIndex]);
+                        cursorPos = input.Length;
+                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
+                    }
                     continue;
 
                 case ConsoleKey.DownArrow:
@@ -262,6 +323,26 @@ public static class CommandAutocomplete
                     {
                         selectedIndex = (selectedIndex + 1) % filteredFiles.Count;
                         DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
+                    }
+                    else if (autocompleteMode == AutocompleteMode.None && _historyIndex >= 0)
+                    {
+                        // Navigate forward through command history
+                        _historyIndex++;
+                        if (_historyIndex >= _history.Count)
+                        {
+                            // Past the end — restore saved input
+                            _historyIndex = -1;
+                            input.Clear();
+                            input.Append(_savedInput ?? "");
+                            _savedInput = null;
+                        }
+                        else
+                        {
+                            input.Clear();
+                            input.Append(_history[_historyIndex]);
+                        }
+                        cursorPos = input.Length;
+                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
                     }
                     continue;
 
@@ -355,7 +436,7 @@ public static class CommandAutocomplete
                         // Check for @ trigger: @ preceded by space or at position 0
                         if (key.KeyChar == '@' && _fileProvider != null
                             && autocompleteMode != AutocompleteMode.File
-                            && (cursorPos == 1 || input[cursorPos - 2] == ' '))
+                            && (cursorPos == 1 || (cursorPos >= 2 && input[cursorPos - 2] == ' ')))
                         {
                             atAnchorPos = cursorPos - 1;
                             filteredFiles = _fileProvider.FilterFiles("");

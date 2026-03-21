@@ -11,6 +11,7 @@ public class TaskPlannerService
 {
     private readonly AIService _aiService;
     private readonly MandoCodeConfig _config;
+    private readonly object _planStatusLock = new();
 
     /// <summary>
     /// Imperative verbs that indicate a complex action request (must appear at start).
@@ -173,7 +174,7 @@ public class TaskPlannerService
     /// <summary>
     /// Creates a task plan from a user request.
     /// </summary>
-    public async Task<TaskPlan> CreatePlanAsync(string userMessage)
+    public async Task<TaskPlan> CreatePlanAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         var plan = new TaskPlan
         {
@@ -184,7 +185,7 @@ public class TaskPlannerService
         try
         {
             // Get the plan from the AI using the planning prompt
-            var planResponse = await _aiService.GetPlanAsync(userMessage);
+            var planResponse = await _aiService.GetPlanAsync(userMessage, cancellationToken);
 
             // Parse the response into steps
             plan.Steps = ParsePlanResponse(planResponse);
@@ -221,7 +222,7 @@ public class TaskPlannerService
     /// <summary>
     /// Executes a task plan step by step, yielding progress events.
     /// </summary>
-    public async IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(TaskPlan plan)
+    public async IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(TaskPlan plan, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         plan.Status = TaskPlanStatus.InProgress;
         var previousResults = new List<string>();
@@ -230,6 +231,14 @@ public class TaskPlannerService
 
         foreach (var step in plan.Steps)
         {
+            // Check for cancellation before starting each step
+            if (cancellationToken.IsCancellationRequested)
+            {
+                CancelPlan(plan);
+                yield return TaskProgressEvent.PlanCancelled(plan);
+                yield break;
+            }
+
             // Skip if already completed or skipped
             if (step.Status == TaskStepStatus.Completed || step.Status == TaskStepStatus.Skipped)
                 continue;
@@ -244,13 +253,22 @@ public class TaskPlannerService
             try
             {
                 // Execute the step with context from previous results
-                var result = await _aiService.ExecutePlanStepAsync(step.Instruction, previousResults);
+                var result = await _aiService.ExecutePlanStepAsync(step.Instruction, previousResults, cancellationToken);
 
                 step.Result = result;
                 step.Status = TaskStepStatus.Completed;
                 previousResults.Add($"Step {step.StepNumber} ({step.Description}): {result}");
 
                 stepEvent = TaskProgressEvent.StepCompleted(plan, step, result);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // User cancelled — stop the entire plan immediately
+                step.Status = TaskStepStatus.Failed;
+                step.ErrorMessage = "Cancelled by user.";
+                shouldCancel = true;
+                CancelPlan(plan);
+                stepEvent = TaskProgressEvent.StepFailed(plan, step, "Cancelled by user.");
             }
             catch (Exception ex)
             {
@@ -259,20 +277,25 @@ public class TaskPlannerService
                 stepEvent = TaskProgressEvent.StepFailed(plan, step, ex.Message);
 
                 // Check if we should continue (step failure handling is done in UI)
-                if (plan.Status == TaskPlanStatus.Cancelled)
+                // Lock protects against concurrent status modification from UI thread
+                lock (_planStatusLock)
                 {
-                    shouldCancel = true;
-                }
-                else
-                {
-                    // If not cancelled, the UI has decided to continue (skip this step)
-                    step.Status = TaskStepStatus.Skipped;
+                    if (plan.Status == TaskPlanStatus.Cancelled)
+                    {
+                        shouldCancel = true;
+                    }
+                    else
+                    {
+                        // If not cancelled, the UI has decided to continue (skip this step)
+                        step.Status = TaskStepStatus.Skipped;
+                    }
                 }
             }
 
             // Wait for all function invocations to complete before moving to next step
-            // Uses event-based tracking with 30s timeout as safety net
-            await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
+            // Uses event-based tracking with 5s timeout as safety net
+            // (functions typically complete before the AI response returns)
+            await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
             // Yield outside try/catch
             if (stepEvent != null)
@@ -319,8 +342,11 @@ public class TaskPlannerService
     /// </summary>
     public void CancelPlan(TaskPlan plan)
     {
-        plan.Status = TaskPlanStatus.Cancelled;
-        plan.ExecutionSummary = "Plan cancelled by user.";
+        lock (_planStatusLock)
+        {
+            plan.Status = TaskPlanStatus.Cancelled;
+            plan.ExecutionSummary = "Plan cancelled by user.";
+        }
     }
 
     /// <summary>
@@ -488,7 +514,7 @@ public class TaskPlannerService
                 var content = match.Groups[2].Value.Trim();
 
                 // Split on " - " or ": " to separate description from instruction
-                var parts = Regex.Split(content, @"\s*[-:]\s*", RegexOptions.None, TimeSpan.FromSeconds(1));
+                var parts = Regex.Split(content, @"[\s]*[-:][\s]*", RegexOptions.None, TimeSpan.FromSeconds(1));
                 var description = parts[0].Trim();
                 var instruction = parts.Length > 1 ? string.Join(" ", parts.Skip(1)).Trim() : description;
 
