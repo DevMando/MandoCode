@@ -1,10 +1,11 @@
 using Spectre.Console;
-using System.Text;
+using MandoCode.Models;
 
 namespace MandoCode.Services;
 
 /// <summary>
-/// Handles command autocomplete with forward slash trigger and file autocomplete with @ trigger.
+/// Thin orchestrator: wires ConsoleInputReader → InputStateMachine → rendering.
+/// All state logic lives in InputStateMachine; this class owns console I/O only.
 /// </summary>
 public static class CommandAutocomplete
 {
@@ -20,6 +21,7 @@ public static class CommandAutocomplete
         { "/command", "Run a shell command (also: !<cmd>)" },
         { "/clear", "Clear conversation history" },
         { "/learn", "Learn about LLMs and local AI models" },
+        { "/retry", "Retry Ollama connection" },
         { "/music", "Play music" },
         { "/music-stop", "Stop music playback" },
         { "/music-pause", "Pause/resume music" },
@@ -30,43 +32,15 @@ public static class CommandAutocomplete
         { "/exit", "Exit MandoCode" }
     };
 
-    private static FileAutocompleteProvider? _fileProvider;
-
-    // Command history for up/down arrow navigation
-    private static readonly List<string> _history = new();
-    private static int _historyIndex = -1;
-    private static string? _savedInput;
-
-    private enum AutocompleteMode { None, Command, File }
+    private static InputStateMachine? _stateMachine;
+    private static ConsoleInputReader _keySource = new();
 
     /// <summary>
-    /// Initializes the file autocomplete provider.
+    /// Initializes with a DI-provided InputStateMachine instance.
     /// </summary>
-    public static void Initialize(FileAutocompleteProvider provider)
+    public static void Initialize(InputStateMachine stateMachine)
     {
-        _fileProvider = provider;
-    }
-
-    /// <summary>
-    /// Adds an input to the command history. Skips empty inputs and consecutive duplicates.
-    /// Resets the history navigation index.
-    /// </summary>
-    private static void AddToHistory(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return;
-
-        // Skip consecutive duplicates
-        if (_history.Count > 0 && _history[^1] == input)
-        {
-            _historyIndex = -1;
-            _savedInput = null;
-            return;
-        }
-
-        _history.Add(input);
-        _historyIndex = -1;
-        _savedInput = null;
+        _stateMachine = stateMachine;
     }
 
     /// <summary>
@@ -74,43 +48,257 @@ public static class CommandAutocomplete
     /// </summary>
     public static void ClearHistory()
     {
-        _history.Clear();
-        _historyIndex = -1;
-        _savedInput = null;
+        _stateMachine?.ClearHistory();
     }
 
     /// <summary>
-    /// Redraws the entire input line and positions the console cursor.
-    /// Handles input that exceeds the terminal width by accounting for line wrapping.
+    /// Gets a command input from the user with autocomplete support.
+    /// Reads keys via ConsoleInputReader, delegates logic to InputStateMachine,
+    /// and renders based on the returned InputAction.
     /// </summary>
-    private static void RedrawInput(StringBuilder input, int cursorLeft, ref int cursorTop, int cursorPos)
+    public static string ReadLineWithAutocomplete()
+    {
+        var sm = _stateMachine ?? throw new InvalidOperationException(
+            "CommandAutocomplete.Initialize() must be called before ReadLineWithAutocomplete().");
+
+        sm.BeginNewInput();
+        var cursorLeft = Console.CursorLeft;
+        var cursorTop = Console.CursorTop;
+
+        return RunAutocompleteLoop(sm, cursorLeft, cursorTop) ?? "";
+    }
+
+    /// <summary>
+    /// Continues autocomplete from the current state machine state (no reset).
+    /// Used when VDOM TextInput has already set up the input text and autocomplete mode.
+    /// Renders the current state first, then enters the key loop.
+    /// Returns null if autocomplete was dismissed (user erased trigger) — caller should
+    /// return to VDOM input with the remaining text.
+    /// </summary>
+    public static string? ContinueAutocomplete()
+    {
+        var sm = _stateMachine ?? throw new InvalidOperationException(
+            "CommandAutocomplete.Initialize() must be called before ContinueAutocomplete().");
+
+        // Wait for RazorConsole to fully release stdin after VDOM teardown
+        Thread.Sleep(150);
+
+        // Process any buffered keyboard chars through the state machine.
+        // When the user types "/music" fast, TextInput only captures "/"
+        // before being removed from VDOM. The remaining "music" chars are
+        // in the stdin buffer — feed them to the state machine instead of flushing.
+        while (Console.KeyAvailable)
+        {
+            var bufferedKey = Console.ReadKey(intercept: true);
+            sm.ProcessKey(bufferedKey);
+        }
+
+        // Snapshot the correct state BEFORE any rendering
+        var correctInput = sm.State.InputText;
+        var correctMode = sm.State.Mode;
+        var correctItems = sm.State.DropdownItems;
+        var correctIndex = sm.State.SelectedIndex;
+        var correctCursorPos = sm.State.CursorPos;
+        var correctPrefix = sm.State.BrowsePrefix;
+
+        // Hard reset terminal state — VDOM teardown leaves foreground invisible
+        Console.ResetColor();
+        Console.Write("\x1b[0m\x1b[?25h"); // Reset attrs + ensure cursor visible
+        var cursorLeft = Console.CursorLeft;
+        var cursorTop = Console.CursorTop;
+
+        // Clear any VDOM remnants from the line
+        Console.SetCursorPosition(0, cursorTop);
+        Console.Write("\x1b[2K"); // Clear entire current line
+        Console.SetCursorPosition(cursorLeft, cursorTop);
+
+        // Write input text with explicit white foreground
+        Console.Write($"\x1b[37m{correctInput}\x1b[0m");
+
+        // Render dropdown after the input text
+        if (correctMode == AutocompleteMode.Command && correctItems.Count > 0)
+            DisplayAutocomplete(cursorLeft, ref cursorTop, correctCursorPos,
+                correctItems, correctIndex);
+        else if (correctMode == AutocompleteMode.File && correctItems.Count > 0)
+            DisplayFileAutocomplete(cursorLeft, ref cursorTop, correctCursorPos,
+                correctItems, correctIndex, correctPrefix);
+
+        return RunAutocompleteLoop(sm, cursorLeft, cursorTop, returnOnDismiss: true);
+    }
+
+    private static string? RunAutocompleteLoop(InputStateMachine sm, int cursorLeft, int cursorTop, bool returnOnDismiss = false)
+    {
+
+        while (true)
+        {
+            var key = _keySource.ReadKey();
+
+            InputAction action;
+
+            // Paste detection: if more keys are immediately available, batch them
+            if (!char.IsControl(key.KeyChar) && _keySource.KeyAvailable)
+            {
+                var buffered = new List<ConsoleKeyInfo>();
+                while (_keySource.KeyAvailable)
+                    buffered.Add(_keySource.ReadKey());
+
+                action = sm.ProcessPaste(key, buffered);
+            }
+            else
+            {
+                action = sm.ProcessKey(key);
+            }
+
+            var state = sm.State;
+
+            switch (action)
+            {
+                case InputAction.Noop:
+                    break;
+
+                case InputAction.Redraw:
+                    RedrawInput(state.InputText, cursorLeft, ref cursorTop, state.CursorPos);
+                    if (state.Mode == AutocompleteMode.Command && state.DropdownItems.Count > 0)
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                            state.DropdownItems, state.SelectedIndex);
+                    else if (state.Mode == AutocompleteMode.File && state.DropdownItems.Count > 0)
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                            state.DropdownItems, state.SelectedIndex, state.BrowsePrefix);
+                    else if (returnOnDismiss && state.Mode == AutocompleteMode.None
+                             && !HasTriggerChar(state.InputText))
+                    {
+                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        Console.Write("\x1b[J");
+                        return null;
+                    }
+                    break;
+
+                case InputAction.AppendChar:
+                    // Optimized path: just write the char, no full redraw
+                    Console.Write(state.LastAppendedChar);
+                    // But still need to show dropdown if autocomplete triggered
+                    if (state.Mode == AutocompleteMode.Command && state.DropdownItems.Count > 0)
+                        DisplayAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                            state.DropdownItems, state.SelectedIndex);
+                    else if (state.Mode == AutocompleteMode.File && state.DropdownItems.Count > 0)
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                            state.DropdownItems, state.SelectedIndex, state.BrowsePrefix);
+                    else if (state.Mode == AutocompleteMode.None)
+                    {
+                        ClearAutocompleteDisplay(ref cursorTop);
+                        if (returnOnDismiss && !HasTriggerChar(state.InputText))
+                        {
+                            Console.SetCursorPosition(cursorLeft, cursorTop);
+                            Console.Write("\x1b[J");
+                            return null;
+                        }
+                        SetCursorToPos(cursorLeft, cursorTop, state.CursorPos);
+                    }
+                    break;
+
+                case InputAction.CursorMoved:
+                    SetCursorToPos(cursorLeft, cursorTop, state.CursorPos);
+                    break;
+
+                case InputAction.ShowCommandDropdown:
+                    DisplayAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                        state.DropdownItems, state.SelectedIndex);
+                    break;
+
+                case InputAction.ShowFileDropdown:
+                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                        state.DropdownItems, state.SelectedIndex, state.BrowsePrefix);
+                    break;
+
+                case InputAction.ClearDropdown:
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    if (returnOnDismiss && !HasTriggerChar(state.InputText))
+                    {
+                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        Console.Write("\x1b[J");
+                        return null;
+                    }
+                    SetCursorToPos(cursorLeft, cursorTop, state.CursorPos);
+                    break;
+
+                case InputAction.AcceptCommand:
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    if (returnOnDismiss)
+                    {
+                        Console.Write("\x1b[J");
+                        return state.InputText;
+                    }
+                    AnsiConsole.Markup($"[cyan]{Markup.Escape(state.InputText)}[/]");
+                    break;
+
+                case InputAction.AcceptFile:
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    if (returnOnDismiss)
+                    {
+                        Console.Write("\x1b[J");
+                        return state.InputText;
+                    }
+                    Console.Write(state.InputText);
+                    break;
+
+                case InputAction.DrillDirectory:
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
+                    Console.SetCursorPosition(cursorLeft, cursorTop);
+                    Console.Write(state.InputText);
+                    // Show directory contents dropdown
+                    if (state.DropdownItems.Count > 0)
+                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, state.CursorPos,
+                            state.DropdownItems, state.SelectedIndex, state.BrowsePrefix);
+                    break;
+
+                case InputAction.Submit:
+                    ClearAutocompleteDisplay(ref cursorTop);
+                    if (returnOnDismiss)
+                    {
+                        // Clear imperative text — VDOM gold echo will render it
+                        Console.SetCursorPosition(cursorLeft, cursorTop);
+                        Console.Write("\x1b[J");
+                    }
+                    else
+                    {
+                        Console.WriteLine();
+                    }
+                    return state.SubmittedText!;
+            }
+        }
+    }
+
+    // ─── Rendering Methods (console I/O only) ─────────────────
+
+    /// <summary>
+    /// Redraws the entire input line and positions the console cursor.
+    /// </summary>
+    private static void RedrawInput(string inputText, int cursorLeft, ref int cursorTop, int cursorPos)
     {
         var width = Console.WindowWidth;
-
-        // Calculate how many rows the input will occupy when wrapped
-        var totalChars = cursorLeft + input.Length;
+        var totalChars = cursorLeft + inputText.Length;
         var linesNeeded = (totalChars + width - 1) / width;
 
-        // Ensure the terminal buffer has enough rows below cursorTop.
-        // Without this, writing long pasted text that wraps past the screen bottom
-        // causes the terminal to scroll, making cursorTop stale and breaking cursor navigation.
         EnsureBufferSpace(ref cursorTop, linesNeeded);
 
-        // Clear from cursorTop to the end of the screen to handle shrinking input too
         Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write("\x1b[J"); // clear from cursor to end of screen
-
-        // Write the input text (may wrap across multiple rows)
+        Console.Write("\x1b[J");
         Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(input.ToString());
+        Console.Write(inputText);
 
-        // Position cursor accounting for wrapping
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
 
     /// <summary>
-    /// Positions the console cursor to match the logical cursor position in the input,
-    /// accounting for line wrapping when input exceeds terminal width.
+    /// Positions the console cursor accounting for line wrapping.
     /// </summary>
     private static void SetCursorToPos(int cursorLeft, int cursorTop, int cursorPos)
     {
@@ -120,537 +308,7 @@ public static class CommandAutocomplete
     }
 
     /// <summary>
-    /// Gets a command input from the user with autocomplete support.
-    /// </summary>
-    public static string ReadLineWithAutocomplete()
-    {
-        var input = new StringBuilder();
-        var cursorLeft = Console.CursorLeft;
-        var cursorTop = Console.CursorTop;
-        var cursorPos = 0;
-        var autocompleteMode = AutocompleteMode.None;
-        var selectedIndex = 0;
-        List<string> filteredCommands = new();
-        List<string> filteredFiles = new();
-        int atAnchorPos = -1;
-
-        // Reset history navigation for each new prompt
-        _historyIndex = -1;
-        _savedInput = null;
-
-        while (true)
-        {
-            var key = Console.ReadKey(intercept: true);
-
-            // Handle different keys
-            switch (key.Key)
-            {
-                case ConsoleKey.Enter:
-                    if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
-                    {
-                        // Auto-complete with selected command
-                        input.Clear();
-                        input.Append(filteredCommands[selectedIndex]);
-                        cursorPos = input.Length;
-                        ClearAutocompleteDisplay(ref cursorTop);
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        AnsiConsole.Markup($"[cyan]{Markup.Escape(input.ToString())}[/]");
-                        autocompleteMode = AutocompleteMode.None;
-                        continue;
-                    }
-                    else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
-                    {
-                        var selected = filteredFiles[selectedIndex];
-                        if (selected.EndsWith('/'))
-                        {
-                            // Directory selected — drill into it
-                            DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
-                                ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
-                            cursorPos = input.Length;
-                        }
-                        else
-                        {
-                            // Insert selected file path — do NOT submit
-                            InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
-                            cursorPos = input.Length;
-                            autocompleteMode = AutocompleteMode.None;
-                            atAnchorPos = -1;
-                            selectedIndex = 0;
-                        }
-                        continue;
-                    }
-                    else
-                    {
-                        // Submit the input
-                        if (autocompleteMode != AutocompleteMode.None)
-                            ClearAutocompleteDisplay(ref cursorTop);
-                        Console.WriteLine();
-                        var submitted = input.ToString();
-                        AddToHistory(submitted);
-                        return submitted;
-                    }
-
-                case ConsoleKey.Tab:
-                    if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
-                    {
-                        // Auto-complete with selected command
-                        input.Clear();
-                        input.Append(filteredCommands[selectedIndex]);
-                        cursorPos = input.Length;
-                        ClearAutocompleteDisplay(ref cursorTop);
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-                        Console.SetCursorPosition(cursorLeft, cursorTop);
-                        AnsiConsole.Markup($"[cyan]{Markup.Escape(input.ToString())}[/]");
-                        autocompleteMode = AutocompleteMode.None;
-                    }
-                    else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
-                    {
-                        var selected = filteredFiles[selectedIndex];
-                        if (selected.EndsWith('/'))
-                        {
-                            // Directory selected — drill into it
-                            DrillIntoDirectory(input, selected, atAnchorPos, cursorLeft, ref cursorTop,
-                                ref filteredFiles, ref selectedIndex, ref autocompleteMode, ref atAnchorPos);
-                            cursorPos = input.Length;
-                        }
-                        else
-                        {
-                            // Insert selected file path — do NOT submit
-                            InsertFileSelection(input, selected, atAnchorPos, cursorLeft, ref cursorTop);
-                            cursorPos = input.Length;
-                            autocompleteMode = AutocompleteMode.None;
-                            atAnchorPos = -1;
-                            selectedIndex = 0;
-                        }
-                    }
-                    continue;
-
-                case ConsoleKey.LeftArrow:
-                    if (cursorPos > 0)
-                    {
-                        if (autocompleteMode != AutocompleteMode.None)
-                        {
-                            ClearAutocompleteDisplay(ref cursorTop);
-                            autocompleteMode = AutocompleteMode.None;
-                            atAnchorPos = -1;
-                            selectedIndex = 0;
-                        }
-                        cursorPos--;
-                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                    }
-                    continue;
-
-                case ConsoleKey.RightArrow:
-                    if (cursorPos < input.Length)
-                    {
-                        if (autocompleteMode != AutocompleteMode.None)
-                        {
-                            ClearAutocompleteDisplay(ref cursorTop);
-                            autocompleteMode = AutocompleteMode.None;
-                            atAnchorPos = -1;
-                            selectedIndex = 0;
-                        }
-                        cursorPos++;
-                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                    }
-                    continue;
-
-                case ConsoleKey.Home:
-                    if (autocompleteMode != AutocompleteMode.None)
-                    {
-                        ClearAutocompleteDisplay(ref cursorTop);
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
-                    }
-                    cursorPos = 0;
-                    Console.SetCursorPosition(cursorLeft, cursorTop);
-                    continue;
-
-                case ConsoleKey.End:
-                    if (autocompleteMode != AutocompleteMode.None)
-                    {
-                        ClearAutocompleteDisplay(ref cursorTop);
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
-                    }
-                    cursorPos = input.Length;
-                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                    continue;
-
-                case ConsoleKey.UpArrow:
-                    if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
-                    {
-                        selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredCommands.Count - 1;
-                        DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
-                    }
-                    else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
-                    {
-                        selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : filteredFiles.Count - 1;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                    }
-                    else if (autocompleteMode == AutocompleteMode.None && _history.Count > 0)
-                    {
-                        // Navigate backward through command history
-                        if (_historyIndex == -1)
-                        {
-                            // Save current input before entering history
-                            _savedInput = input.ToString();
-                            _historyIndex = _history.Count - 1;
-                        }
-                        else if (_historyIndex > 0)
-                        {
-                            _historyIndex--;
-                        }
-                        input.Clear();
-                        input.Append(_history[_historyIndex]);
-                        cursorPos = input.Length;
-                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-                    }
-                    continue;
-
-                case ConsoleKey.DownArrow:
-                    if (autocompleteMode == AutocompleteMode.Command && filteredCommands.Any())
-                    {
-                        selectedIndex = (selectedIndex + 1) % filteredCommands.Count;
-                        DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
-                    }
-                    else if (autocompleteMode == AutocompleteMode.File && filteredFiles.Any())
-                    {
-                        selectedIndex = (selectedIndex + 1) % filteredFiles.Count;
-                        DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                    }
-                    else if (autocompleteMode == AutocompleteMode.None && _historyIndex >= 0)
-                    {
-                        // Navigate forward through command history
-                        _historyIndex++;
-                        if (_historyIndex >= _history.Count)
-                        {
-                            // Past the end — restore saved input
-                            _historyIndex = -1;
-                            input.Clear();
-                            input.Append(_savedInput ?? "");
-                            _savedInput = null;
-                        }
-                        else
-                        {
-                            input.Clear();
-                            input.Append(_history[_historyIndex]);
-                        }
-                        cursorPos = input.Length;
-                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-                    }
-                    continue;
-
-                case ConsoleKey.Escape:
-                    if (autocompleteMode != AutocompleteMode.None)
-                    {
-                        ClearAutocompleteDisplay(ref cursorTop);
-                        SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                        autocompleteMode = AutocompleteMode.None;
-                        atAnchorPos = -1;
-                        selectedIndex = 0;
-                    }
-                    continue;
-
-                case ConsoleKey.Delete:
-                    if (cursorPos < input.Length)
-                    {
-                        input.Remove(cursorPos, 1);
-                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-
-                        // Update autocomplete state after deletion
-                        UpdateAutocompleteAfterEdit(input, cursorLeft, ref cursorTop, cursorPos,
-                            ref autocompleteMode, ref atAnchorPos, ref selectedIndex,
-                            ref filteredCommands, ref filteredFiles);
-                    }
-                    continue;
-
-                case ConsoleKey.Backspace:
-                    if (cursorPos > 0)
-                    {
-                        cursorPos--;
-                        input.Remove(cursorPos, 1);
-                        RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-
-                        // Update autocomplete state after deletion
-                        UpdateAutocompleteAfterEdit(input, cursorLeft, ref cursorTop, cursorPos,
-                            ref autocompleteMode, ref atAnchorPos, ref selectedIndex,
-                            ref filteredCommands, ref filteredFiles);
-                    }
-                    continue;
-
-                default:
-                    if (!char.IsControl(key.KeyChar))
-                    {
-                        // Detect paste: if more characters are immediately buffered, consume them all
-                        if (Console.KeyAvailable)
-                        {
-                            var bufferedChars = new List<char>();
-                            bufferedChars.Add(key.KeyChar);
-
-                            while (Console.KeyAvailable)
-                            {
-                                var pk = Console.ReadKey(intercept: true);
-                                if (pk.Key == ConsoleKey.Enter || pk.KeyChar == '\n' || pk.KeyChar == '\r')
-                                    bufferedChars.Add(' '); // newlines → spaces
-                                else if (!char.IsControl(pk.KeyChar))
-                                    bufferedChars.Add(pk.KeyChar);
-                            }
-
-                            // Insert all buffered chars at cursor position
-                            var text = new string(bufferedChars.ToArray());
-                            input.Insert(cursorPos, text);
-                            cursorPos += bufferedChars.Count;
-                            RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-
-                            // Close any autocomplete if open
-                            if (autocompleteMode != AutocompleteMode.None)
-                            {
-                                ClearAutocompleteDisplay(ref cursorTop);
-                                autocompleteMode = AutocompleteMode.None;
-                                atAnchorPos = -1;
-                                selectedIndex = 0;
-                            }
-                            continue;
-                        }
-
-                        // Single character — insert at cursor position
-                        input.Insert(cursorPos, key.KeyChar);
-                        cursorPos++;
-
-                        // If inserting at end, just write the char; otherwise redraw from cursor
-                        if (cursorPos == input.Length)
-                        {
-                            Console.Write(key.KeyChar);
-                        }
-                        else
-                        {
-                            RedrawInput(input, cursorLeft, ref cursorTop, cursorPos);
-                        }
-
-                        // Check for @ trigger: @ preceded by space or at position 0
-                        if (key.KeyChar == '@' && _fileProvider != null
-                            && autocompleteMode != AutocompleteMode.File
-                            && (cursorPos == 1 || (cursorPos >= 2 && input[cursorPos - 2] == ' ')))
-                        {
-                            atAnchorPos = cursorPos - 1;
-                            filteredFiles = _fileProvider.FilterFiles("");
-                            if (filteredFiles.Any())
-                            {
-                                if (autocompleteMode != AutocompleteMode.None)
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                autocompleteMode = AutocompleteMode.File;
-                                selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                            }
-                        }
-                        else if (autocompleteMode == AutocompleteMode.File && atAnchorPos >= 0)
-                        {
-                            // Typing after @: filter files
-                            var fragment = input.ToString().Substring(atAnchorPos + 1);
-                            filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
-                            if (filteredFiles.Any())
-                            {
-                                ClearAutocompleteDisplay(ref cursorTop);
-                                selectedIndex = 0;
-                                DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                            }
-                            else
-                            {
-                                ClearAutocompleteDisplay(ref cursorTop);
-                                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                                autocompleteMode = AutocompleteMode.None;
-                                atAnchorPos = -1;
-                                selectedIndex = 0;
-                            }
-                        }
-                        else if (input.Length > 0 && input[0] == '/')
-                        {
-                            // Command autocomplete
-                            filteredCommands = FilterCommands(input.ToString());
-                            if (filteredCommands.Any())
-                            {
-                                if (autocompleteMode != AutocompleteMode.None)
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                autocompleteMode = AutocompleteMode.Command;
-                                selectedIndex = 0;
-                                DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
-                            }
-                            else
-                            {
-                                if (autocompleteMode != AutocompleteMode.None)
-                                {
-                                    ClearAutocompleteDisplay(ref cursorTop);
-                                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                                }
-                                autocompleteMode = AutocompleteMode.None;
-                            }
-                        }
-                        else if (autocompleteMode == AutocompleteMode.Command)
-                        {
-                            // Was in command mode but input no longer starts with /
-                            ClearAutocompleteDisplay(ref cursorTop);
-                            SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                            autocompleteMode = AutocompleteMode.None;
-                        }
-                    }
-                    break;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Updates autocomplete state after a character deletion (Backspace or Delete).
-    /// </summary>
-    private static void UpdateAutocompleteAfterEdit(
-        StringBuilder input, int cursorLeft, ref int cursorTop, int cursorPos,
-        ref AutocompleteMode autocompleteMode, ref int atAnchorPos, ref int selectedIndex,
-        ref List<string> filteredCommands, ref List<string> filteredFiles)
-    {
-        if (autocompleteMode == AutocompleteMode.File)
-        {
-            if (atAnchorPos >= input.Length)
-            {
-                // Deleted back to or past the @
-                ClearAutocompleteDisplay(ref cursorTop);
-                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                autocompleteMode = AutocompleteMode.None;
-                atAnchorPos = -1;
-                selectedIndex = 0;
-            }
-            else
-            {
-                // Re-filter with updated fragment
-                var fragment = input.ToString().Substring(atAnchorPos + 1);
-                filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
-                if (filteredFiles.Any())
-                {
-                    selectedIndex = Math.Min(selectedIndex, filteredFiles.Count - 1);
-                    DisplayFileAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-                }
-                else
-                {
-                    ClearAutocompleteDisplay(ref cursorTop);
-                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                    autocompleteMode = AutocompleteMode.None;
-                    atAnchorPos = -1;
-                    selectedIndex = 0;
-                }
-            }
-        }
-        else if (input.Length > 0 && input[0] == '/')
-        {
-            filteredCommands = FilterCommands(input.ToString());
-            if (filteredCommands.Any())
-            {
-                if (autocompleteMode != AutocompleteMode.None)
-                    ClearAutocompleteDisplay(ref cursorTop);
-                autocompleteMode = AutocompleteMode.Command;
-                selectedIndex = Math.Min(selectedIndex, filteredCommands.Count - 1);
-                DisplayAutocomplete(cursorLeft, ref cursorTop, cursorPos, filteredCommands, selectedIndex);
-            }
-            else
-            {
-                if (autocompleteMode != AutocompleteMode.None)
-                {
-                    ClearAutocompleteDisplay(ref cursorTop);
-                    SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-                }
-                autocompleteMode = AutocompleteMode.None;
-            }
-        }
-        else
-        {
-            if (autocompleteMode != AutocompleteMode.None)
-            {
-                ClearAutocompleteDisplay(ref cursorTop);
-                SetCursorToPos(cursorLeft, cursorTop, cursorPos);
-            }
-            autocompleteMode = AutocompleteMode.None;
-            selectedIndex = 0;
-        }
-    }
-
-    /// <summary>
-    /// Inserts the selected file path into the input, replacing the @fragment.
-    /// </summary>
-    private static void InsertFileSelection(StringBuilder input, string selectedPath, int atAnchorPos, int cursorLeft, ref int cursorTop)
-    {
-        // Replace everything from @ onward with @selectedPath
-        var before = input.ToString().Substring(0, atAnchorPos);
-        input.Clear();
-        input.Append(before);
-        input.Append('@');
-        input.Append(selectedPath);
-
-        // Redraw
-        ClearAutocompleteDisplay(ref cursorTop);
-        Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-        Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(input.ToString());
-    }
-
-    /// <summary>
-    /// Drills into a selected directory: updates input to @dir/, re-filters, and shows contents.
-    /// </summary>
-    private static void DrillIntoDirectory(
-        StringBuilder input, string dirPath, int atAnchorPos, int cursorLeft, ref int cursorTop,
-        ref List<string> filteredFiles, ref int selectedIndex, ref AutocompleteMode autocompleteMode, ref int atAnchorPos2)
-    {
-        // Replace everything from @ onward with @dirPath (keeps trailing /)
-        var before = input.ToString().Substring(0, atAnchorPos);
-        input.Clear();
-        input.Append(before);
-        input.Append('@');
-        input.Append(dirPath);
-
-        // Redraw input line
-        ClearAutocompleteDisplay(ref cursorTop);
-        Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - cursorLeft - 1)));
-        Console.SetCursorPosition(cursorLeft, cursorTop);
-        Console.Write(input.ToString());
-
-        // Re-filter to show directory contents
-        filteredFiles = _fileProvider?.FilterFiles(dirPath) ?? new();
-        if (filteredFiles.Any())
-        {
-            selectedIndex = 0;
-            DisplayFileAutocomplete(cursorLeft, ref cursorTop, input.Length, filteredFiles, selectedIndex, GetBrowsePrefix(input, atAnchorPos));
-        }
-        else
-        {
-            // Empty directory — close autocomplete
-            Console.SetCursorPosition(cursorLeft + input.Length, cursorTop);
-            autocompleteMode = AutocompleteMode.None;
-            atAnchorPos2 = -1;
-            selectedIndex = 0;
-        }
-    }
-
-    /// <summary>
-    /// Filters commands based on the current input.
-    /// </summary>
-    private static List<string> FilterCommands(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return Commands.Keys.ToList();
-
-        var query = input.ToLower();
-        return Commands.Keys
-            .Where(cmd => cmd.ToLower().StartsWith(query))
-            .ToList();
-    }
-
-    /// <summary>
-    /// Ensures the console buffer has enough rows below cursorTop for the dropdown.
-    /// If not, scrolls the buffer and adjusts cursorTop accordingly.
+    /// Ensures the console buffer has enough rows below cursorTop.
     /// </summary>
     private static void EnsureBufferSpace(ref int cursorTop, int linesNeeded)
     {
@@ -669,18 +327,15 @@ public static class CommandAutocomplete
     /// <summary>
     /// Displays the command autocomplete dropdown.
     /// </summary>
-    private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos, List<string> commands, int selectedIndex)
+    private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos,
+        IReadOnlyList<string> commands, int selectedIndex)
     {
-        var totalLines = commands.Count + 3; // header + commands + footer + help
-
-        // Ensure enough buffer space so drawing won't cause terminal scrolling
+        var totalLines = commands.Count + 3;
         EnsureBufferSpace(ref cursorTop, totalLines);
 
-        // Clear everything below the input line
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        // Draw the dropdown
         Console.SetCursorPosition(0, cursorTop + 1);
         AnsiConsole.MarkupLine("[dim]┌─ Commands ─────────────────────────────────────[/]");
 
@@ -700,41 +355,23 @@ public static class CommandAutocomplete
         }
 
         AnsiConsole.MarkupLine("[dim]└────────────────────────────────────────────────[/]");
-        // Use Markup (no trailing newline) on the last line to avoid an extra scroll
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
-        // Restore cursor to the input line
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
 
     /// <summary>
-    /// Computes the current directory browsing prefix from input and anchor position.
-    /// e.g., input "@Poems/po" with atAnchorPos pointing to @ → browsePrefix = "Poems/"
+    /// Displays the file autocomplete dropdown.
     /// </summary>
-    private static string GetBrowsePrefix(StringBuilder input, int atAnchorPos)
+    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos,
+        IReadOnlyList<string> files, int selectedIndex, string browsePrefix = "")
     {
-        if (atAnchorPos < 0 || atAnchorPos >= input.Length) return "";
-        var fragment = input.ToString().Substring(atAnchorPos + 1);
-        var lastSlash = fragment.LastIndexOf('/');
-        return lastSlash >= 0 ? fragment.Substring(0, lastSlash + 1) : "";
-    }
-
-    /// <summary>
-    /// Displays the file autocomplete dropdown. Directories are shown with a trailing /
-    /// and use cyan styling to distinguish them from files (yellow).
-    /// browsePrefix is stripped from display paths to avoid redundant parent directories.
-    /// </summary>
-    private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos, List<string> files, int selectedIndex, string browsePrefix = "")
-    {
-        var totalLines = files.Count + 3; // header + files + footer + help
-
+        var totalLines = files.Count + 3;
         EnsureBufferSpace(ref cursorTop, totalLines);
 
-        // Clear everything below the input line
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        // Draw the dropdown
         Console.SetCursorPosition(0, cursorTop + 1);
         AnsiConsole.MarkupLine("[dim]┌─ Files ────────────────────────────────────────[/]");
 
@@ -743,14 +380,12 @@ public static class CommandAutocomplete
             var entryPath = files[i];
             var isDirectory = entryPath.EndsWith('/');
 
-            // Strip the browse prefix so drilled-into directory paths aren't shown redundantly
             var displayEntry = browsePrefix.Length > 0 && entryPath.StartsWith(browsePrefix, StringComparison.OrdinalIgnoreCase)
                 ? entryPath.Substring(browsePrefix.Length)
                 : entryPath;
 
             if (isDirectory)
             {
-                // Directory entry — show the last directory name with / suffix
                 var trimmed = displayEntry.TrimEnd('/');
                 var dirName = trimmed.Contains('/')
                     ? trimmed.Substring(trimmed.LastIndexOf('/') + 1)
@@ -780,7 +415,6 @@ public static class CommandAutocomplete
             }
             else
             {
-                // File entry
                 var fileName = Path.GetFileName(displayEntry);
                 var dirPath = Path.GetDirectoryName(displayEntry)?.Replace('\\', '/') ?? "";
 
@@ -808,7 +442,6 @@ public static class CommandAutocomplete
         AnsiConsole.MarkupLine("[dim]└────────────────────────────────────────────────[/]");
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
-        // Restore cursor to the input line
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
 
@@ -817,36 +450,34 @@ public static class CommandAutocomplete
     /// </summary>
     private static void ClearAutocompleteDisplay(ref int cursorTop)
     {
-        // Clear everything below the input line using ANSI escape
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
-
-        // Move cursor back to the input line
         Console.SetCursorPosition(0, cursorTop);
     }
 
     /// <summary>
+    /// Checks if the input text still contains an autocomplete trigger (@ or /).
+    /// Used to decide whether to exit back to VDOM or stay in the imperative loop.
+    /// </summary>
+    private static bool HasTriggerChar(string input)
+    {
+        return input.Contains('@') || input.TrimStart().StartsWith('/');
+    }
+
+    // ─── Public API (delegated to state machine) ──────────────
+
+    /// <summary>
     /// Checks if the input is a valid command (starts with /).
     /// </summary>
-    public static bool IsCommand(string input)
-    {
-        return !string.IsNullOrWhiteSpace(input) && input.TrimStart().StartsWith('/');
-    }
+    public static bool IsCommand(string input) => InputStateMachine.IsCommand(input);
 
     /// <summary>
     /// Gets the command without the forward slash.
     /// </summary>
-    public static string GetCommandName(string input)
-    {
-        if (!IsCommand(input)) return input;
-        return input.TrimStart().Substring(1).ToLower();
-    }
+    public static string GetCommandName(string input) => InputStateMachine.GetCommandName(input);
 
     /// <summary>
     /// Gets all available commands.
     /// </summary>
-    public static IEnumerable<string> GetAllCommands()
-    {
-        return Commands.Keys;
-    }
+    public static IEnumerable<string> GetAllCommands() => Commands.Keys;
 }

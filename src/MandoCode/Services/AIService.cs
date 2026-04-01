@@ -1095,9 +1095,9 @@ public class AIService
     /// <summary>
     /// Gets the current chat history.
     /// </summary>
-    public IReadOnlyList<ChatMessageContent> GetHistory()
+    public async Task<IReadOnlyList<ChatMessageContent>> GetHistoryAsync()
     {
-        _historyLock.Wait();
+        await _historyLock.WaitAsync();
         try
         {
             return _chatHistory.ToList().AsReadOnly();

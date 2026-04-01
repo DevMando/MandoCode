@@ -1,5 +1,6 @@
 @using MandoCode.Models
 @using MandoCode.Services
+@using System.Collections.Generic
 @using System.Text.RegularExpressions
 @using Spectre.Console
 @inject AIService AI
@@ -14,6 +15,7 @@
 @inject DiffApprovalHandler DiffApproval
 @inject ShellCommandHandler Shell
 @inject TerminalThemeService ThemeService
+@inject InputStateMachine StateMachine
 @implements IDisposable
 
 <Banner />
@@ -23,8 +25,27 @@
     <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
     <Markup Content="@($"Model: {Config.GetEffectiveModelName()}")" />
 
-    @if (!_isConnected)
+    @if (!_connectionChecked)
     {
+        <Markup Content="🔄 Connecting to Ollama..." />
+    }
+    else if (!_isConnected)
+    {
+        <Panel Border="@BoxBorder.Rounded" BorderColor="Color.Yellow">
+            <Rows>
+                <Markup Content="@($"[yellow]Unable to reach Ollama at[/] [white]{Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}[/]")" />
+                @if (!string.IsNullOrEmpty(_connectionStatusMessage))
+                {
+                    <Markup Content="@_connectionStatusMessage" />
+                }
+                <Markup Content="[bold]Next steps:[/]" />
+                <Markup Content="  1. Install Ollama from https://ollama.com" />
+                <Markup Content="  2. In another terminal run: [cyan]ollama serve[/]" />
+                <Markup Content="  3. Pull a model (e.g. [cyan]ollama pull qwen3:8b[/])" />
+                <Markup Content="  4. Return here and type [cyan]/retry[/] to reconnect" />
+                <Markup Content="[dim]You can still run /config or /learn while offline.[/]" />
+            </Rows>
+        </Panel>
         LearnContent.Display();
     }
     else if (!string.IsNullOrEmpty(_modelWarning))
@@ -37,12 +58,20 @@
     }
     else
     {
-        <Markup Content="✓ MandoCode is ready!" />
+        <Markup Content="✅ MandoCode is ready!" />
         <HelpDisplay />
+        <Markup Content="@("Tip: reference files inline, e.g. What does @Program.cs do?")" />
     }
 </Rows>
 
-@* Input handled imperatively via RunInteractiveLoopAsync + Console.ReadKey *@
+@* VDOM input — always rendered once interactive loop starts, disabled during processing *@
+@if (_showPrompt)
+{
+    <PromptInput OnSubmit="HandleVdomSubmit"
+                 OnAutocompleteRequested="HandleAutocompleteRequested"
+                 InitialValue="@_promptInitialValue"
+                 Disabled="@_isProcessing" />
+}
 
 @code {
     protected bool _isConnected { get; set; } = false;
@@ -50,6 +79,7 @@
     private bool _hasRendered = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
+    private string? _connectionStatusMessage = null;
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
@@ -68,6 +98,15 @@
     private int _recentReadCount;
     private readonly List<string> _recentReadFiles = new();
     private string? _lastOperationType;
+
+    // VDOM input bridge — TaskCompletionSource lets the interactive loop
+    // await user input from the PromptInput Blazor component without blocking
+    private TaskCompletionSource<string>? _inputTcs;
+    private bool _showPrompt = false;
+    private bool _isProcessing = false;
+    private bool _autocompleteActive = false;
+    private string _promptInitialValue = "";
+
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
@@ -183,10 +222,6 @@
             AI.OnCommandApprovalRequested = DiffApproval.HandleCommandApproval;
         }
 
-        // Check Ollama connection synchronously — render depends on the result
-        _isConnected = CheckOllamaConnectionAsync().GetAwaiter().GetResult();
-        _connectionChecked = true;
-
         // Detect terminal theme and apply curated palette
         if (Config.EnableThemeCustomization)
         {
@@ -213,54 +248,87 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && _isConnected && !_hasRendered)
+        if (firstRender && !_connectionChecked)
+        {
+            await InitializeConnectionAsync();
+        }
+
+        if (_connectionChecked && !_hasRendered)
         {
             _hasRendered = true;
 
-            // Validate that model supports function calling
-            var (isValid, errorMessage) = await AI.ValidateModelAsync();
-            if (!isValid && errorMessage != null)
-            {
-                // Show warning but allow user to continue
-                AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[yellow]Warning:[/]");
-                AnsiConsole.WriteLine(errorMessage);
-                AnsiConsole.WriteLine();
-
-                if (errorMessage.Contains("Continue anyway?"))
-                {
-                    var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
-                    if (!continueAnyway)
-                    {
-                        AnsiConsole.WriteLine("Please configure a supported model:");
-                        AnsiConsole.WriteLine("  mandocode --config set model qwen2.5-coder:14b");
-                        AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
-                        ThemeService.ResetPalette();
-                        ThemeService.Dispose();
-                        Environment.Exit(1);
-                        return;
-                    }
-                }
-                else
-                {
-                    // Hard error (model not found) — enter limited mode
-                    _modelError = true;
-                    _modelWarning = errorMessage;
-                    AnsiConsole.WriteLine();
-                    AnsiConsole.MarkupLine("[yellow]You can fix this by:[/]");
-                    AnsiConsole.MarkupLine("[dim]  1. Pull the model:[/] ollama pull <model-name>");
-                    AnsiConsole.MarkupLine("[dim]  2. Run[/] /config [dim]to select a different model[/]");
-                    AnsiConsole.MarkupLine("[dim]  3. Make sure Ollama is running:[/] ollama serve");
-                    AnsiConsole.WriteLine();
-                }
-            }
-
-            // Initialize file autocomplete
-            CommandAutocomplete.Initialize(FileProvider);
+            // Initialize imperative input with the shared state machine
+            CommandAutocomplete.Initialize(StateMachine);
 
             // Small delay to ensure UI is fully rendered before accepting input
             await Task.Delay(100);
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
+        }
+    }
+
+    private async Task InitializeConnectionAsync()
+    {
+        // Check Ollama connection asynchronously (moved from OnInitialized to avoid blocking)
+        _isConnected = await CheckOllamaConnectionAsync();
+        _connectionChecked = true;
+
+        if (_isConnected)
+        {
+            _connectionStatusMessage = null;
+            await ValidateCurrentModelAsync();
+        }
+        else
+        {
+            _connectionStatusMessage = "[dim]Start 'ollama serve', pull a model, then type /retry to check again.[/]";
+        }
+
+        // Re-render so the VDOM updates from /learn content to the ready state
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ValidateCurrentModelAsync()
+    {
+        // Validate that model supports function calling
+        var (isValid, errorMessage) = await AI.ValidateModelAsync();
+        if (!isValid && errorMessage != null)
+        {
+            // Show warning but allow user to continue
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]Warning:[/]");
+            AnsiConsole.WriteLine(errorMessage);
+            AnsiConsole.WriteLine();
+
+            if (errorMessage.Contains("Continue anyway?"))
+            {
+                var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
+                if (!continueAnyway)
+                {
+                    AnsiConsole.WriteLine("Please configure a supported model:");
+                    AnsiConsole.WriteLine("  mandocode --config set model qwen2.5-coder:14b");
+                    AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
+                    ThemeService.ResetPalette();
+                    ThemeService.Dispose();
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+            else
+            {
+                // Hard error (model not found) — enter limited mode
+                _modelError = true;
+                _modelWarning = errorMessage;
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[yellow]You can fix this by:[/]");
+                AnsiConsole.MarkupLine("[dim]  1. Pull the model:[/] ollama pull <model-name>");
+                AnsiConsole.MarkupLine("[dim]  2. Run[/] /config [dim]to select a different model[/]");
+                AnsiConsole.MarkupLine("[dim]  3. Make sure Ollama is running:[/] ollama serve");
+                AnsiConsole.WriteLine();
+            }
+        }
+        else
+        {
+            _modelError = false;
+            _modelWarning = null;
         }
     }
 
@@ -389,43 +457,32 @@
             // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
             StartMusicVisualizer();
 
-            AnsiConsole.Markup("[rgb(255,200,80)]> [/]");
-            var input = CommandAutocomplete.ReadLineWithAutocomplete();
+            // Await user input via VDOM PromptInput component.
+            var input = await WaitForVdomInputAsync();
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
 
-            // Re-render the submitted input in amber/yellow for old-school terminal feel
-            // Calculate how many terminal lines the prompt + input spans
-            var totalChars = input.Length + 2; // +2 for "> " prefix
-            var termWidth = Math.Max(1, Console.WindowWidth);
-            var linesUsed = (totalChars + termWidth - 1) / termWidth;
-            var curTop = Math.Max(0, Console.CursorTop - linesUsed);
-            Console.SetCursorPosition(0, curTop);
-            // Clear all lines the original input occupied
-            for (int i = 0; i < linesUsed; i++)
-            {
-                Console.Write(new string(' ', termWidth - 1));
-                if (i < linesUsed - 1) Console.WriteLine();
-            }
-            Console.SetCursorPosition(0, curTop);
+            // Echo the submitted input in gold so it persists in terminal scrollback.
+            // The 100ms delay in WaitForVdomInputAsync ensures the VDOM repaint
+            // (which removes PromptInput) has completed before this write.
             Console.Write($"\u001b[38;2;255;200;80m> {input}\u001b[0m");
             Console.WriteLine();
 
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
             {
-                Shell.HandleShellCommand(input.TrimStart()[1..].Trim());
+                await Shell.HandleShellCommandAsync(input.TrimStart()[1..].Trim());
                 continue;
             }
 
             // Check if this is a command (starts with /)
-            if (CommandAutocomplete.IsCommand(input))
+            if (InputStateMachine.IsCommand(input))
             {
-                var command = CommandAutocomplete.GetCommandName(input);
+                var command = InputStateMachine.GetCommandName(input);
 
                 // Handle special commands
-                if (command == "exit" || command == "quit")
+                if (command == "exit")
                 {
                     StopMusicVisualizer();
                     MusicPlayer.Dispose();
@@ -438,7 +495,7 @@
                 if (command == "clear")
                 {
                     await AI.ClearHistoryAsync();
-                    CommandAutocomplete.ClearHistory();
+                    StateMachine.ClearHistory();
                     Console.Clear();
                     AnsiConsole.WriteLine("Conversation cleared.");
                     continue;
@@ -456,6 +513,7 @@
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
                     table.AddRow("/config", "Open configuration menu");
+                    table.AddRow("/retry", "Retry Ollama connection");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
                     table.AddRow("/music-stop", "Stop music playback");
@@ -469,7 +527,7 @@
                     table.AddRow("/copy", "Copy last AI response to clipboard");
                     table.AddRow("/copy-code", "Copy code blocks from last response");
                     table.AddRow("/clear", "Clear conversation history");
-                    table.AddRow("/exit, /quit", "Exit MandoCode");
+                    table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
                     AnsiConsole.WriteLine();
                     AnsiConsole.WriteLine("Examples:");
@@ -490,6 +548,12 @@
                 if (command == "learn")
                 {
                     await HandleLearnCommandAsync();
+                    continue;
+                }
+
+                if (command == "retry")
+                {
+                    await HandleRetryCommandAsync();
                     continue;
                 }
 
@@ -527,7 +591,7 @@
                 if (command == "command" || command.StartsWith("command "))
                 {
                     var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
-                    Shell.HandleShellCommand(shellCmd);
+                    await Shell.HandleShellCommandAsync(shellCmd);
                     continue;
                 }
 
@@ -535,6 +599,12 @@
                 AnsiConsole.MarkupLine($"[red]Unknown command: {Spectre.Console.Markup.Escape(input)}[/]");
                 AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
                 AnsiConsole.WriteLine();
+                continue;
+            }
+
+            if (!_isConnected)
+            {
+                ShowOfflineGuidance();
                 continue;
             }
 
@@ -573,6 +643,87 @@
             // Process AI request with streaming (non-command input)
             await ProcessDirectRequestAsync(processedInput);
         }
+    }
+
+    /// <summary>
+    /// Called by PromptInput when the user submits text via the VDOM TextInput.
+    /// Completes the TaskCompletionSource so the interactive loop can continue.
+    /// </summary>
+    private void HandleVdomSubmit(string input)
+    {
+        _inputTcs?.TrySetResult(input);
+    }
+
+    /// <summary>
+    /// Called by PromptInput when @ or / triggers autocomplete.
+    /// Hides VDOM, runs imperative autocomplete (Console.ReadKey loop),
+    /// then completes with the full input line.
+    /// </summary>
+    private async Task HandleAutocompleteRequested(string currentInput)
+    {
+        if (_autocompleteActive) return;
+        _autocompleteActive = true;
+
+        try
+        {
+            // 1. Hide PromptInput so Console.ReadKey doesn't conflict with VDOM
+            _showPrompt = false;
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(100); // Wait for VDOM repaint
+
+            // 2. Run imperative autocomplete on a background thread
+            //    Console.ReadKey blocks, so we use Task.Run.
+            //    ContinueAutocomplete() picks up from the current state machine state
+            //    (already has "@" or "/..." from PromptInput's HandleInput) — no reset.
+            //    Returns null if user erased the trigger (@ or /) — go back to VDOM.
+            var result = await Task.Run(() => CommandAutocomplete.ContinueAutocomplete());
+
+            // Drain any buffered keystrokes typed while the prompt was hidden
+            var resumeText = result ?? StateMachine.State.InputText;
+            var buffered = DrainConsoleKeyBuffer();
+            if (!string.IsNullOrEmpty(buffered))
+            {
+                resumeText += buffered;
+                StateMachine.UpdateText(resumeText);
+            }
+
+            _promptInitialValue = resumeText;
+        }
+        finally
+        {
+            _autocompleteActive = false;
+            _showPrompt = true;
+            _isProcessing = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Shows the VDOM PromptInput component and awaits user submission.
+    /// Returns the submitted text without blocking the Blazor render thread.
+    /// The prompt stays visible but disabled during processing — this avoids
+    /// border artifacts that occur when the component is removed from the VDOM tree.
+    /// </summary>
+    private async Task<string> WaitForVdomInputAsync()
+    {
+        _inputTcs = new TaskCompletionSource<string>();
+        _promptInitialValue = "";
+        _showPrompt = true;
+        _isProcessing = false;
+        await InvokeAsync(StateHasChanged);
+
+        var input = await _inputTcs.Task;
+
+        // Hide the prompt during processing
+        _showPrompt = false;
+        _isProcessing = true;
+        await InvokeAsync(StateHasChanged);
+
+        // Wait for the VDOM repaint to finish removing the PromptInput
+        // before any imperative Console.Write calls
+        await Task.Delay(100);
+
+        return input;
     }
 
     private string ProcessFileReferences(string input)
@@ -656,6 +807,35 @@
         return fullContext.ToString();
     }
 
+    private static string DrainConsoleKeyBuffer()
+    {
+        if (!Console.KeyAvailable)
+            return string.Empty;
+
+        var chars = new List<char>();
+        while (Console.KeyAvailable)
+        {
+            var key = Console.ReadKey(intercept: true);
+
+            if (key.Key is ConsoleKey.Enter or ConsoleKey.Escape)
+                continue;
+
+            if (!char.IsControl(key.KeyChar))
+                chars.Add(key.KeyChar);
+        }
+
+        return chars.Count > 0 ? new string(chars.ToArray()) : string.Empty;
+    }
+
+    private void ShowOfflineGuidance()
+    {
+        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[yellow]MandoCode can't reach Ollama at {endpoint}.[/]");
+        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect.[/]");
+        AnsiConsole.WriteLine();
+    }
+
     /// <summary>
     /// Starts a background task that listens for Escape key presses and cancels _requestCts.
     /// Call StopCancelKeyListener() when the AI request completes to clean up.
@@ -711,8 +891,6 @@
         _recentReadFiles.Clear();
         _lastOperationType = null;
 
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
         AnsiConsole.WriteLine();
 
         _requestCts = new CancellationTokenSource();
@@ -791,7 +969,9 @@
 
                         try
                         {
-                            MarkdownRenderer.Render(responseText);
+                            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+                            var renderable = MarkdownRenderer.BuildRenderable(responseText);
+                            AnsiConsole.Write(renderable);
                         }
                         catch
                         {
@@ -805,24 +985,26 @@
                             Role = "assistant",
                             Text = responseText
                         });
-                    }
 
-                    // Show per-response token summary (right-aligned, tight to response)
-                    if (Config.EnableTokenTracking)
-                    {
-                        var lastOp = TokenTracker.LastOperation;
-                        if (lastOp != null && !lastOp.IsEstimate)
+                        // Show per-response token summary (right-aligned, tight to response)
+                        if (Config.EnableTokenTracking)
                         {
-                            var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
-                            var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
-                            var tpsLabel = lastOp.TokensPerSecond.HasValue
-                                ? $": {lastOp.TokensPerSecond.Value:0.#} tok/s"
-                                : "";
-                            var tokenSummary = $"[{inLabel}, {outLabel}{tpsLabel}]";
-                            var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
-                            Console.WriteLine();
-                            Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
+                            var lastOp = TokenTracker.LastOperation;
+                            if (lastOp != null && !lastOp.IsEstimate)
+                            {
+                                var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
+                                var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
+                                var tpsLabel = lastOp.TokensPerSecond.HasValue
+                                    ? $": {lastOp.TokensPerSecond.Value:0.#} tok/s"
+                                    : "";
+                                var totalLabel = TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens);
+                                var tokenSummary = $"[{inLabel}, {outLabel}{tpsLabel}]";
+                                var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
+                                Console.WriteLine();
+                                Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
+                            }
                         }
+
                     }
 
                     // Update title bar with latest model/project/token info
@@ -1392,6 +1574,32 @@
 
         MusicPlayerUI.RenderStatus(MusicPlayer);
         StartMusicVisualizer();
+    }
+
+    private async Task HandleRetryCommandAsync()
+    {
+        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Checking Ollama connection...[/]");
+
+        var connected = await CheckOllamaConnectionAsync();
+        _isConnected = connected;
+
+        if (connected)
+        {
+            _connectionStatusMessage = null;
+            AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
+            await ValidateCurrentModelAsync();
+        }
+        else
+        {
+            _connectionStatusMessage = $"[dim]Still unable to reach {endpoint}. Ensure 'ollama serve' is running.[/]";
+            AnsiConsole.MarkupLine($"[red]Unable to reach Ollama at {endpoint}.[/]");
+            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry.[/]");
+        }
+
+        AnsiConsole.WriteLine();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task HandleConfigCommandAsync()

@@ -17,7 +17,7 @@ public class ShellCommandHandler
         _projectRoot = projectRoot;
     }
 
-    public void HandleShellCommand(string cmd)
+    public async Task HandleShellCommandAsync(string cmd)
     {
         if (string.IsNullOrWhiteSpace(cmd))
         {
@@ -109,7 +109,7 @@ public class ShellCommandHandler
                 AnsiConsole.MarkupLine("[yellow][output truncated at 100k characters][/]");
             }
 
-            var stderr = stderrTask.GetAwaiter().GetResult();
+            var stderr = await stderrTask;
             if (!string.IsNullOrEmpty(stderr))
             {
                 Console.Write($"\u001b[31m{stderr}\u001b[0m");
