@@ -393,4 +393,13 @@ public class LoopStream : WaveStream
         }
         return totalRead;
     }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _source.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 }

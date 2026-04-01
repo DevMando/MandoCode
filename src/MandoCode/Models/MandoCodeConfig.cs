@@ -146,7 +146,12 @@ public class MandoCodeConfig
             {
                 var json = File.ReadAllText(configPath);
                 var config = JsonSerializer.Deserialize<MandoCodeConfig>(json, ConfigJsonOptions.ReadOptions);
-                return config ?? new MandoCodeConfig();
+                if (config != null)
+                {
+                    config.ValidateAndClamp();
+                    return config;
+                }
+                return new MandoCodeConfig();
             }
             catch (Exception ex)
             {
@@ -181,6 +186,22 @@ public class MandoCodeConfig
         {
             Console.WriteLine($"Warning: Failed to save config to {configPath}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Validates and clamps numeric config values to safe ranges.
+    /// Called after deserialization to guard against corrupted or hand-edited config files.
+    /// </summary>
+    public void ValidateAndClamp()
+    {
+        Temperature = Math.Clamp(Temperature, 0.0, 1.0);
+        MaxTokens = Math.Clamp(MaxTokens, 256, 131072);
+        FunctionDeduplicationWindowSeconds = Math.Clamp(FunctionDeduplicationWindowSeconds, 0, 60);
+        MaxRetryAttempts = Math.Clamp(MaxRetryAttempts, 0, 10);
+        Music.Volume = Math.Clamp(Music.Volume, 0f, 1f);
+
+        if (string.IsNullOrWhiteSpace(OllamaEndpoint))
+            OllamaEndpoint = "http://localhost:11434";
     }
 
     /// <summary>
