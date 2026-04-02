@@ -22,9 +22,9 @@
   <img src="docs/images/hero-demo.gif" alt="MandoCode in action" width="800">
 </p>
 
-MandoCode is an AI coding assistant powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). Run locally or connect to Ollama cloud — no API keys required. It gives you Claude-Code-style project awareness — reading, writing, searching, and planning across your entire codebase — without ever leaving your terminal.
+MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
 
-It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
+Run locally or connect to Ollama cloud — no API keys required for anything, including web search. It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
 ---
 
@@ -90,11 +90,31 @@ Complex requests are automatically broken into step-by-step plans. Review the pl
 </td>
 <td width="50%">
 
+### Web Search & Fetch
+
+The AI can search DuckDuckGo and read webpages to find documentation, tutorials, or answers — no API keys needed.
+
+<img src="docs/images/web-search.png" alt="Web search" width="400">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
 ### Built-in Music Player
 
 Lofi and synthwave tracks bundled right in. A waveform visualizer runs in the corner while you code. Because vibes matter.
 
 <img src="docs/images/music-player.png" alt="Music player" width="400">
+
+</td>
+<td width="50%">
+
+### Offline-Friendly Startup
+
+If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare error. Use `/retry` to reconnect without restarting.
+
+<img src="docs/images/offline-guidance.png" alt="Offline guidance" width="400">
 
 </td>
 </tr>
@@ -107,6 +127,7 @@ Lofi and synthwave tracks bundled right in. A waveform visualizer runs in the co
 | | Feature | Description |
 |-|---------|-------------|
 | **AI** | Project-aware assistant | Reads, writes, deletes, and searches your entire codebase |
+| **AI** | Web search & fetch | DuckDuckGo search and webpage reading — no API keys needed |
 | **AI** | Streaming responses | Real-time output with animated spinners |
 | **AI** | Task planner | Auto-detects complex requests and breaks them into steps |
 | **AI** | Fallback function parsing | Handles models that output tool calls as raw JSON |
@@ -122,6 +143,7 @@ Lofi and synthwave tracks bundled right in. A waveform visualizer runs in the co
 | **Input** | `/copy` and `/copy-code` | Copy responses or code blocks to clipboard |
 | **Music** | Lofi + synthwave | Bundled tracks with volume, genre switching, waveform visualizer |
 | **Config** | Configuration wizard | Guided setup with model selection and connection testing |
+| **Config** | Config validation | Auto-clamps invalid settings to safe ranges |
 | **Reliability** | Retry + deduplication | Exponential backoff and duplicate call prevention |
 | **Education** | `/learn` command | LLM education guide with optional AI educator chat |
 
@@ -135,6 +157,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 |---------|--------------|
 | `/help` | Show commands and usage examples |
 | `/config` | Open configuration (wizard or view settings) |
+| `/retry` | Retry Ollama connection |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
 | `/copy-code` | Copy code blocks from last response |
@@ -166,11 +189,12 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
   AI responds with text + function calls
         |
   File operations go through diff approval
+  Web searches and fetches run directly
         |
   Rich markdown rendered in your terminal
 ```
 
-The AI has sandboxed access to your project through a **FileSystemPlugin** with 9 functions: list files, glob search, read, write, delete files/folders, text search, and path resolution. All operations are locked to your project root — path traversal is blocked.
+The AI has sandboxed access to your project through a **FileSystemPlugin** (9 functions: list files, glob search, read, write, delete files/folders, text search, path resolution) and a **WebSearchPlugin** (web search via DuckDuckGo, webpage fetching — no API keys required). All file operations are locked to your project root — path traversal is blocked.
 
 ---
 
@@ -367,7 +391,7 @@ Simple questions, short prompts, and single-action operations (delete, remove, r
 4. **Step-by-step execution** — each step runs with progress tracking
 5. **Error handling** — skip failed steps or cancel the entire plan
 
-See [Task Planner Documentation](src/MandoCode/docs/TaskPlannerFeature.md) for full technical details.
+See [Task Planner Documentation](src/MandoCode/docs/TaskPlanner.md) for full technical details.
 
 </details>
 
@@ -397,7 +421,9 @@ When Ollama is running, `/learn` offers an interactive chat mode where the AI ex
 </details>
 
 <details>
-<summary><h2>AI Plugin — FileSystemPlugin</h2></summary>
+<summary><h2>AI Plugins</h2></summary>
+
+### FileSystemPlugin
 
 The AI has sandboxed access to your project directory through these functions:
 
@@ -416,6 +442,17 @@ The AI has sandboxed access to your project directory through these functions:
 **Security:** All operations are sandboxed to the project root. Path traversal is blocked with a separator-boundary check.
 
 **Ignored directories:** `.git`, `node_modules`, `bin`, `obj`, `.vs`, `.vscode`, `packages`, `dist`, `build`, `__pycache__`, `.idea` — plus any custom directories from your config.
+
+### WebSearchPlugin
+
+The AI can search the web and fetch page content — no API keys required.
+
+| Function | Description |
+|----------|-------------|
+| `search_web(query, maxResults)` | Searches DuckDuckGo and returns titles, URLs, and snippets (1–10 results) |
+| `fetch_webpage(url, maxCharacters)` | Fetches a URL and extracts readable text content (500–15,000 chars) |
+
+Web search uses DuckDuckGo's HTML endpoint. Fetched pages are cleaned of scripts, nav, and non-content elements via HtmlAgilityPack.
 
 </details>
 
@@ -484,11 +521,11 @@ Function executions use semaphore-based signaling, ensuring each task plan step 
 ```
 src/MandoCode/
   Components/        Razor UI (App, Banner, HelpDisplay, ConfigMenu, Prompt)
-  Services/          Core logic (AI, markdown, syntax, tokens, music, diffs)
+  Services/          Core logic (AI, markdown, syntax, tokens, music, diffs, input state machine)
   Models/            Data models, config, system prompts, educational content
-  Plugins/           Semantic Kernel plugins (FileSystem)
+  Plugins/           Semantic Kernel plugins (FileSystem, WebSearch)
   Audio/             Bundled lofi and synthwave MP3 tracks
-  docs/              Feature documentation
+  docs/              Feature and architecture documentation
   Program.cs         Entry point and DI registration
 ```
 
@@ -501,7 +538,18 @@ src/MandoCode/
 | [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) 0.5.0-alpha | Terminal UI with Razor components |
 | [Markdig](https://github.com/xoofx/markdig) 1.0.0 | Markdown parsing |
 | [NAudio](https://github.com/naudio/NAudio) 2.2.1 | Audio playback |
+| [HtmlAgilityPack](https://html-agility-pack.net/) 1.11.72 | HTML parsing for web search |
 | [FileSystemGlobbing](https://www.nuget.org/packages/Microsoft.Extensions.FileSystemGlobbing) 10.0.3 | Glob pattern matching |
+
+---
+
+## Why .NET?
+
+Most AI coding agents in the wild are built with Python, Rust, or TypeScript. .NET rarely gets mentioned — but it should.
+
+[Semantic Kernel](https://github.com/microsoft/semantic-kernel) is Microsoft's open-source SDK for building AI agents, and it's one of the most capable orchestration frameworks available: native plugin systems, function calling, structured planning, and first-class support for local models through connectors like Ollama. It runs cross-platform on Windows, Linux, and macOS.
+
+MandoCode exists partly to prove the point: you can build a full-featured, agentic CLI tool on .NET and Semantic Kernel that stands alongside anything built in other ecosystems. The tooling is there. It's open source. It just doesn't get the attention it deserves.
 
 ---
 

@@ -29,6 +29,8 @@ x86/
 
 # NuGet
 packages/
+*.nupkg
+nupkgs/
 project.lock.json
 project.fragment.lock.json
 artifacts/
