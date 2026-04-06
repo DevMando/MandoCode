@@ -12,7 +12,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.9.5</Version>
+    <Version>0.9.6</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -22,6 +22,20 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
+    <PackageReleaseNotes>
+v0.9.6 — Quality, stability, and safety improvements
+
+Added:
+- Unit test suite (65 tests) covering InputStateMachine and DiffService
+- Empty response recovery — helpful message instead of blank screen on context overflow
+- Rendering timeout guard with spinner — prevents permanent freezes on large responses
+
+Fixed:
+- Timeout retry deadlock — timeouts no longer silently retry for up to 15 minutes
+- Silent exception suppression — 6 bare catch blocks now log to Debug
+- Shell command safety — uses ArgumentList instead of manual string escaping
+- Config validation consistency — maxTokens enforces [256, 131072] everywhere
+    </PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

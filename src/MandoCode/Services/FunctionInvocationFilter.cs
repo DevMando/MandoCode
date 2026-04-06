@@ -167,7 +167,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 if (File.Exists(fullPath))
                 {
                     try { capturedOldContent = await File.ReadAllTextAsync(fullPath); }
-                    catch { }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to read file for diff capture: {ex.Message}"); }
                 }
                 else if (Directory.Exists(fullPath))
                 {
@@ -182,7 +182,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                         capturedOldContent = $"Folder: {path}/\nContents ({listing.Count} files):\n" +
                                              string.Join("\n", listing.Select(f => $"  {f}"));
                     }
-                    catch { }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to list folder for diff capture: {ex.Message}"); }
                 }
             }
         }

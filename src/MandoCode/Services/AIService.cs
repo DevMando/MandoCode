@@ -257,7 +257,8 @@ public class AIService
                     linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
-                "ChatAsync"
+                "ChatAsync",
+                linkedCts.Token
             );
 
             // Extract token usage from the response
@@ -343,7 +344,8 @@ public class AIService
                     linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
-                "ChatStreamAsync"
+                "ChatStreamAsync",
+                linkedCts.Token
             );
 
             // Extract token usage from the response
@@ -455,7 +457,8 @@ public class AIService
                     linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
-                "GetPlanAsync"
+                "GetPlanAsync",
+                linkedCts.Token
             );
 
             // Extract token usage from the planning response
@@ -531,7 +534,8 @@ public class AIService
                     linkedCts.Token
                 ),
                 _config.MaxRetryAttempts,
-                "ExecutePlanStepAsync"
+                "ExecutePlanStepAsync",
+                linkedCts.Token
             );
 
             // Extract token usage from the step response

@@ -251,27 +251,27 @@ class Program
                 break;
 
             case "temperature":
-                if (double.TryParse(value, out var temp) && temp >= 0 && temp <= 1)
+                if (double.TryParse(value, out var temp) && MandoCodeConfig.IsValidTemperature(temp))
                 {
                     config.Temperature = temp;
                     Console.WriteLine($"✓ Set temperature to: {temp}");
                 }
                 else
                 {
-                    Console.WriteLine("Error: Temperature must be a number between 0.0 and 1.0");
+                    Console.WriteLine($"Error: Temperature must be a number between {MandoCodeConfig.MinTemperature} and {MandoCodeConfig.MaxTemperature}");
                     return;
                 }
                 break;
 
             case "maxtokens":
-                if (int.TryParse(value, out var tokens) && tokens > 0)
+                if (int.TryParse(value, out var tokens) && MandoCodeConfig.IsValidMaxTokens(tokens))
                 {
                     config.MaxTokens = tokens;
                     Console.WriteLine($"✓ Set max tokens to: {tokens}");
                 }
                 else
                 {
-                    Console.WriteLine("Error: Max tokens must be a positive integer");
+                    Console.WriteLine($"Error: Max tokens must be between {MandoCodeConfig.MinMaxTokens} and {MandoCodeConfig.MaxMaxTokens}");
                     return;
                 }
                 break;

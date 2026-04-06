@@ -166,7 +166,7 @@
                     ThemeService.IsMusicTitleActive = false;
                     ThemeService.UpdateStatusTitle();
                 }
-                catch { }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to reset music title: {ex.Message}"); }
             }
         });
 
@@ -915,6 +915,12 @@
 
                 Spinner.Stop();
 
+                if (!receivedFirstChunk)
+                {
+                    AnsiConsole.MarkupLine("[yellow]No response from model. The request may have exceeded the model's context window.[/]");
+                    AnsiConsole.MarkupLine("[dim]Try a smaller request, or switch to a model with a larger context window via /config.[/]");
+                }
+
                 // Buffer all chunks, then render as rich markdown
                 if (receivedFirstChunk)
                 {
@@ -963,18 +969,58 @@
 
                     // Render the complete response as rich markdown
                     var responseText = responseBuffer.ToString().Trim();
-                    if (!string.IsNullOrEmpty(responseText))
+                    if (string.IsNullOrEmpty(responseText))
+                    {
+                        AnsiConsole.MarkupLine("[yellow]Model returned an empty response. The context may be too large for this model.[/]");
+                        AnsiConsole.MarkupLine("[dim]Try a smaller request, or switch to a model with a larger context window via /config.[/]");
+                    }
+                    else
                     {
                         _lastAiResponse = responseText;
 
                         try
                         {
                             AnsiConsole.MarkupLine("[green]MandoCode:[/]");
-                            var renderable = MarkdownRenderer.BuildRenderable(responseText);
-                            AnsiConsole.Write(renderable);
+
+                            // Guard against rendering hangs on malformed/huge responses.
+                            // Large responses with many tables/code blocks can take 10+ seconds to render.
+                            var renderTask = Task.Run(() =>
+                            {
+                                var renderable = MarkdownRenderer.BuildRenderable(responseText);
+                                AnsiConsole.Write(renderable);
+                            });
+
+                            // Show a spinner if rendering takes more than 1 second
+                            if (!renderTask.Wait(TimeSpan.FromSeconds(1)))
+                            {
+                                Spinner.Start("Rendering...");
+                                if (!renderTask.Wait(TimeSpan.FromSeconds(29)))
+                                {
+                                    Spinner.Stop();
+                                    // Rendering took over 30 seconds — fall back to raw text
+                                    Console.WriteLine();
+                                    Console.Write(responseText);
+                                    Console.WriteLine();
+                                    AnsiConsole.MarkupLine("[dim](markdown rendering timed out — showing raw text)[/]");
+                                }
+                                else if (renderTask.IsFaulted)
+                                {
+                                    Spinner.Stop();
+                                    throw renderTask.Exception!.InnerException ?? renderTask.Exception;
+                                }
+                                else
+                                {
+                                    Spinner.Stop();
+                                }
+                            }
+                            else if (renderTask.IsFaulted)
+                            {
+                                throw renderTask.Exception!.InnerException ?? renderTask.Exception;
+                            }
                         }
-                        catch
+                        catch (Exception renderEx)
                         {
+                            System.Diagnostics.Debug.WriteLine($"[MandoCode] Render failed: {renderEx.Message}");
                             // Fallback to raw text if markdown rendering fails
                             Console.Write(responseText);
                         }
