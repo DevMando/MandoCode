@@ -188,9 +188,9 @@ public class ConfigurationWizard
                 .ValidationErrorMessage("[red]Please enter a number between 0.0 and 1.0[/]")
                 .Validate(temp =>
                 {
-                    if (temp >= 0 && temp <= 1)
+                    if (MandoCodeConfig.IsValidTemperature(temp))
                         return ValidationResult.Success();
-                    return ValidationResult.Error("[red]Temperature must be between 0.0 and 1.0[/]");
+                    return ValidationResult.Error($"[red]Temperature must be between {MandoCodeConfig.MinTemperature} and {MandoCodeConfig.MaxTemperature}[/]");
                 })
         );
 

@@ -65,16 +65,17 @@ public class ShellCommandHandler
         try
         {
             var isWindows = OperatingSystem.IsWindows();
-            var escapedCmd = cmd.Replace("\"", "\\\"");
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? "/c \"" + escapedCmd + "\"" : "-c \"" + escapedCmd + "\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 WorkingDirectory = Directory.GetCurrentDirectory()
             };
+            // Use ArgumentList for proper escaping instead of manual string building
+            psi.ArgumentList.Add(isWindows ? "/c" : "-c");
+            psi.ArgumentList.Add(cmd);
 
             using var proc = System.Diagnostics.Process.Start(psi);
             if (proc == null)
@@ -121,7 +122,7 @@ public class ShellCommandHandler
 
             if (!proc.WaitForExit(30_000))
             {
-                try { proc.Kill(); } catch { }
+                try { proc.Kill(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to kill timed-out process: {ex.Message}"); }
                 AnsiConsole.MarkupLine("[yellow]Command timed out after 30 seconds.[/]");
             }
         }

@@ -161,7 +161,8 @@ public class TerminalThemeService : IDisposable
     {
         ResetPalette();
         // Restore default title
-        try { Console.Write("\u001b]0;MandoCode\u0007"); } catch { }
+        try { Console.Write("\u001b]0;MandoCode\u0007"); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to restore terminal title: {ex.Message}"); }
     }
 
     private static void WritePaletteEntry(int index, string rgb)

@@ -34,6 +34,15 @@ public class MandoCodeConfig
         "packages", "dist", "build", "__pycache__", ".idea", ".claude"
     };
 
+    // ── Validation ranges (single source of truth) ──
+    public const double MinTemperature = 0.0;
+    public const double MaxTemperature = 1.0;
+    public const int MinMaxTokens = 256;
+    public const int MaxMaxTokens = 131072;
+
+    public static bool IsValidTemperature(double value) => value >= MinTemperature && value <= MaxTemperature;
+    public static bool IsValidMaxTokens(int value) => value >= MinMaxTokens && value <= MaxMaxTokens;
+
     /// <summary>
     /// Ollama endpoint URL.
     /// </summary>
@@ -194,8 +203,8 @@ public class MandoCodeConfig
     /// </summary>
     public void ValidateAndClamp()
     {
-        Temperature = Math.Clamp(Temperature, 0.0, 1.0);
-        MaxTokens = Math.Clamp(MaxTokens, 256, 131072);
+        Temperature = Math.Clamp(Temperature, MinTemperature, MaxTemperature);
+        MaxTokens = Math.Clamp(MaxTokens, MinMaxTokens, MaxMaxTokens);
         FunctionDeduplicationWindowSeconds = Math.Clamp(FunctionDeduplicationWindowSeconds, 0, 60);
         MaxRetryAttempts = Math.Clamp(MaxRetryAttempts, 0, 10);
         Music.Volume = Math.Clamp(Music.Volume, 0f, 1f);

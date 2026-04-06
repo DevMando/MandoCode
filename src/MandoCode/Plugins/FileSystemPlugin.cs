@@ -466,16 +466,17 @@ public class FileSystemPlugin
             }
 
             var isWindows = OperatingSystem.IsWindows();
-            var escapedCmd = command.Replace("\"", "\\\"");
             var psi = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? "/c \"" + escapedCmd + "\"" : "-c \"" + escapedCmd + "\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 WorkingDirectory = ProjectRoot
             };
+            // Use ArgumentList for proper escaping instead of manual string building
+            psi.ArgumentList.Add(isWindows ? "/c" : "-c");
+            psi.ArgumentList.Add(command);
 
             using var proc = Process.Start(psi);
             if (proc == null)
@@ -490,7 +491,7 @@ public class FileSystemPlugin
             var exited = proc.WaitForExit(30_000);
             if (!exited)
             {
-                try { proc.Kill(); } catch { }
+                try { proc.Kill(); } catch (Exception ex) { Debug.WriteLine($"Failed to kill timed-out process: {ex.Message}"); }
                 return "Error: Command timed out after 30 seconds.";
             }
 
