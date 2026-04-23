@@ -107,7 +107,7 @@ public class FileSystemPlugin
 
             if (!File.Exists(fullPath))
             {
-                return $"Error: File not found: {relativePath}";
+                return BuildFileNotFoundMessage(relativePath, "read");
             }
 
             var content = await File.ReadAllTextAsync(fullPath);
@@ -203,31 +203,72 @@ public class FileSystemPlugin
 
             if (!File.Exists(fullPath))
             {
-                return $"Error: File not found: {relativePath}";
+                return BuildFileNotFoundMessage(relativePath, "edit");
             }
 
             var content = await File.ReadAllTextAsync(fullPath);
+
+            // Fast path: exact byte-for-byte match.
             var index = content.IndexOf(old_text, StringComparison.Ordinal);
+            var matchMethod = "exact";
+            string matchedOldText = old_text;
+            string insertedNewText = new_text;
+            string finalContent;
 
             if (index < 0)
             {
-                return $"Error: Could not find the specified text in {relativePath}. Make sure the old_text matches exactly, including whitespace and indentation.";
-            }
+                // Fallback: CRLF/LF normalization. Models commonly emit LF-only old_text
+                // while Windows files are CRLF — a single \r throws off exact matching.
+                var normalizedContent = NormalizeLineEndings(content);
+                var normalizedOld = NormalizeLineEndings(old_text);
+                var normalizedNew = NormalizeLineEndings(new_text);
+                var nIndex = normalizedContent.IndexOf(normalizedOld, StringComparison.Ordinal);
 
-            // Check for multiple occurrences
-            var secondIndex = content.IndexOf(old_text, index + old_text.Length, StringComparison.Ordinal);
-            if (secondIndex >= 0)
+                if (nIndex < 0)
+                {
+                    return $"Error: Could not find the specified text in {relativePath}.\n" +
+                           "Common causes:\n" +
+                           "  1. The file was modified since you last read it — re-read before editing.\n" +
+                           "  2. Whitespace or indentation differs from what's in the file.\n" +
+                           "  3. old_text is too large or includes reconstructed-from-memory content.\n" +
+                           "Tip: for edits, use a SMALL unique old_text (5-20 lines). " +
+                           "For large rewrites, use write_file instead.";
+                }
+
+                // Ensure the normalized match is unique.
+                var nSecond = normalizedContent.IndexOf(normalizedOld, nIndex + normalizedOld.Length, StringComparison.Ordinal);
+                if (nSecond >= 0)
+                {
+                    return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+                }
+
+                // Apply replacement in the normalized domain, then re-apply the file's original
+                // line-ending style so we don't accidentally convert CRLF files to LF or vice-versa.
+                var updatedNormalized = normalizedContent[..nIndex] + normalizedNew + normalizedContent[(nIndex + normalizedOld.Length)..];
+                var usesCrlf = content.Contains("\r\n");
+                finalContent = usesCrlf ? updatedNormalized.Replace("\n", "\r\n") : updatedNormalized;
+                matchMethod = "line-endings normalized";
+                matchedOldText = normalizedOld;
+                insertedNewText = normalizedNew;
+            }
+            else
             {
-                return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+                // Exact match: ensure it's unique, then apply as-is.
+                var secondIndex = content.IndexOf(old_text, index + old_text.Length, StringComparison.Ordinal);
+                if (secondIndex >= 0)
+                {
+                    return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+                }
+                finalContent = content[..index] + new_text + content[(index + old_text.Length)..];
             }
 
-            var newContent = content[..index] + new_text + content[(index + old_text.Length)..];
-            await File.WriteAllTextAsync(fullPath, newContent);
+            await File.WriteAllTextAsync(fullPath, finalContent);
             InvalidateCache();
 
-            var lineCount = newContent.Split('\n').Length;
-            return $"Successfully edited {relativePath} ({lineCount} lines)\n" +
-                   $"Replaced {old_text.Split('\n').Length} lines with {new_text.Split('\n').Length} lines.\n" +
+            var lineCount = finalContent.Split('\n').Length;
+            var suffix = matchMethod == "exact" ? "" : $" [{matchMethod}]";
+            return $"Successfully edited {relativePath} ({lineCount} lines){suffix}\n" +
+                   $"Replaced {matchedOldText.Split('\n').Length} lines with {insertedNewText.Split('\n').Length} lines.\n" +
                    $"Absolute path: {fullPath}";
         }
         catch (Exception ex)
@@ -235,6 +276,13 @@ public class FileSystemPlugin
             return $"Error editing file '{relativePath}': {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// Collapses any of \r\n, \r, or \n into a single \n. Used to make edit_file
+    /// tolerant of models that emit LF-only text against a CRLF file.
+    /// </summary>
+    private static string NormalizeLineEndings(string text)
+        => text.Replace("\r\n", "\n").Replace("\r", "\n");
 
     /// <summary>
     /// Searches file contents using a text pattern (grep-like).
@@ -312,7 +360,7 @@ public class FileSystemPlugin
 
             if (!File.Exists(fullPath))
             {
-                return Task.FromResult($"Error: File not found: {relativePath}");
+                return Task.FromResult(BuildFileNotFoundMessage(relativePath, "delete"));
             }
 
             File.Delete(fullPath);
@@ -624,6 +672,75 @@ public class FileSystemPlugin
     private static bool MatchesPattern(string filePath, Matcher matcher)
     {
         return matcher.Match(filePath).HasMatches;
+    }
+
+    /// <summary>
+    /// Builds an actionable "file not found" error. Includes up to N same-filename
+    /// matches elsewhere in the project plus a listing of the nearest existing parent
+    /// directory so the model can self-correct without re-guessing.
+    /// </summary>
+    private string BuildFileNotFoundMessage(string relativePath, string operation)
+    {
+        var msg = new System.Text.StringBuilder();
+        msg.Append($"Error: File not found: {relativePath} ({operation}).");
+
+        try
+        {
+            var fileName = Path.GetFileName(relativePath);
+            if (!string.IsNullOrEmpty(fileName))
+            {
+                var allFiles = GetAllFilesCached();
+                var matches = allFiles
+                    .Where(f => Path.GetFileName(f).Equals(fileName, StringComparison.OrdinalIgnoreCase))
+                    .Select(f => Path.GetRelativePath(ProjectRoot, f).Replace('\\', '/'))
+                    .Take(5)
+                    .ToList();
+
+                if (matches.Count > 0)
+                {
+                    msg.Append("\n  Files with the same name elsewhere: ")
+                       .Append(string.Join(", ", matches));
+                }
+            }
+
+            var probedDir = Path.GetDirectoryName(relativePath) ?? "";
+            while (true)
+            {
+                var probedFull = string.IsNullOrEmpty(probedDir)
+                    ? ProjectRoot
+                    : Path.GetFullPath(Path.Combine(ProjectRoot, probedDir));
+
+                if (Directory.Exists(probedFull))
+                {
+                    var entries = Directory.EnumerateFileSystemEntries(probedFull)
+                        .Select(p =>
+                        {
+                            var name = Path.GetFileName(p);
+                            return Directory.Exists(p) ? name + "/" : name;
+                        })
+                        .OrderBy(n => n)
+                        .Take(15)
+                        .ToList();
+
+                    if (entries.Count > 0)
+                    {
+                        var shownPath = string.IsNullOrEmpty(probedDir) ? "(project root)" : probedDir;
+                        msg.Append($"\n  Contents of {shownPath}: ")
+                           .Append(string.Join(", ", entries));
+                    }
+                    break;
+                }
+
+                if (string.IsNullOrEmpty(probedDir)) break;
+                probedDir = Path.GetDirectoryName(probedDir) ?? "";
+            }
+        }
+        catch
+        {
+            // Diagnostics are best-effort — never let them break the error path.
+        }
+
+        return msg.ToString();
     }
 
     private string GetFullPath(string relativePath)

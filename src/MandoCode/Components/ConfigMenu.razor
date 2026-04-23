@@ -25,6 +25,7 @@
             }
             <Markup Content="@($"Temperature: {Config.Temperature}")" />
             <Markup Content="@($"Max Tokens: {Config.MaxTokens}")" />
+            <Markup Content="@($"Request Timeout: {Config.RequestTimeoutMinutes} min")" />
             @if (Config.IgnoreDirectories.Any())
             {
                 <Markup Content="Ignored Directories:" />

@@ -1,12 +1,23 @@
 @using Spectre.Console;
 
 @code {
+    // Gate the easter-egg roll so it happens at most once per process launch.
+    // Razor re-instantiates components on some re-renders, which otherwise fires
+    // OnInitialized multiple times and rolls the dice again — when the glitch
+    // does hit mid-session, Console.Clear() wipes the screen and the VDOM paints
+    // the startup block fresh, looking exactly like a restart.
+    private static bool _glitchRolled;
+
     protected override void OnInitialized()
     {
-        // Easter egg: 1-in-50 chance of a brief "Neo's monitor" glitch
-        if (Random.Shared.Next(50) == 0)
+        // Easter egg: 1-in-50 chance of a brief "Neo's monitor" glitch — only on first init.
+        if (!_glitchRolled)
         {
-            PlayMatrixGlitch();
+            _glitchRolled = true;
+            if (Random.Shared.Next(50) == 0)
+            {
+                PlayMatrixGlitch();
+            }
         }
 
         var version = typeof(Program).Assembly.GetName().Version;
@@ -26,11 +37,12 @@
 
     private static readonly string[] _figletLines =
     {
-       @"    __  __        _        _   _    ____      ___      ____     ___     ____      _____    ",
-       @" |#|  \/  |    /// \    |/| \ | | ||  _ \   // _ \   // ___|  // _ \  ||  _ \  |/| ____|   ",
-       @" |#| |\/| |   /// _ \   |/|  \| | || | | | || | | | || |     || | | | || | | | |/|  _|     ",
-       @" |#| |  | |  /// ___ \  |/| |\  | || |_| | || |_| | || |___  || |_| | || |_| | |/| |___    ",
-       @" |#|_|  |_| ///_/   \_\ |/|_| \_| ||____/   \\___/   \\____|  \\___/  ||____/  |/|_____|   ",
+       @" ███╗   ███╗ █████╗ ███╗   ██╗██████╗  ██████╗  ██████╗ ██████╗ ██████╗ ███████╗ ",
+       @" ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝ ",
+       @" ██╔████╔██║███████║██╔██╗ ██║██║  ██║██║   ██║██║     ██║   ██║██║  ██║█████╗ ",
+       @" ██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██║   ██║██║     ██║   ██║██║  ██║██╔══╝ ",
+       @" ██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝╚██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗ ",
+       @" ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
        @" ░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░▒▓▒░░▒▓░░▒▓▒░░▒▓░        ",
        @" ▓░▒▓░░░▒▓░▒░░▓▒░░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░▒▓░░▒░▓░░▒▓░         "
     };

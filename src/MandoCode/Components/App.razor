@@ -6,6 +6,7 @@
 @inject AIService AI
 @inject MandoCodeConfig Config
 @inject TaskPlannerService TaskPlanner
+@inject PlanHandoff PlanHandoff
 @inject FileAutocompleteProvider FileProvider
 @inject TokenTrackingService TokenTracker
 @inject MusicPlayerService MusicPlayer
@@ -107,6 +108,11 @@
     private bool _autocompleteActive = false;
     private string _promptInitialValue = "";
 
+
+    // Event handler refs, stored so Dispose can detach them cleanly
+    private Action<FunctionCall>? _onFunctionInvokedHandler;
+    private Action<FunctionExecutionResult>? _onFunctionCompletedHandler;
+    private ConsoleCancelEventHandler? _cancelKeyHandler;
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
@@ -210,9 +216,16 @@
             ProjectRoot.ProjectRoot = args[0];
         }
 
-        // Subscribe to function invocation events for UI feedback
-        AI.OnFunctionInvoked += OnFunctionInvoked;
-        AI.OnFunctionCompleted += OnFunctionCompleted;
+        // Subscribe to function invocation events for UI feedback.
+        // Stored as fields so Dispose can detach them — AIService is a singleton, so
+        // leaving handlers attached after App tears down would leak closures capturing _requestCts.
+        _onFunctionInvokedHandler = OnFunctionInvoked;
+        _onFunctionCompletedHandler = OnFunctionCompleted;
+        AI.OnFunctionInvoked += _onFunctionInvokedHandler;
+        AI.OnFunctionCompleted += _onFunctionCompletedHandler;
+
+        // Wire the propose_plan tool handoff to the approval + execution UI
+        PlanHandoff.OnPlanRequested = HandleProposedPlanAsync;
 
         // Wire up diff approval callbacks if enabled
         if (Config.EnableDiffApprovals)
@@ -229,8 +242,10 @@
             ThemeService.ApplyPalette();
         }
 
-        // Ctrl+C cancels the active AI request instead of killing the process
-        Console.CancelKeyPress += (_, e) =>
+        // Ctrl+C cancels the active AI request instead of killing the process.
+        // Stored as a field so Dispose can detach it — the lambda closes over _requestCts,
+        // which would otherwise keep being dereferenced after teardown.
+        _cancelKeyHandler = (_, e) =>
         {
             var cts = _requestCts;
             if (cts != null && !cts.IsCancellationRequested)
@@ -244,6 +259,7 @@
                 ThemeService.ResetPalette();
             }
         };
+        Console.CancelKeyPress += _cancelKeyHandler;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -629,16 +645,17 @@
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
 
-            if (needsPlanning)
-            {
-                // Add user message to chat history
-                _messages.Add(new ChatMsg { Role = "user", Text = input });
-                await HandlePlannedExecutionAsync(processedInput);
-                continue;
-            }
-
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
+
+            // Heuristic fallback: for models that don't reliably self-invoke propose_plan,
+            // nudge them with a directive. The propose_plan call is still intercepted by
+            // the filter and handed to the approval UI via PlanHandoff.
+            if (needsPlanning)
+            {
+                processedInput += "\n\n[system: this request looks multi-step. " +
+                                  "Call propose_plan now with the breakdown before doing any work.]";
+            }
 
             // Process AI request with streaming (non-command input)
             await ProcessDirectRequestAsync(processedInput);
@@ -726,6 +743,12 @@
         return input;
     }
 
+    // Total-budget cap across all @file/@dir expansions in one message. Individual files
+    // are capped at 10k chars each, but many @refs combined can still blow the context
+    // before the chat call even starts. At this size (~60k chars ≈ 15k tokens) we stop
+    // expanding further references and append a notice.
+    private const int MaxFileReferenceBudgetChars = 60_000;
+
     private string ProcessFileReferences(string input)
     {
         var pattern = @"@([\w.\-/\\]+[\w.])";
@@ -736,6 +759,8 @@
 
         var contextBlocks = new System.Text.StringBuilder();
         var referencedFiles = new HashSet<string>();
+        int totalExpansionChars = 0;
+        int skippedForBudget = 0;
 
         foreach (Match match in matches)
         {
@@ -744,6 +769,13 @@
             // Skip duplicates
             if (!referencedFiles.Add(filePath))
                 continue;
+
+            // Total-budget check — stop expanding once we've accumulated enough context.
+            if (totalExpansionChars >= MaxFileReferenceBudgetChars)
+            {
+                skippedForBudget++;
+                continue;
+            }
 
             var content = FileProvider.ReadFileContent(filePath);
             if (content != null)
@@ -757,6 +789,7 @@
                 contextBlocks.AppendLine(content);
                 contextBlocks.AppendLine("```");
                 contextBlocks.AppendLine();
+                totalExpansionChars += content.Length;
 
                 // Track estimated tokens for @file references
                 if (Config.EnableTokenTracking)
@@ -780,10 +813,15 @@
                 var dirListing = FileProvider.GetDirectoryListing(filePath);
                 if (dirListing != null)
                 {
+                    // Dir listings can be huge for big projects — cap at 4k chars per reference.
+                    if (dirListing.Length > 4_000)
+                        dirListing = dirListing.Substring(0, 4_000) + "\n... [truncated]";
+
                     contextBlocks.AppendLine($"Directory: {filePath}/");
                     contextBlocks.AppendLine("Contents:");
                     contextBlocks.AppendLine(dirListing);
                     contextBlocks.AppendLine();
+                    totalExpansionChars += dirListing.Length;
 
                     AnsiConsole.MarkupLine($"[dim][[Directory]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}/[/]");
                 }
@@ -796,6 +834,13 @@
 
         if (contextBlocks.Length == 0)
             return input;
+
+        if (skippedForBudget > 0)
+        {
+            contextBlocks.AppendLine($"[Note: {skippedForBudget} additional @reference(s) were skipped — the total expansion budget of {MaxFileReferenceBudgetChars:N0} chars was reached. Re-reference specific files in follow-up messages if needed.]");
+            contextBlocks.AppendLine();
+            AnsiConsole.MarkupLine($"[yellow][[Skipped]][/] [dim]{skippedForBudget} @reference(s) beyond expansion budget ({MaxFileReferenceBudgetChars:N0} chars)[/]");
+        }
 
         var fullContext = new System.Text.StringBuilder();
         fullContext.AppendLine("--- Referenced Files ---");
@@ -1086,78 +1131,38 @@
         }
     }
 
-    private async Task HandlePlannedExecutionAsync(string input)
+    /// <summary>
+    /// Called by <see cref="PlanHandoff"/> when the model invokes propose_plan.
+    /// Shows the approval UI, runs execution if approved, and returns a summary
+    /// string that the model will see as the tool result.
+    /// </summary>
+    private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
     {
+        // Stop the outer "Thinking..." spinner so it doesn't fight the approval prompt.
+        Spinner.Stop();
+
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[cyan]This looks like a complex request. Creating a plan...[/]");
-        AnsiConsole.WriteLine();
-
-        _requestCts = new CancellationTokenSource();
-        var token = _requestCts.Token;
-        StartCancelKeyListener();
-
-        TaskPlan? plan = null;
-
-        try
-        {
-            // Create the plan with a spinner
-            await AnsiConsole.Status()
-                .Spinner(LoadingMessages.GetRandomSpinner())
-                .StartAsync("Analyzing request and creating plan...", async ctx =>
-                {
-                    plan = await TaskPlanner.CreatePlanAsync(input, token);
-                });
-        }
-        catch (OperationCanceledException)
-        {
-            StopCancelKeyListener();
-            var oldCts = Interlocked.Exchange(ref _requestCts, null);
-            oldCts?.Dispose();
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Plan creation cancelled.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        // Stop the key listener during user interaction (plan approval prompt)
-        StopCancelKeyListener();
-        var planCts = Interlocked.Exchange(ref _requestCts, null);
-        planCts?.Dispose();
-
-        if (plan == null || plan.Steps.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]Could not create a plan. Falling back to direct execution.[/]");
-            await ProcessDirectRequestAsync(input);
-            return;
-        }
-
-        // Display the plan
         DisplayPlan(plan);
 
-        // Ask user to confirm
         var choice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("What would you like to do?")
-                .AddChoices(new[] { "Execute plan", "Execute directly (skip planning)", "Cancel" })
+                .Title("The assistant proposes this plan. What would you like to do?")
+                .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
         );
 
-        if (choice == "Cancel")
+        if (choice == "Cancel request")
         {
-            AnsiConsole.MarkupLine("[dim]Request cancelled.[/]");
+            AnsiConsole.MarkupLine("[dim]Plan cancelled.[/]");
             AnsiConsole.WriteLine();
-            return;
+            return "User cancelled the request. Stop here and do not take further action.";
         }
 
-        if (choice == "Execute directly (skip planning)")
+        if (choice == "Reject (answer without a plan)")
         {
-            await ProcessDirectRequestAsync(input);
-            return;
+            AnsiConsole.MarkupLine("[dim]Plan rejected — continuing without stepwise execution.[/]");
+            AnsiConsole.WriteLine();
+            return "User rejected the proposed plan. Respond to the original request directly without calling propose_plan again.";
         }
-
-        // Execute the plan with cancellation support
-        _requestCts = new CancellationTokenSource();
-        var execToken = _requestCts.Token;
-        StartCancelKeyListener();
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[green]Executing plan...[/]");
@@ -1165,7 +1170,7 @@
 
         try
         {
-            await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan, execToken))
+            await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan, ct))
             {
                 await HandleProgressEventAsync(progressEvent, plan);
             }
@@ -1175,14 +1180,7 @@
             Spinner.Stop();
             TaskPlanner.CancelPlan(plan);
         }
-        finally
-        {
-            StopCancelKeyListener();
-            var oldCts = Interlocked.Exchange(ref _requestCts, null);
-            oldCts?.Dispose();
-        }
 
-        // Show summary
         AnsiConsole.WriteLine();
         if (plan.Status == TaskPlanStatus.Completed)
         {
@@ -1202,6 +1200,9 @@
             AnsiConsole.MarkupLine($"[dim]{Spectre.Console.Markup.Escape(plan.ExecutionSummary)}[/]");
         }
         AnsiConsole.WriteLine();
+
+        return plan.ExecutionSummary
+               ?? $"Plan finished with status {plan.Status}.";
     }
 
     private void DisplayPlan(TaskPlan plan)
@@ -1705,6 +1706,22 @@
         StopCancelKeyListener();
         StopMusicVisualizer();
         Spinner.Stop();
+
+        // Detach event handlers registered in OnInitialized.
+        // AIService is a singleton — if we don't unsubscribe, stale handlers linger
+        // across App lifecycle and capture a disposed _requestCts via closure.
+        if (_onFunctionInvokedHandler != null)
+            AI.OnFunctionInvoked -= _onFunctionInvokedHandler;
+        if (_onFunctionCompletedHandler != null)
+            AI.OnFunctionCompleted -= _onFunctionCompletedHandler;
+        if (_cancelKeyHandler != null)
+            Console.CancelKeyPress -= _cancelKeyHandler;
+
+        // Clear the PlanHandoff callback so late-arriving propose_plan calls don't
+        // hit a disposed App. AIService stays, but plan requests just return the
+        // "not wired up" fallback from PlanHandoff.ProcessAsync.
+        PlanHandoff.OnPlanRequested = null;
+
         var cts = Interlocked.Exchange(ref _requestCts, null);
         cts?.Dispose();
         MusicPlayer?.Dispose();

@@ -39,9 +39,18 @@ public class MandoCodeConfig
     public const double MaxTemperature = 1.0;
     public const int MinMaxTokens = 256;
     public const int MaxMaxTokens = 131072;
+    public const int MinRequestTimeoutMinutes = 1;
+    public const int MaxRequestTimeoutMinutes = 60;
+    public const long MinToolResultCharBudget = 50_000;
+    public const long MaxToolResultCharBudget = 4_000_000;
+    public const int MinMaxAutoContinuations = 0;
+    public const int MaxMaxAutoContinuations = 10;
 
     public static bool IsValidTemperature(double value) => value >= MinTemperature && value <= MaxTemperature;
     public static bool IsValidMaxTokens(int value) => value >= MinMaxTokens && value <= MaxMaxTokens;
+    public static bool IsValidRequestTimeout(int value) => value >= MinRequestTimeoutMinutes && value <= MaxRequestTimeoutMinutes;
+    public static bool IsValidToolResultCharBudget(long value) => value >= MinToolResultCharBudget && value <= MaxToolResultCharBudget;
+    public static bool IsValidMaxAutoContinuations(int value) => value >= MinMaxAutoContinuations && value <= MaxMaxAutoContinuations;
 
     /// <summary>
     /// Ollama endpoint URL.
@@ -74,6 +83,40 @@ public class MandoCodeConfig
     /// </summary>
     [JsonPropertyName("maxTokens")]
     public int MaxTokens { get; set; } = 4096;
+
+    /// <summary>
+    /// Per-request timeout in minutes. Covers direct chats and each plan step.
+    /// Agentic work with many tool calls can take longer than a few minutes — raise this
+    /// if the model gets cut off mid-task. Cancel anytime with Ctrl+C.
+    /// </summary>
+    [JsonPropertyName("requestTimeoutMinutes")]
+    public int RequestTimeoutMinutes { get; set; } = 15;
+
+    /// <summary>
+    /// Total character budget for tool-call results within a single chat turn or plan step.
+    /// When exceeded, further tool calls are refused to prevent context-window overflow,
+    /// and (if auto-continuation is on) the step restarts with a fresh scope.
+    /// ~4 chars per token, so 100,000 chars ≈ 25k tokens of tool results — fits safely
+    /// inside even small provider context windows (32k+). Raise this if you're on a
+    /// large-context cloud model and want fewer continuations.
+    /// </summary>
+    [JsonPropertyName("toolResultCharBudget")]
+    public long ToolResultCharBudget { get; set; } = 100_000;
+
+    /// <summary>
+    /// When true and the tool-result budget is exhausted, the assistant's progress summary
+    /// is treated as implicit compaction and the turn auto-continues with a fresh scope —
+    /// no "press enter to keep going" step.
+    /// </summary>
+    [JsonPropertyName("enableAutoContinuation")]
+    public bool EnableAutoContinuation { get; set; } = true;
+
+    /// <summary>
+    /// Hard cap on how many times a single user request can auto-continue after budget
+    /// exhaustion. Prevents runaway loops if the model never converges.
+    /// </summary>
+    [JsonPropertyName("maxAutoContinuations")]
+    public int MaxAutoContinuations { get; set; } = 3;
 
     /// <summary>
     /// Additional directories to ignore when scanning files.
@@ -261,6 +304,10 @@ public class MandoCodeConfig
             ModelName = "minimax-m2.5:cloud",
             Temperature = 0.7,
             MaxTokens = 4096,
+            RequestTimeoutMinutes = 15,
+            ToolResultCharBudget = 100_000,
+            EnableAutoContinuation = true,
+            MaxAutoContinuations = 3,
             IgnoreDirectories = new List<string>(DefaultIgnoreDirectories),
             EnableTaskPlanning = true
         };
@@ -282,6 +329,9 @@ public class MandoCodeConfig
         }
         Console.WriteLine($"  Temperature: {Temperature}");
         Console.WriteLine($"  Max Tokens: {MaxTokens}");
+        Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
+        Console.WriteLine($"  Tool Result Budget: {ToolResultCharBudget:N0} chars (~{ToolResultCharBudget / 4:N0} tokens)");
+        Console.WriteLine($"  Auto-Continuation: {(EnableAutoContinuation ? $"Enabled (max {MaxAutoContinuations})" : "Disabled")}");
         if (IgnoreDirectories.Any())
         {
             Console.WriteLine($"  Ignore Directories: {string.Join(", ", IgnoreDirectories)}");

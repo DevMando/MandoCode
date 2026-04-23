@@ -75,6 +75,11 @@ public static class RetryPolicy
     /// </summary>
     private static bool IsTransientError(Exception ex)
     {
+        // Context-window rejections are NOT transient — retrying the same oversized prompt
+        // just wastes round-trips. Let them propagate so synthetic-summary recovery fires.
+        if (IsContextOverflowError(ex))
+            return false;
+
         // HTTP connection errors are transient
         if (ex is HttpRequestException)
             return true;
@@ -107,6 +112,27 @@ public static class RetryPolicy
         if (ex.InnerException != null)
             return IsTransientError(ex.InnerException);
 
+        return false;
+    }
+
+    /// <summary>
+    /// Tight match for provider-side context-window rejections. Patterns kept narrow so
+    /// generic "rate limit exceeded" or "token limit" (NumPredict exhaustion) don't trip
+    /// the non-retry path. Walks inner exceptions.
+    /// </summary>
+    public static bool IsContextOverflowError(Exception? ex)
+    {
+        while (ex != null)
+        {
+            var msg = ex.Message?.ToLowerInvariant() ?? "";
+            if (msg.Contains("context window") ||
+                msg.Contains("context length") ||
+                msg.Contains("context_length_exceeded") ||
+                msg.Contains("prompt is too long") ||
+                msg.Contains("maximum context"))
+                return true;
+            ex = ex.InnerException;
+        }
         return false;
     }
 }

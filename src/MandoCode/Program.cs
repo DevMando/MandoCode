@@ -71,6 +71,9 @@ class Program
             // Register TokenTrackingService as singleton
             services.AddSingleton<TokenTrackingService>();
 
+            // Register PlanHandoff as singleton — bridges propose_plan tool calls to the UI
+            services.AddSingleton<PlanHandoff>();
+
             // Register TerminalThemeService as singleton
             services.AddSingleton(provider =>
             {
@@ -86,7 +89,8 @@ class Program
                 var cfg = provider.GetRequiredService<MandoCodeConfig>();
                 var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
                 var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
-                return new AIService(projectRootAccessor, cfg, tokenTracker);
+                var planHandoff = provider.GetRequiredService<PlanHandoff>();
+                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff);
             });
 
             // Register TaskPlannerService as singleton
@@ -215,6 +219,10 @@ class Program
         Console.WriteLine("  • modelPath       - Path to local model file");
         Console.WriteLine("  • temperature     - Temperature (0.0-1.0)");
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
+        Console.WriteLine("  • timeout         - Per-request timeout in minutes (1-60)");
+        Console.WriteLine("  • toolBudget      - Tool-result char budget per request (50k-4M)");
+        Console.WriteLine("  • autoContinue    - Auto-continue past budget limits (true/false)");
+        Console.WriteLine("  • maxContinuations - Max auto-continuations per request (0-10)");
         Console.WriteLine("  • taskPlanning    - Enable/disable task planning (true/false)");
         Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
         Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
@@ -272,6 +280,65 @@ class Program
                 else
                 {
                     Console.WriteLine($"Error: Max tokens must be between {MandoCodeConfig.MinMaxTokens} and {MandoCodeConfig.MaxMaxTokens}");
+                    return;
+                }
+                break;
+
+            case "autocontinue":
+            case "autocontinuation":
+            case "enableautocontinuation":
+                if (bool.TryParse(value, out var enableAutoCont))
+                {
+                    config.EnableAutoContinuation = enableAutoCont;
+                    Console.WriteLine($"✓ Auto-continuation {(enableAutoCont ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
+                    return;
+                }
+                break;
+
+            case "maxcontinuations":
+            case "maxautocontinuations":
+                if (int.TryParse(value, out var maxCont) && MandoCodeConfig.IsValidMaxAutoContinuations(maxCont))
+                {
+                    config.MaxAutoContinuations = maxCont;
+                    Console.WriteLine($"✓ Max auto-continuations set to: {maxCont}");
+                }
+                else
+                {
+                    Console.WriteLine($"Error: Max continuations must be between {MandoCodeConfig.MinMaxAutoContinuations} and {MandoCodeConfig.MaxMaxAutoContinuations}");
+                    return;
+                }
+                break;
+
+            case "toolbudget":
+            case "toolresultbudget":
+            case "toolresultcharbudget":
+                if (long.TryParse(value, out var budget) && MandoCodeConfig.IsValidToolResultCharBudget(budget))
+                {
+                    config.ToolResultCharBudget = budget;
+                    Console.WriteLine($"✓ Set tool-result budget to: {budget:N0} chars (~{budget / 4:N0} tokens)");
+                }
+                else
+                {
+                    Console.WriteLine($"Error: Tool-result budget must be between {MandoCodeConfig.MinToolResultCharBudget:N0} and {MandoCodeConfig.MaxToolResultCharBudget:N0} chars");
+                    return;
+                }
+                break;
+
+            case "timeout":
+            case "requesttimeout":
+            case "requesttimeoutminutes":
+                if (int.TryParse(value, out var timeout) && MandoCodeConfig.IsValidRequestTimeout(timeout))
+                {
+                    config.RequestTimeoutMinutes = timeout;
+                    Console.WriteLine($"✓ Set request timeout to: {timeout} min");
+                }
+                else
+                {
+                    Console.WriteLine($"Error: Timeout must be between {MandoCodeConfig.MinRequestTimeoutMinutes} and {MandoCodeConfig.MaxRequestTimeoutMinutes} minutes");
                     return;
                 }
                 break;
