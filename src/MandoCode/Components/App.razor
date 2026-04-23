@@ -17,6 +17,7 @@
 @inject ShellCommandHandler Shell
 @inject TerminalThemeService ThemeService
 @inject InputStateMachine StateMachine
+@inject SkillLoader Skills
 @implements IDisposable
 
 <Banner />
@@ -542,6 +543,8 @@
                     table.AddRow("/command", "Run a shell command (also: !<cmd>)");
                     table.AddRow("/copy", "Copy last AI response to clipboard");
                     table.AddRow("/copy-code", "Copy code blocks from last response");
+                    table.AddRow("/skills", "List installed skills (auto-invoked when relevant)");
+                    table.AddRow("/force-skill", "Override: force a specific skill to run now");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -608,6 +611,21 @@
                 {
                     var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
                     await Shell.HandleShellCommandAsync(shellCmd);
+                    continue;
+                }
+
+                if (command == "skills")
+                {
+                    HandleSkillsListCommand();
+                    continue;
+                }
+
+                if (command == "force-skill" || command.StartsWith("force-skill "))
+                {
+                    var skillName = command.Length > "force-skill".Length
+                        ? command["force-skill".Length..].Trim()
+                        : "";
+                    await HandleForceSkillCommandAsync(skillName);
                     continue;
                 }
 
@@ -1294,6 +1312,140 @@
                 SpinnerService.ClearTaskbarProgress();
                 break;
         }
+    }
+
+    private void HandleSkillsListCommand()
+    {
+        var skills = Skills.GetAll();
+        AnsiConsole.WriteLine();
+
+        if (skills.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No skills installed.[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("Create a skill by adding a folder with a [cyan]SKILL.md[/] file to:");
+            AnsiConsole.MarkupLine($"  • User skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedUserSkillsDirectory)}[/]");
+            AnsiConsole.MarkupLine($"  • Project skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedProjectSkillsDirectory)}[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]Tip: project skills are also discovered by walking up from the project root — put them at the repo root if you launch from a subdirectory.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        AnsiConsole.MarkupLine("[green]✨ Skills are invoked automatically[/] when the model matches a description to your request.");
+        AnsiConsole.MarkupLine("[dim]Use[/] [cyan]/force-skill[/] [dim]only when you want to override and run a specific one.[/]");
+        AnsiConsole.WriteLine();
+
+        var table = new Spectre.Console.Table() { Border = TableBorder.Rounded };
+        table.AddColumn("Skill");
+        table.AddColumn("Source");
+        table.AddColumn("Description");
+        foreach (var skill in skills)
+        {
+            table.AddRow(
+                skill.Name,
+                skill.Source.ToString(),
+                string.IsNullOrWhiteSpace(skill.Description) ? "[dim](no description)[/]" : Spectre.Console.Markup.Escape(skill.Description));
+        }
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Shows a fuzzy-searchable picker of installed skills and returns the selected skill
+    /// name (or null if the user cancels or no skills are installed). Uses Spectre's
+    /// SelectionPrompt with EnableSearch so typing filters the list.
+    /// </summary>
+    private string? PromptForSkill()
+    {
+        var skills = Skills.GetAll();
+        if (skills.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No skills installed.[/] Run [cyan]/skills[/] [yellow]for setup instructions.[/]");
+            AnsiConsole.WriteLine();
+            return null;
+        }
+
+        const string CancelChoice = "(cancel)";
+        const string Separator = "  —  ";
+
+        var entries = new List<string> { CancelChoice };
+        foreach (var s in skills)
+        {
+            entries.Add(string.IsNullOrWhiteSpace(s.Description)
+                ? s.Name
+                : s.Name + Separator + s.Description);
+        }
+
+        string selected;
+        try
+        {
+            selected = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[green]Select a skill to force:[/] [dim](type to filter)[/]")
+                    .PageSize(10)
+                    .MoreChoicesText("[dim](scroll for more)[/]")
+                    .EnableSearch()
+                    .AddChoices(entries)
+            );
+        }
+        catch (Exception)
+        {
+            AnsiConsole.WriteLine();
+            return null;
+        }
+
+        if (selected == CancelChoice)
+        {
+            AnsiConsole.WriteLine();
+            return null;
+        }
+
+        var dashIdx = selected.IndexOf(Separator, StringComparison.Ordinal);
+        return dashIdx > 0 ? selected[..dashIdx] : selected;
+    }
+
+    private async Task HandleForceSkillCommandAsync(string skillName)
+    {
+        AnsiConsole.WriteLine();
+
+        if (string.IsNullOrWhiteSpace(skillName))
+        {
+            var picked = PromptForSkill();
+            if (picked == null) return;
+            skillName = picked;
+        }
+
+        var skill = Skills.GetByName(skillName);
+        if (skill == null)
+        {
+            AnsiConsole.MarkupLine($"[red]No skill named[/] [cyan]{Spectre.Console.Markup.Escape(skillName)}[/] [red]is installed.[/]");
+            AnsiConsole.MarkupLine("[dim]Run[/] [cyan]/skills[/] [dim]to see available skills.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (!_isConnected || _modelError)
+        {
+            AnsiConsole.MarkupLine("[yellow]Cannot run skill — no model is connected.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[green]✓ Forcing skill:[/] [cyan]{Spectre.Console.Markup.Escape(skill.Name)}[/]");
+        if (!string.IsNullOrWhiteSpace(skill.Description))
+        {
+            AnsiConsole.MarkupLine($"  [dim]{Spectre.Console.Markup.Escape(skill.Description)}[/]");
+        }
+        AnsiConsole.WriteLine();
+
+        var forcedPrompt =
+            $"[system: the user has explicitly forced skill '{skill.Name}' via /force-skill. " +
+            $"Follow these instructions exactly for this turn, even if they differ from your defaults.]\n\n" +
+            $"# Skill: {skill.Name}\n\n{skill.Body}";
+
+        _messages.Add(new ChatMsg { Role = "user", Text = $"/force-skill {skill.Name}" });
+        await ProcessDirectRequestAsync(forcedPrompt);
     }
 
     private async Task HandleLearnCommandAsync()

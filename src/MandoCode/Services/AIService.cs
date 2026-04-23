@@ -32,6 +32,7 @@ public class AIService
     private FunctionInvocationFilter _functionFilter;
     private readonly TokenTrackingService _tokenTracker;
     private readonly PlanHandoff _planHandoff;
+    private readonly SkillLoader _skillLoader;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     // Named event handlers stored so we can detach them when rebuilding the kernel
@@ -109,15 +110,21 @@ public class AIService
         }
     }
 
-    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff)
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader)
     {
         _projectRootAccessor = projectRootAccessor;
         _config = config;
         _tokenTracker = tokenTracker;
         _planHandoff = planHandoff;
-        // Append shell-specific rules (cmd.exe vs bash) so the model stops emitting
-        // unix commands on Windows or vice-versa.
+        _skillLoader = skillLoader;
+        // Append shell-specific rules (cmd.exe vs bash) + the skill index so the model
+        // knows which user-defined workflows are available for load_skill().
+        var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
         _systemPrompt = SystemPrompts.MandoCodeAssistant + "\n\n" + ShellEnvironment.SystemPromptRules;
+        if (!string.IsNullOrEmpty(skillIndex))
+        {
+            _systemPrompt += "\n\n" + skillIndex;
+        }
 
         BuildKernel();
 
@@ -169,6 +176,10 @@ public class AIService
         {
             builder.Plugins.AddFromObject(new PlanningPlugin(), "Planning");
         }
+
+        // Always register the Skills plugin — even when no skills are installed, so
+        // users can add skills and trigger a reload without rebuilding the kernel.
+        builder.Plugins.AddFromObject(new SkillsPlugin(_skillLoader), "Skills");
 
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();

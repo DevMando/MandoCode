@@ -6,6 +6,37 @@ namespace MandoCode.Models;
 public static class SystemPrompts
 {
     /// <summary>
+    /// Builds the "Available Skills" section appended to the system prompt.
+    /// Lists each skill's name + short description only (not the body) so the
+    /// model can decide when to call load_skill() for the full instructions.
+    /// Returns an empty string when no skills are installed.
+    /// </summary>
+    public static string BuildSkillIndex(IReadOnlyList<Skill> skills)
+    {
+        if (skills == null || skills.Count == 0) return string.Empty;
+
+        var lines = new List<string>
+        {
+            "",
+            "AVAILABLE SKILLS:",
+            "The user has the following skills installed. Each skill is a named workflow with",
+            "specific instructions. When a skill's description matches what the user is trying",
+            "to accomplish, call the load_skill(name) function to retrieve its full instructions,",
+            "then follow them exactly for the rest of the turn. Only invoke skills that clearly",
+            "fit the request — do not force a skill if none apply.",
+            ""
+        };
+
+        foreach (var skill in skills)
+        {
+            var desc = string.IsNullOrWhiteSpace(skill.Description) ? "(no description)" : skill.Description;
+            lines.Add($"- {skill.Name}: {desc}");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>
     /// Main system prompt for the MandoCode AI assistant.
     /// </summary>
     public static string MandoCodeAssistant => @"You are MandoCode, a local AI coding assistant powered by Ollama & Microsoft's Semantic Kernel.

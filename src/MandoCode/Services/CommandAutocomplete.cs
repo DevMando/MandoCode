@@ -10,27 +10,11 @@ namespace MandoCode.Services;
 public static class CommandAutocomplete
 {
     /// <summary>
-    /// Available commands with their descriptions.
+    /// Available commands with their descriptions. Sourced from
+    /// <see cref="SlashCommands.All"/> so the state machine and autocomplete
+    /// renderer can't drift.
     /// </summary>
-    private static readonly Dictionary<string, string> Commands = new()
-    {
-        { "/help", "Show this help message" },
-        { "/config", "Open configuration menu" },
-        { "/copy", "Copy last AI response to clipboard" },
-        { "/copy-code", "Copy code blocks from last AI response" },
-        { "/command", "Run a shell command (also: !<cmd>)" },
-        { "/clear", "Clear conversation history" },
-        { "/learn", "Learn about LLMs and local AI models" },
-        { "/retry", "Retry Ollama connection" },
-        { "/music", "Play music" },
-        { "/music-stop", "Stop music playback" },
-        { "/music-pause", "Pause/resume music" },
-        { "/music-next", "Skip to next track" },
-        { "/music-vol", "Set volume (0-100), e.g. /music-vol 70" },
-        { "/music-playlist", "Select a genre and start playing" },
-        { "/music-list", "Show available tracks" },
-        { "/exit", "Exit MandoCode" }
-    };
+    private static readonly IReadOnlyDictionary<string, string> Commands = SlashCommands.All;
 
     private static InputStateMachine? _stateMachine;
     private static ConsoleInputReader _keySource = new();
