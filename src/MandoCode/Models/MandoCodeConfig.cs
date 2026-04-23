@@ -180,10 +180,48 @@ public class MandoCodeConfig
     public bool EnableWebSearch { get; set; } = true;
 
     /// <summary>
+    /// Directory for user-level skills (available in every project).
+    /// Defaults to ~/.mandocode/skills. Each skill is a folder containing a SKILL.md file.
+    /// </summary>
+    [JsonPropertyName("userSkillsDirectory")]
+    public string? UserSkillsDirectory { get; set; }
+
+    /// <summary>
+    /// Directory for project-level skills (committed to the repo, shared with the team).
+    /// Defaults to ./.mandocode/skills relative to the project root. Project skills
+    /// override user skills when names collide.
+    /// </summary>
+    [JsonPropertyName("projectSkillsDirectory")]
+    public string? ProjectSkillsDirectory { get; set; }
+
+    /// <summary>
     /// Music player preferences (volume, genre, autoplay).
     /// </summary>
     [JsonPropertyName("music")]
     public MusicConfig Music { get; set; } = new();
+
+    /// <summary>
+    /// Resolves the effective user-skills directory, falling back to ~/.mandocode/skills.
+    /// </summary>
+    public string GetEffectiveUserSkillsDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(UserSkillsDirectory))
+            return UserSkillsDirectory;
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(userProfile, ".mandocode", "skills");
+    }
+
+    /// <summary>
+    /// Resolves the effective project-skills directory. If the configured path is relative,
+    /// it is resolved against <paramref name="projectRoot"/>. Defaults to ./.mandocode/skills.
+    /// </summary>
+    public string GetEffectiveProjectSkillsDirectory(string projectRoot)
+    {
+        var configured = !string.IsNullOrWhiteSpace(ProjectSkillsDirectory)
+            ? ProjectSkillsDirectory!
+            : Path.Combine(".mandocode", "skills");
+        return Path.IsPathRooted(configured) ? configured : Path.Combine(projectRoot, configured);
+    }
 
     /// <summary>
     /// Loads configuration from file, or creates a default one if it doesn't exist.

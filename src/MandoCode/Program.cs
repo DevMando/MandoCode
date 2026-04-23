@@ -74,6 +74,14 @@ class Program
             // Register PlanHandoff as singleton — bridges propose_plan tool calls to the UI
             services.AddSingleton<PlanHandoff>();
 
+            // Register SkillLoader as singleton — scans user + project skill dirs at startup
+            services.AddSingleton(provider =>
+            {
+                var cfg = provider.GetRequiredService<MandoCodeConfig>();
+                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+                return new SkillLoader(cfg, projectRootAccessor);
+            });
+
             // Register TerminalThemeService as singleton
             services.AddSingleton(provider =>
             {
@@ -90,7 +98,8 @@ class Program
                 var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
                 var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
                 var planHandoff = provider.GetRequiredService<PlanHandoff>();
-                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff);
+                var skillLoader = provider.GetRequiredService<SkillLoader>();
+                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader);
             });
 
             // Register TaskPlannerService as singleton
@@ -118,29 +127,13 @@ class Program
                 return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);
             });
 
-            // Register InputStateMachine as singleton (shared between imperative + VDOM input)
+            // Register InputStateMachine as singleton (shared between imperative + VDOM input).
+            // Commands are sourced from MandoCode.Models.SlashCommands so that the
+            // state machine and CommandAutocomplete can't drift apart.
             services.AddSingleton(provider =>
             {
                 var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
-                var commands = new Dictionary<string, string>
-                {
-                    { "/help", "Show this help message" },
-                    { "/config", "Open configuration menu" },
-                    { "/copy", "Copy last AI response to clipboard" },
-                    { "/copy-code", "Copy code blocks from last AI response" },
-                    { "/command", "Run a shell command (also: !<cmd>)" },
-                    { "/clear", "Clear conversation history" },
-                    { "/learn", "Learn about LLMs and local AI models" },
-                    { "/retry", "Retry Ollama connection" },
-                    { "/music", "Play music" },
-                    { "/music-stop", "Stop music playback" },
-                    { "/music-pause", "Pause/resume music" },
-                    { "/music-next", "Skip to next track" },
-                    { "/music-vol", "Set volume (0-100), e.g. /music-vol 70" },
-                    { "/music-playlist", "Select a genre and start playing" },
-                    { "/music-list", "Show available tracks" },
-                    { "/exit", "Exit MandoCode" }
-                };
+                var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
                 return new InputStateMachine(commands, fileProvider);
             });
 
