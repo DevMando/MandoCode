@@ -1,5 +1,6 @@
 using Microsoft.SemanticKernel;
 using MandoCode.Models;
+using MandoCode.Plugins;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using System.Text;
@@ -49,6 +50,15 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     // Optional token tracker for estimating file operation token costs
     private readonly TokenTrackingService? _tokenTracker;
 
+    // Bridge to the UI for propose_plan interception
+    private readonly PlanHandoff? _planHandoff;
+
+    // Per-chat/per-step loop-prevention state. AsyncLocal so each logical flow
+    // gets its own stack — avoids races with AllowConcurrentInvocation = true
+    // and handles nested scopes (plan step inside a chat turn) without a shared field.
+    private readonly AsyncLocal<InvocationScope?> _currentScope = new();
+    private readonly long _defaultResultCharBudget;
+
     // Cache for deduplication - stores recent function calls and their results
     // Uses ConcurrentDictionary for thread safety with AllowConcurrentInvocation = true
     private readonly ConcurrentDictionary<string, (DateTime Time, object? Result)> _recentCalls = new();
@@ -86,17 +96,77 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     {
     }
 
-    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, ProjectRootAccessor? projectRootAccessor = null, TokenTrackingService? tokenTracker = null)
+    public FunctionInvocationFilter(int defaultDeduplicationWindowSeconds, ProjectRootAccessor? projectRootAccessor = null, TokenTrackingService? tokenTracker = null, PlanHandoff? planHandoff = null, long resultCharBudget = 400_000)
     {
         // Read operations use shorter window (2s), writes use configured window
         _readDeduplicationWindow = TimeSpan.FromSeconds(2);
         _writeDeduplicationWindow = TimeSpan.FromSeconds(defaultDeduplicationWindowSeconds);
         _projectRootAccessor = projectRootAccessor;
         _tokenTracker = tokenTracker;
+        _planHandoff = planHandoff;
+        _defaultResultCharBudget = resultCharBudget;
+    }
+
+    /// <summary>
+    /// Starts a new per-chat or per-step scope. Every tool call within the scope
+    /// accrues against its read-dedup set and result-char budget. Scopes nest: an
+    /// inner scope replaces the outer one and restores it on Dispose, so a plan
+    /// step inside a chat turn gets its own budget.
+    /// Returns the scope directly so callers can inspect <see cref="InvocationScope.BudgetExhausted"/>
+    /// after the turn completes to decide whether to auto-continue.
+    /// </summary>
+    public InvocationScope BeginScope()
+    {
+        var previous = _currentScope.Value;
+        var scope = new InvocationScope(_defaultResultCharBudget);
+        _currentScope.Value = scope;
+        scope.SetOnDispose(() => _currentScope.Value = previous);
+        return scope;
     }
 
     public async Task OnFunctionInvocationAsync(FunctionInvocationContext context, Func<FunctionInvocationContext, Task> next)
     {
+        // Intercept propose_plan before any dedup/UI-event logic — it is handled
+        // out-of-band via PlanHandoff instead of being invoked directly.
+        if (context.Function.Name == "propose_plan" && _planHandoff != null)
+        {
+            var summary = await HandleProposePlanAsync(context);
+            context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, summary);
+            return;
+        }
+
+        // Circuit breakers — scope-aware. Skip when no scope is active
+        // (e.g., direct tool invocation in tests).
+        var scope = _currentScope.Value;
+        if (scope != null)
+        {
+            // Budget circuit: if cumulative tool results have filled ~100k tokens,
+            // refuse further calls so we bail before the model's context window overflows.
+            if (scope.BudgetExhausted)
+            {
+                var msg = $"Tool-call budget of {scope.ResultCharBudget:N0} chars is exhausted for this turn. " +
+                          "Stop calling tools and respond to the user directly with what you have so far. " +
+                          "Ask the user to continue in a new message if more work is needed.";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                return;
+            }
+
+            // Duplicate-read circuit: the same read args twice, with no intervening
+            // write to the same path, is almost always a stuck loop.
+            if (context.Function.Name == "read_file_contents")
+            {
+                var path = context.Arguments.TryGetValue("relativePath", out var pObj) ? pObj?.ToString() ?? "" : "";
+                var readKey = $"read_file_contents:{path}";
+                if (!string.IsNullOrEmpty(path) && scope.IsRedundantRead(readKey, path))
+                {
+                    var msg = $"You already read '{path}' this turn and it hasn't changed. " +
+                              "Use the content you already have — do NOT re-read the same file.";
+                    context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                    return;
+                }
+            }
+        }
+
         // Build function name and description
         var functionName = $"{context.Function.PluginName}_{context.Function.Name}";
         var description = GetFunctionDescription(context.Function.PluginName, context.Function.Name, context.Arguments);
@@ -188,7 +258,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         }
 
         // Intercept edit_file calls for diff approval — construct the new file content
-        // from the find/replace to show a proper diff
+        // from the find/replace to show a proper diff.
+        // Must mirror FileSystemPlugin.EditFile's logic: single-occurrence only, with a
+        // CRLF-normalization fallback. string.Replace replaces ALL occurrences, so using
+        // it here shows the user a diff that wouldn't match what actually gets written.
         if (context.Function.Name == "edit_file" && OnWriteApprovalRequested != null && capturedOldContent != null)
         {
             context.Arguments.TryGetValue("old_text", out var oldTextObj);
@@ -198,8 +271,25 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             var newText = newTextObj?.ToString() ?? "";
             var editPath = editPathObj?.ToString() ?? "";
 
-            // Build the full new content by applying the replacement
-            var newContent = capturedOldContent.Replace(oldText, newText);
+            var preview = BuildEditPreview(capturedOldContent, oldText, newText);
+            if (preview.Error != null)
+            {
+                // Can't preview → refuse deterministically with the same message the
+                // plugin would return, so the model retries correctly without a confused approval.
+                var msg = $"Error: {preview.Error} (from '{editPath}')";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                OnFunctionCompleted?.Invoke(new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = msg,
+                    Success = false
+                });
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+
+            var newContent = preview.NewContent!;
 
             approvalWasShown = true;
             var editApproval = await OnWriteApprovalRequested(editPath, capturedOldContent, newContent);
@@ -207,9 +297,15 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             if (editApproval.Response != DiffApprovalResponse.Approved &&
                 editApproval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
             {
-                var resultMsg = editApproval.Response == DiffApprovalResponse.Denied
-                    ? $"User denied the edit to '{editPath}'. Do not retry unless the user asks."
-                    : $"User rejected the edit to '{editPath}' and provided new instructions: {editApproval.UserMessage}";
+                if (editApproval.Response == DiffApprovalResponse.CancelPlan)
+                    _currentScope.Value?.RequestPlanCancellation();
+
+                var resultMsg = editApproval.Response switch
+                {
+                    DiffApprovalResponse.Denied => $"User denied the edit to '{editPath}'. Do not retry unless the user asks.",
+                    DiffApprovalResponse.CancelPlan => $"User cancelled the plan while reviewing the edit to '{editPath}'. Stop all further work.",
+                    _ => $"User rejected the edit to '{editPath}' and provided new instructions: {editApproval.UserMessage}"
+                };
 
                 context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, resultMsg);
                 OnFunctionCompleted?.Invoke(new FunctionExecutionResult
@@ -318,6 +414,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             // Check if result indicates an error from the plugin itself
             var resultStr = context.Result?.ToString() ?? string.Empty;
             var isError = resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
+
+            // Update scope bookkeeping so later duplicate-read / budget checks see this call.
+            UpdateScopeForCompletedCall(context, resultStr, isError);
 
             // Build operation display for known file operations
             OperationDisplayEvent? operationDisplay = null;
@@ -609,6 +708,134 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Mirrors <c>FileSystemPlugin.EditFile</c>'s replacement semantics for the approval
+    /// preview: exact single-occurrence first, then a CRLF-normalized fallback, preserving
+    /// the file's original line-ending style. Returns either the computed new content or
+    /// a human-readable error explaining why a preview can't be shown.
+    /// </summary>
+    private static (string? NewContent, string? Error) BuildEditPreview(string fileContent, string oldText, string newText)
+    {
+        // Exact path.
+        var index = fileContent.IndexOf(oldText, StringComparison.Ordinal);
+        if (index >= 0)
+        {
+            var second = fileContent.IndexOf(oldText, index + oldText.Length, StringComparison.Ordinal);
+            if (second >= 0)
+                return (null, "Found multiple occurrences of old_text. Provide a larger, more unique fragment.");
+
+            return (fileContent[..index] + newText + fileContent[(index + oldText.Length)..], null);
+        }
+
+        // CRLF fallback — Windows files are CRLF; models typically emit LF-only old_text.
+        var nContent = fileContent.Replace("\r\n", "\n").Replace("\r", "\n");
+        var nOld = oldText.Replace("\r\n", "\n").Replace("\r", "\n");
+        var nIndex = nContent.IndexOf(nOld, StringComparison.Ordinal);
+        if (nIndex < 0)
+            return (null, "Could not find old_text in the file. It may have been modified since the last read, or the whitespace differs.");
+
+        var nSecond = nContent.IndexOf(nOld, nIndex + nOld.Length, StringComparison.Ordinal);
+        if (nSecond >= 0)
+            return (null, "Found multiple occurrences of old_text. Provide a larger, more unique fragment.");
+
+        var nNew = newText.Replace("\r\n", "\n").Replace("\r", "\n");
+        var normalizedUpdated = nContent[..nIndex] + nNew + nContent[(nIndex + nOld.Length)..];
+
+        // Re-apply original line-ending style so the preview matches what gets written.
+        var useCrlf = fileContent.Contains("\r\n");
+        return (useCrlf ? normalizedUpdated.Replace("\n", "\r\n") : normalizedUpdated, null);
+    }
+
+    /// <summary>
+    /// After a tool call completes, update the active scope so later circuit-breaker
+    /// checks have the info they need: read-set membership, path-modification status,
+    /// and cumulative result-size budget.
+    /// </summary>
+    private void UpdateScopeForCompletedCall(FunctionInvocationContext context, string resultStr, bool isError)
+    {
+        var scope = _currentScope.Value;
+        if (scope == null) return;
+
+        // Charge result chars against the budget — errors count too so a loop of
+        // failing calls still trips the circuit.
+        if (!string.IsNullOrEmpty(resultStr))
+            scope.RecordResultChars(resultStr.Length);
+
+        if (isError) return; // Don't mark reads/writes for failed calls.
+
+        switch (context.Function.Name)
+        {
+            case "read_file_contents":
+            {
+                var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
+                if (!string.IsNullOrEmpty(path))
+                    scope.RecordRead($"read_file_contents:{path}", path);
+                break;
+            }
+            case "write_file":
+            case "edit_file":
+            case "delete_file":
+            {
+                var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
+                if (!string.IsNullOrEmpty(path))
+                    scope.RecordWrite(path);
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handles a propose_plan tool call: pulls the goal + step proposals out of
+    /// the model's arguments and hands them to <see cref="PlanHandoff"/>. Returns
+    /// the summary string that the model will see as the tool result.
+    /// </summary>
+    private async Task<string> HandleProposePlanAsync(FunctionInvocationContext context)
+    {
+        if (_planHandoff == null)
+            return "Planning is not available in this context.";
+
+        var goal = context.Arguments.TryGetValue("goal", out var goalObj)
+            ? goalObj?.ToString() ?? string.Empty
+            : string.Empty;
+
+        context.Arguments.TryGetValue("steps", out var stepsObj);
+        var proposals = CoerceProposals(stepsObj);
+
+        return await _planHandoff.ProcessAsync(goal, proposals);
+    }
+
+    /// <summary>
+    /// Converts the raw steps argument into <see cref="PlanStepProposal"/>[].
+    /// SK should already deserialize into the strong type, but local model
+    /// connectors sometimes round-trip as JSON text — handle both cases.
+    /// </summary>
+    private static PlanStepProposal[] CoerceProposals(object? raw)
+    {
+        if (raw == null)
+            return Array.Empty<PlanStepProposal>();
+
+        if (raw is PlanStepProposal[] direct)
+            return direct;
+
+        if (raw is IEnumerable<PlanStepProposal> enumerable)
+            return enumerable.ToArray();
+
+        try
+        {
+            var json = raw is string s ? s : JsonSerializer.Serialize(raw);
+            var opts = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            };
+            var parsed = JsonSerializer.Deserialize<PlanStepProposal[]>(json, opts);
+            return parsed ?? Array.Empty<PlanStepProposal>();
+        }
+        catch
+        {
+            return Array.Empty<PlanStepProposal>();
+        }
+    }
+
+    /// <summary>
     /// Handles the write approval workflow. Returns a result message to use instead of writing,
     /// or null if the write should proceed normally.
     /// Uses pre-captured old content to avoid double file reads.
@@ -642,6 +869,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
             case DiffApprovalResponse.NewInstructions:
                 return $"User rejected the file write to '{relativePath}' and provided new instructions: {approval.UserMessage}";
+
+            case DiffApprovalResponse.CancelPlan:
+                _currentScope.Value?.RequestPlanCancellation();
+                return $"User cancelled the plan while reviewing the write to '{relativePath}'. Stop all further work.";
 
             default:
                 return null;
@@ -678,6 +909,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             case DiffApprovalResponse.NewInstructions:
                 return $"User rejected the deletion of '{relativePath}' and provided new instructions: {approval.UserMessage}";
 
+            case DiffApprovalResponse.CancelPlan:
+                _currentScope.Value?.RequestPlanCancellation();
+                return $"User cancelled the plan while reviewing the deletion of '{relativePath}'. Stop all further work.";
+
             default:
                 return null;
         }
@@ -711,6 +946,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
 
             case DiffApprovalResponse.NewInstructions:
                 return $"User rejected the command '{command}' and provided new instructions: {approval.UserMessage}";
+
+            case DiffApprovalResponse.CancelPlan:
+                _currentScope.Value?.RequestPlanCancellation();
+                return $"User cancelled the plan while reviewing the command '{command}'. Stop all further work.";
 
             default:
                 return null;

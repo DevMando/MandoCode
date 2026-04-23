@@ -29,7 +29,13 @@ public enum DiffApprovalResponse
     Approved,
     ApprovedNoAskAgain,
     Denied,
-    NewInstructions
+    NewInstructions,
+    /// <summary>
+    /// User wants to stop the entire currently-running plan, not just this single tool call.
+    /// Only offered as a choice when <c>PlanHandoff.IsExecuting</c> is true. Propagates up
+    /// through the invocation scope and terminates <c>ExecutePlanAsync</c>.
+    /// </summary>
+    CancelPlan
 }
 
 /// <summary>

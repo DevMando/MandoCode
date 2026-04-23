@@ -31,6 +31,7 @@ public class AIService
     private readonly FunctionCompletionTracker _completionTracker = new();
     private FunctionInvocationFilter _functionFilter;
     private readonly TokenTrackingService _tokenTracker;
+    private readonly PlanHandoff _planHandoff;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     // Named event handlers stored so we can detach them when rebuilding the kernel
@@ -108,12 +109,15 @@ public class AIService
         }
     }
 
-    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker)
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff)
     {
         _projectRootAccessor = projectRootAccessor;
         _config = config;
         _tokenTracker = tokenTracker;
-        _systemPrompt = SystemPrompts.MandoCodeAssistant;
+        _planHandoff = planHandoff;
+        // Append shell-specific rules (cmd.exe vs bash) so the model stops emitting
+        // unix commands on Windows or vice-versa.
+        _systemPrompt = SystemPrompts.MandoCodeAssistant + "\n\n" + ShellEnvironment.SystemPromptRules;
 
         BuildKernel();
 
@@ -161,6 +165,11 @@ public class AIService
             builder.Plugins.AddFromObject(new WebSearchPlugin(), "WebSearch");
         }
 
+        if (_config.EnableTaskPlanning)
+        {
+            builder.Plugins.AddFromObject(new PlanningPlugin(), "Planning");
+        }
+
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
@@ -173,8 +182,8 @@ public class AIService
             if (_filterFinishedHandler != null) _functionFilter.OnFunctionFinished -= _filterFinishedHandler;
         }
 
-        // Set up function invocation filter for UI events and deduplication
-        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker);
+        // Set up function invocation filter for UI events, deduplication, and propose_plan interception
+        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker, _planHandoff, _config.ToolResultCharBudget);
         _filterInvokedHandler = call => OnFunctionInvoked?.Invoke(call);
         _filterCompletedHandler = result => OnFunctionCompleted?.Invoke(result);
         _filterStartedHandler = () => _completionTracker.RegisterStart();
@@ -232,90 +241,6 @@ public class AIService
     }
 
     /// <summary>
-    /// Sends a message to the AI and gets a response.
-    /// Includes retry logic for transient connection errors.
-    /// </summary>
-    public async Task<string> ChatAsync(string userMessage, CancellationToken cancellationToken = default)
-    {
-        // Add message under lock, then release before the long AI call
-        await _historyLock.WaitAsync(cancellationToken);
-        try { _chatHistory.AddUserMessage(userMessage); }
-        finally { _historyLock.Release(); }
-
-        try
-        {
-            // Link caller's cancellation token with an internal 5-minute timeout
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-            // Get the response with automatic function calling, with retry for transient errors
-            var response = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    _chatHistory,
-                    _settings,
-                    _kernel,
-                    linkedCts.Token
-                ),
-                _config.MaxRetryAttempts,
-                "ChatAsync",
-                linkedCts.Token
-            );
-
-            // Extract token usage from the response
-            ExtractAndRecordTokens(response, "Chat");
-
-            // Add the final response to history
-            await _historyLock.WaitAsync();
-            try
-            {
-                if (!string.IsNullOrEmpty(response.Content))
-                {
-                    _chatHistory.AddAssistantMessage(response.Content);
-                }
-            }
-            finally { _historyLock.Release(); }
-
-            var rawResponse = response.Content ?? "No response from AI.";
-
-            // Check if the model output function calls as text instead of invoking them
-            var processedResponse = _config.EnableFallbackFunctionParsing
-                ? await ProcessTextFunctionCallsAsync(rawResponse)
-                : rawResponse;
-
-            // Update history with processed response
-            if (!string.IsNullOrEmpty(processedResponse) && processedResponse != rawResponse)
-            {
-                await _historyLock.WaitAsync();
-                try
-                {
-                    // Remove the raw response and add processed one
-                    if (_chatHistory.Count > 0 && _chatHistory.Last().Role == AuthorRole.Assistant)
-                    {
-                        _chatHistory.RemoveAt(_chatHistory.Count - 1);
-                    }
-                    _chatHistory.AddAssistantMessage(processedResponse);
-                }
-                finally { _historyLock.Release(); }
-            }
-
-            return processedResponse;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return "Request cancelled.";
-        }
-        catch (OperationCanceledException)
-        {
-            return "Error: Request timed out. The model took too long to respond.\n\n" +
-                   "Try breaking your request into smaller parts, or use a faster model.";
-        }
-        catch (Exception ex)
-        {
-            return FormatErrorMessage(ex);
-        }
-    }
-
-    /// <summary>
     /// Sends a message to the AI and streams the response chunk by chunk.
     /// NOTE: Uses non-streaming mode internally for reliable function execution with local models.
     /// Streaming with auto-invocation causes issues where function calls are not properly parsed
@@ -323,17 +248,39 @@ public class AIService
     /// </summary>
     public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        string response;
-
         // Add message under lock, then release before the long AI call
         await _historyLock.WaitAsync(cancellationToken);
         try { _chatHistory.AddUserMessage(userMessage); }
         finally { _historyLock.Release(); }
 
+        int continuations = 0;
+        while (true)
+        {
+            var (response, needsContinuation) = await RunOneChatTurnAsync(continuations, cancellationToken);
+            yield return response;
+
+            if (!needsContinuation)
+                yield break;
+
+            continuations++;
+        }
+    }
+
+    /// <summary>
+    /// Runs a single chat turn inside its own <see cref="InvocationScope"/>. When the
+    /// tool budget is exhausted, the assistant's text response acts as an implicit
+    /// progress summary — we return <c>needsContinuation=true</c>, push a "keep going"
+    /// user message, and the caller loops for another turn with a fresh budget.
+    /// </summary>
+    private async Task<(string response, bool needsContinuation)> RunOneChatTurnAsync(int continuationIndex, CancellationToken cancellationToken)
+    {
+        string response;
+        bool needsContinuation = false;
+
         try
         {
-            // Link caller's cancellation token with an internal 5-minute timeout
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var scope = _functionFilter.BeginScope();
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
             var result = await RetryPolicy.ExecuteWithRetryAsync(
@@ -348,17 +295,13 @@ public class AIService
                 linkedCts.Token
             );
 
-            // Extract token usage from the response
             ExtractAndRecordTokens(result, "Chat");
 
             var rawResponse = result.Content ?? "No response from AI.";
-
-            // Check if the model output function calls as text instead of invoking them
             response = _config.EnableFallbackFunctionParsing
                 ? await ProcessTextFunctionCallsAsync(rawResponse)
                 : rawResponse;
 
-            // Detect if the response was truncated due to hitting the token limit
             if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
                 && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
             {
@@ -366,16 +309,30 @@ public class AIService
                            "You can say \"continue\" to keep going, or increase max tokens with /config.";
             }
 
-            // Add the response to history under lock
             await _historyLock.WaitAsync();
             try
             {
                 if (!string.IsNullOrEmpty(response))
-                {
                     _chatHistory.AddAssistantMessage(response);
-                }
             }
             finally { _historyLock.Release(); }
+
+            if (scope.BudgetExhausted
+                && _config.EnableAutoContinuation
+                && continuationIndex < _config.MaxAutoContinuations)
+            {
+                needsContinuation = true;
+                response += $"\n\n⟳ Auto-continuing ({continuationIndex + 1}/{_config.MaxAutoContinuations}) — tool budget was full; resuming with a fresh budget.\n";
+
+                await _historyLock.WaitAsync();
+                try
+                {
+                    _chatHistory.AddUserMessage(
+                        "Continue from where you left off. Your previous response was a progress summary; " +
+                        "the tool-call budget has been reset, so you can call tools again to finish the remaining work.");
+                }
+                finally { _historyLock.Release(); }
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -385,6 +342,18 @@ public class AIService
         {
             response = "Error: Request timed out. The model took too long to respond.\n\n" +
                       "Try breaking your request into smaller parts, or use a faster model.";
+        }
+        // Provider-side context-window rejection in direct chat — compact the history
+        // and auto-retry. The persistent _chatHistory is replaced with a compacted recap
+        // so the next turn fits under the provider's limit.
+        catch (Exception ex) when (IsContextOverflowError(ex)
+                                    && _config.EnableAutoContinuation
+                                    && continuationIndex < _config.MaxAutoContinuations)
+        {
+            await CompactChatHistoryAsync();
+            needsContinuation = true;
+            response = $"⚠ Provider rejected request (context window full). " +
+                       $"Compacting conversation history and retrying ({continuationIndex + 1}/{_config.MaxAutoContinuations})...\n";
         }
         catch (HttpRequestException ex)
         {
@@ -397,8 +366,7 @@ public class AIService
             response = FormatErrorMessage(ex);
         }
 
-        // Yield outside the lock — response is fully computed
-        yield return response;
+        return (response, needsContinuation);
     }
 
     /// <summary>
@@ -406,6 +374,17 @@ public class AIService
     /// </summary>
     private string FormatErrorMessage(Exception ex)
     {
+        // Context-window overflow — actionable message, don't blame Ollama setup.
+        if (IsContextOverflowError(ex))
+        {
+            return $"Error: The model '{_config.GetEffectiveModelName()}' rejected the request because the conversation exceeded its context window.\n\n" +
+                   $"Details: {ex.Message}\n\n" +
+                   "What to do:\n" +
+                   "  • Try /clear to start a fresh conversation, OR\n" +
+                   $"  • Lower the tool-result budget: mandocode --config set toolBudget 50000, OR\n" +
+                   "  • Switch to a model with a larger context window via /config.";
+        }
+
         // Check if the error is about tool support
         if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
         {
@@ -425,59 +404,6 @@ public class AIService
         }
 
         return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
-    }
-
-    /// <summary>
-    /// Gets a task plan from the AI for a complex request.
-    /// Uses a longer timeout to allow the model to generate a complete plan.
-    /// </summary>
-    public async Task<string> GetPlanAsync(string userMessage, CancellationToken cancellationToken = default)
-    {
-        // Use a separate chat history for planning (doesn't pollute main conversation)
-        var planningHistory = new ChatHistory(SystemPrompts.TaskPlannerPrompt);
-        planningHistory.AddUserMessage($"Create a step-by-step plan for: {userMessage}");
-
-        try
-        {
-            // Use a longer timeout for planning (90 seconds) - local models can be slow
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
-
-            // Use simpler settings without function calling for faster planning
-            var planSettings = new OllamaPromptExecutionSettings
-            {
-                Temperature = (float)_config.Temperature
-            };
-
-            var result = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    planningHistory,
-                    planSettings,
-                    _kernel,
-                    linkedCts.Token
-                ),
-                _config.MaxRetryAttempts,
-                "GetPlanAsync",
-                linkedCts.Token
-            );
-
-            // Extract token usage from the planning response
-            ExtractAndRecordTokens(result, "Plan");
-
-            return result.Content ?? "Failed to generate plan.";
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException("Planning cancelled.", cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw new Exception("Planning timed out. The model took too long to generate a plan.");
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new Exception($"Connection to Ollama failed: {ex.Message}");
-        }
     }
 
     /// <summary>
@@ -509,67 +435,255 @@ public class AIService
         var stepHistory = new ChatHistory(contextBuilder.ToString());
         stepHistory.AddUserMessage($"Execute this step now: {stepInstruction}\n\nRemember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.");
 
+        // Allow concurrent function invocation within a step for parallel file operations
+        var stepSettings = new OllamaPromptExecutionSettings
+        {
+            Temperature = (float)_config.Temperature,
+            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
+                autoInvoke: true,
+                options: new() { AllowConcurrentInvocation = true }
+            )
+        };
+
+        var stepLabel = $"Step {previousResults.Count + 1}";
+        var combined = new System.Text.StringBuilder();
+        int continuations = 0;
+
+        while (true)
+        {
+            string processedResponse = "";
+            bool needsContinuation = false;
+            bool contextOverflowRecovery = false;
+
+            // Each continuation gets a fresh scope so the budget and dedup-set reset.
+            using (var scope = _functionFilter.BeginScope())
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
+
+                    var result = await RetryPolicy.ExecuteWithRetryAsync(
+                        async () => await _chatService.GetChatMessageContentAsync(
+                            stepHistory,
+                            stepSettings,
+                            _kernel,
+                            linkedCts.Token
+                        ),
+                        _config.MaxRetryAttempts,
+                        "ExecutePlanStepAsync",
+                        linkedCts.Token
+                    );
+
+                    ExtractAndRecordTokens(result, stepLabel);
+
+                    var response = result.Content ?? "Step completed (no response content).";
+
+                    await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
+
+                    processedResponse = _config.EnableFallbackFunctionParsing
+                        ? await ProcessTextFunctionCallsAsync(response)
+                        : response;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException("Step cancelled.", cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw new Exception("Step execution timed out. Try breaking this step into smaller parts.");
+                }
+                // Provider-side context-window rejection — recoverable via synthetic-summary restart.
+                catch (Exception ex) when (IsContextOverflowError(ex)
+                                            && _config.EnableAutoContinuation
+                                            && continuations < _config.MaxAutoContinuations)
+                {
+                    contextOverflowRecovery = true;
+                }
+                catch (HttpRequestException ex)
+                {
+                    throw new Exception($"Connection to Ollama failed: {ex.Message}");
+                }
+
+                // Decide whether to auto-continue (while scope is still live so BudgetExhausted reads correctly).
+                if (!contextOverflowRecovery
+                    && scope.BudgetExhausted
+                    && _config.EnableAutoContinuation
+                    && continuations < _config.MaxAutoContinuations)
+                {
+                    needsContinuation = true;
+                }
+
+                // User picked "Cancel plan" from a diff approval mid-step — the filter set the flag.
+                // Throw here so ExecutePlanAsync treats it as plan-level cancellation, not just step-level.
+                if (scope.PlanCancellationRequested)
+                    throw new PlanCancellationRequestedException();
+            }
+
+            // Context-overflow recovery: the turn never completed, so the model produced no
+            // summary of its own. We build one from the tool-call trace and restart the step
+            // with a fresh history seeded by that summary.
+            if (contextOverflowRecovery)
+            {
+                var summary = SynthesizeHistorySummary(stepHistory);
+                continuations++;
+
+                combined.AppendLine();
+                combined.AppendLine($"⚠ Provider rejected request (context window full). Restarting step with a compacted summary ({continuations}/{_config.MaxAutoContinuations}).");
+                combined.AppendLine();
+
+                stepHistory = new ChatHistory(contextBuilder.ToString());
+                stepHistory.AddUserMessage(
+                    $"Execute this step: {stepInstruction}\n\n" +
+                    $"A previous attempt hit the provider's context-window limit and was aborted. " +
+                    $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
+                    $"Continue from where it left off. Use the available functions to finish the step.");
+
+                continue;
+            }
+
+            combined.AppendLine(processedResponse);
+
+            if (!needsContinuation)
+                return combined.ToString().TrimEnd();
+
+            continuations++;
+            combined.AppendLine();
+            combined.AppendLine($"⟳ Auto-continuing ({continuations}/{_config.MaxAutoContinuations}) — tool budget reset.");
+            combined.AppendLine();
+
+            // Seed the next turn: assistant's summary, then a nudge to keep going.
+            stepHistory.AddAssistantMessage(processedResponse);
+            stepHistory.AddUserMessage(
+                "Continue from where you left off. Your previous response was a progress summary; " +
+                "the tool-call budget has been reset, so call tools again to finish this step.");
+        }
+    }
+
+    /// <summary>
+    /// Matches provider-side context-window rejections. Delegates to <see cref="RetryPolicy.IsContextOverflowError"/>
+    /// so the retry policy and recovery path agree on exactly which errors skip retries and route to recovery.
+    /// </summary>
+    private static bool IsContextOverflowError(Exception? ex) => RetryPolicy.IsContextOverflowError(ex);
+
+    /// <summary>
+    /// Walks a chat history and produces a compact recap the next turn can read as
+    /// "what's happened so far." Aggressively truncates content so the summary itself
+    /// doesn't reintroduce the overflow. Start/end indices let callers exclude messages
+    /// they're about to re-seed fresh (e.g. the system prompt or current user message).
+    ///
+    /// Tool-call activity often lives in <see cref="ChatMessageContent.Items"/> rather than
+    /// <c>Content</c> — SK's auto-invoke loop puts function calls/results there. Skipping
+    /// Items would drop most of the trace on a context-overflow recovery. We walk both.
+    /// </summary>
+    private static string SynthesizeHistorySummary(
+        ChatHistory history,
+        int startIndex = 2,
+        int? endIndexExclusive = null,
+        int maxChars = 1500)
+    {
+        var sb = new System.Text.StringBuilder();
+        var end = endIndexExclusive ?? history.Count;
+        for (int i = Math.Max(0, startIndex); i < end; i++)
+        {
+            var msg = history[i];
+            var role = msg.Role.Label;
+            var line = FormatMessageForSummary(msg);
+            if (string.IsNullOrEmpty(line)) continue;
+
+            if (line.Length > 180) line = line[..180] + "...";
+            sb.Append('[').Append(role).Append("] ").AppendLine(line);
+
+            if (sb.Length > maxChars)
+            {
+                sb.AppendLine("... (older entries truncated)");
+                break;
+            }
+        }
+        return sb.Length == 0 ? "(no prior activity captured)" : sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Produces a one-line recap of a single chat message for the summary walker.
+    /// Falls back to <c>Items</c> (function calls / results) when <c>Content</c> is empty.
+    /// </summary>
+    private static string FormatMessageForSummary(Microsoft.SemanticKernel.ChatMessageContent msg)
+    {
+        var content = msg.Content?.Trim();
+        if (!string.IsNullOrEmpty(content)) return content;
+
+        if (msg.Items == null || msg.Items.Count == 0) return "";
+
+        var parts = new List<string>();
+        foreach (var item in msg.Items)
+        {
+            switch (item)
+            {
+                case Microsoft.SemanticKernel.FunctionCallContent fc:
+                {
+                    var args = fc.Arguments != null && fc.Arguments.Count > 0
+                        ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={Truncate(kv.Value?.ToString(), 40)}"))
+                        : "";
+                    parts.Add($"called {fc.FunctionName}({args})");
+                    break;
+                }
+                case Microsoft.SemanticKernel.FunctionResultContent fr:
+                {
+                    var resultText = fr.Result?.ToString() ?? "";
+                    parts.Add($"{fr.FunctionName} → {Truncate(resultText, 80)}");
+                    break;
+                }
+                case Microsoft.SemanticKernel.TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
+                    parts.Add(tc.Text.Trim());
+                    break;
+            }
+        }
+        return parts.Count == 0 ? "" : string.Join("; ", parts);
+    }
+
+    private static string Truncate(string? s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Length > max ? s[..max] + "…" : s;
+    }
+
+    /// <summary>
+    /// Collapses the persistent <see cref="_chatHistory"/> into system prompt + recap +
+    /// last user message. Used when a direct chat turn hits a provider context-window
+    /// rejection — we compact the conversation so the next retry fits.
+    /// </summary>
+    private async Task CompactChatHistoryAsync()
+    {
+        await _historyLock.WaitAsync();
         try
         {
-            // Use the standard timeout for execution (5 minutes)
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
-
-            // Allow concurrent function invocation within a step for parallel file operations
-            var stepSettings = new OllamaPromptExecutionSettings
+            int lastUserIdx = -1;
+            for (int i = _chatHistory.Count - 1; i >= 0; i--)
             {
-                Temperature = (float)_config.Temperature,
-                FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
-                    autoInvoke: true,
-                    options: new() { AllowConcurrentInvocation = true }
-                )
-            };
+                if (_chatHistory[i].Role == AuthorRole.User)
+                {
+                    lastUserIdx = i;
+                    break;
+                }
+            }
+            if (lastUserIdx < 1) return; // Nothing to compact.
 
-            // Execute with retry for transient errors
-            var result = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    stepHistory,
-                    stepSettings,
-                    _kernel,
-                    linkedCts.Token
-                ),
-                _config.MaxRetryAttempts,
-                "ExecutePlanStepAsync",
-                linkedCts.Token
-            );
+            var lastUserContent = _chatHistory[lastUserIdx].Content ?? "";
 
-            // Extract token usage from the step response
-            var stepLabel = $"Step {previousResults.Count + 1}";
-            ExtractAndRecordTokens(result, stepLabel);
+            // Summarize everything between the system prompt (0) and the current user turn.
+            var recap = SynthesizeHistorySummary(_chatHistory, startIndex: 1, endIndexExclusive: lastUserIdx);
 
-            var response = result.Content ?? "Step completed (no response content).";
-
-            // Wait for any auto-invoked functions to complete — 5s safety net
-            // (functions typically complete before the AI response returns)
-            await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
-
-            // Check if the model output function calls as text instead of invoking them
-            var processedResponse = _config.EnableFallbackFunctionParsing
-                ? await ProcessTextFunctionCallsAsync(response)
-                : response;
-
-            // Plan steps use their own isolated history — don't bloat the main
-            // conversation history. The main history is for direct user requests.
-
-            return processedResponse;
+            _chatHistory.Clear();
+            _chatHistory.AddSystemMessage(_systemPrompt);
+            if (!string.IsNullOrWhiteSpace(recap) && recap != "(no prior activity captured)")
+            {
+                _chatHistory.AddUserMessage(
+                    "[Prior conversation recap — the previous attempt hit the provider's context-window limit and was compacted:]\n" +
+                    recap);
+            }
+            _chatHistory.AddUserMessage(lastUserContent);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException("Step cancelled.", cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            throw new Exception("Step execution timed out. Try breaking this step into smaller parts.");
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new Exception($"Connection to Ollama failed: {ex.Message}");
-        }
+        finally { _historyLock.Release(); }
     }
 
     /// <summary>

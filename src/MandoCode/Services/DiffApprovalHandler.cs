@@ -11,15 +11,20 @@ public class DiffApprovalHandler
 {
     private readonly SpinnerService _spinner;
     private readonly ProjectRootAccessor _projectRoot;
+    private readonly PlanHandoff _planHandoff;
 
     private bool _globalWriteBypass = false;
     private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    public DiffApprovalHandler(SpinnerService spinner, ProjectRootAccessor projectRoot)
+    public DiffApprovalHandler(SpinnerService spinner, ProjectRootAccessor projectRoot, PlanHandoff planHandoff)
     {
         _spinner = spinner;
         _projectRoot = projectRoot;
+        _planHandoff = planHandoff;
     }
+
+    // Labels used as both UI text and switch discriminators.
+    private const string CancelPlanLabel = "Cancel the plan";
 
     private string FileLink(string relativePath) =>
         FileLinkHelper.FileLink(_projectRoot.ProjectRoot, relativePath);
@@ -54,16 +59,21 @@ public class DiffApprovalHandler
             ? "Approve - okay to write & modify files don't ask me again"
             : $"Approve - Don't ask again to modify {fileName}";
 
+        var choices = new List<string>
+        {
+            "Approve",
+            noAskLabel,
+            "Deny",
+            "Provide new instructions"
+        };
+        // "Cancel the plan" only makes sense when a plan is actually running — in a direct
+        // chat, the user can just pick Deny to abort this single tool call.
+        if (_planHandoff.IsExecuting) choices.Add(CancelPlanLabel);
+
         var approvalChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[cyan]Apply these changes?[/]")
-                .AddChoices(new[]
-                {
-                    "Approve",
-                    noAskLabel,
-                    "Deny",
-                    "Provide new instructions"
-                })
+                .AddChoices(choices)
         );
 
         DiffApprovalResult result;
@@ -92,6 +102,11 @@ public class DiffApprovalHandler
         {
             AnsiConsole.MarkupLine("[red]Changes denied.[/]");
             result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else if (approvalChoice == CancelPlanLabel)
+        {
+            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
         }
         else // "Provide new instructions"
         {
@@ -143,16 +158,19 @@ public class DiffApprovalHandler
             return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
         }
 
+        var cmdChoices = new List<string>
+        {
+            "Approve",
+            "Approve - okay to run commands don't ask me again",
+            "Deny",
+            "Provide new instructions"
+        };
+        if (_planHandoff.IsExecuting) cmdChoices.Add(CancelPlanLabel);
+
         var approvalChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[cyan]Run this command?[/]")
-                .AddChoices(new[]
-                {
-                    "Approve",
-                    "Approve - okay to run commands don't ask me again",
-                    "Deny",
-                    "Provide new instructions"
-                })
+                .AddChoices(cmdChoices)
         );
 
         DiffApprovalResult result;
@@ -173,6 +191,11 @@ public class DiffApprovalHandler
         {
             AnsiConsole.MarkupLine("[red]Command denied.[/]");
             result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else if (approvalChoice == CancelPlanLabel)
+        {
+            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
         }
         else // "Provide new instructions"
         {
@@ -254,16 +277,19 @@ public class DiffApprovalHandler
             return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
         }
 
+        var delChoices = new List<string>
+        {
+            "Approve deletion",
+            "Approve - okay to write, modify & delete files don't ask me again",
+            "Deny",
+            "Provide new instructions"
+        };
+        if (_planHandoff.IsExecuting) delChoices.Add(CancelPlanLabel);
+
         var approvalChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[cyan]Delete this file?[/]")
-                .AddChoices(new[]
-                {
-                    "Approve deletion",
-                    "Approve - okay to write, modify & delete files don't ask me again",
-                    "Deny",
-                    "Provide new instructions"
-                })
+                .AddChoices(delChoices)
         );
 
         DiffApprovalResult result;
@@ -284,6 +310,11 @@ public class DiffApprovalHandler
         {
             AnsiConsole.MarkupLine("[red]Deletion denied.[/]");
             result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+        else if (approvalChoice == CancelPlanLabel)
+        {
+            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
         }
         else // "Provide new instructions"
         {

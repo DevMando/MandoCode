@@ -1,65 +1,143 @@
-# Task Planner Feature
+# Task Planner
 
 ## Overview
 
-The Task Planner handles complex, multi-step requests that would otherwise cause timeouts when using smaller or slower AI models. Instead of attempting to process an entire complex request in a single API call, the Task Planner breaks it down into manageable steps and executes them sequentially with progress tracking and error recovery.
+The Task Planner handles complex, multi-step requests that would otherwise overwhelm a single model turn — either by timing out, overflowing the provider's context window, or producing one enormous unstructured response. The current design is a **hybrid LLM-tool approach**: the model itself decides mid-conversation whether a request needs decomposition, via a Semantic Kernel function (`propose_plan`). A thin heuristic acts as a safety net for smaller models that don't reliably self-invoke tool calls.
 
 ## How It Works
 
 ```
-User Input
-    |
-[Process @file references] - Attach referenced file content
-    |
-[Complexity Detection] --> Simple request/Question? --> Direct execution
-    | Complex request
-[Create Plan] - AI generates numbered steps
-    |
-[Display Plan] - User can approve, skip planning, or cancel
-    | Approved
-[Execute Steps] - Each step runs with completion tracking
-    |
-Complete
+User input
+    │
+[Process @file references]          — inject referenced file content
+    │
+[Thin heuristic check]              — 3+ numbered items OR >400 chars?
+    │  if yes: append "call propose_plan now" directive
+    │
+ChatStreamAsync → model sees the tools
+    │
+    ├─ model decides the request is single-shot → responds directly
+    │
+    └─ model calls propose_plan(goal, steps[])
+           │
+   [FunctionInvocationFilter intercepts]
+           │
+   [PlanHandoff.ProcessAsync → UI callback]
+           │
+   [DisplayPlan + SelectionPrompt]   — user: Execute / Reject / Cancel
+           │
+   [TaskPlannerService.ExecutePlanAsync]
+           │
+     for each step:
+         BeginScope                  — per-step circuit breakers reset
+         AIService.ExecutePlanStepAsync
+           ├─ tool calls run through dedup / dup-read / budget checks
+           ├─ if budget exhausted AND auto-continuation on → seed + loop
+           └─ if provider rejects context window → synthesize recap + loop
+         report progress event to UI
+   [Plan completes or cancels; summary string returned to the model]
 ```
 
-### Complexity Detection
+The model sees the `propose_plan` tool result as a recap string (e.g. *"Successfully completed 4 of 4 steps."*) and responds conversationally to close the turn.
 
-The system uses heuristics to detect complex requests while filtering out simple questions and single-action operations:
+## Complexity Detection
 
-**Questions are NOT planned** (filtered first):
-- Messages ending with `?`
-- Messages starting with: "what", "why", "how", "when", "where", "who", "which", "can you explain", "tell me about", "describe", "show me"
+There are two paths, roughly: the model's own judgement (primary) and a trimmed heuristic (safety net).
 
-**Simple single-action requests are NOT planned:**
-- Requests starting with simple action verbs that are under 150 characters and don't contain "and" or "also"
-- **Simple action verbs**: "delete", "remove", "read", "show", "list", "find", "search", "open", "cat", "print", "display", "rename"
-- Examples: "delete poem.txt", "remove the old config", "show me the logs"
+### Primary: model self-classification via `propose_plan`
 
-**Triggers planning:**
-- **Imperative verb at start + scope indicator + 12+ words**: "Create a REST API service with authentication and rate limiting for the user module"
-- **Numbered lists with 3+ items**: "1. Create X\n2. Add Y\n3. Test Z"
-- **Very long requests**: Messages over 400 characters
-- **Multiple explicit tasks (10+ words)**: Using "and then" or both "also" and "and" with an imperative verb
+`PlanningPlugin.ProposePlan` is a Semantic Kernel function registered on every kernel (when `enableTaskPlanning` is true). Its `[Description]` tells the model exactly when to call it:
 
-**Imperative verbs** (must appear at start):
-- "create", "build", "implement", "make", "develop", "write", "add", "design", "set up", "configure", "generate", "refactor", "update", "modify", "change", "fix", "debug", "optimize"
+> *"Propose a multi-step plan for the user's request. Call this ONLY when the request clearly requires multiple distinct file or code operations that depend on each other. Do NOT call for questions, single-file edits, lookups, or one-shot operations. Each step MUST include a non-empty `description` and `instruction`."*
 
-**Scope indicators**:
-- "game", "application", "app", "feature", "system", "component", "page", "form", "api", "endpoint", "service", "module", "website", "site", "project", "program", "tool", "utility", "class", "function", "method", "interface", "database"
+Cloud models (kimi, minimax, qwen3-coder) use this path reliably. The `[Description]` text is the canonical source — update it there, not in this doc.
 
-### Integration with `@` File References
+### Safety net: thin heuristic
 
-When a user includes `@file` references in a complex request, the file content is resolved and injected **before** the planner evaluates the input. This means:
+`TaskPlannerService.RequiresPlanning` exists for small local models that won't self-invoke. It fires only on objective, near-zero-false-positive signals:
 
-- The AI has full context of referenced files when generating the plan
-- Plan steps can reference the content of attached files
-- Example: `refactor @src/MandoCode/Services/AIService.cs to use the strategy pattern` triggers planning with the file content available
+| Signal | Why |
+|--------|-----|
+| 3+ numbered list items at line starts | Users writing `1. … 2. … 3. …` unambiguously mean multi-step |
+| Message > 400 characters | Users don't write 400+ chars for lookups or simple edits |
 
-### Configuration
+When it fires, we **don't** call a separate planning endpoint — we just append a directive to the user message before sending:
+
+```
+[system: this request looks multi-step. Call propose_plan now with the breakdown before doing any work.]
+```
+
+The model sees this and calls `propose_plan`. One code path, one execution path.
+
+## Circuit Breakers
+
+`InvocationScope` provides per-chat/per-step bookkeeping that the `FunctionInvocationFilter` consults before every tool call. Two circuits:
+
+### 1. Duplicate-read detection
+
+If the model calls `read_file_contents(relativePath=X)` a second time in the same scope **and no write or edit to X happened in between**, the call short-circuits with:
+
+> *"You already read 'X' this turn and it hasn't changed. Use the content you already have — do NOT re-read the same file."*
+
+Writes and edits invalidate the dedup: after a `write_file`/`edit_file`/`delete_file` on path X, the next read of X is allowed through (content may legitimately have changed). After that read, dedup resumes.
+
+This catches the most common stuck-loop pathology where a model re-reads the same 700-line file five times trying to find something.
+
+### 2. Result-char budget
+
+Every tool result's character count accrues against `toolResultCharBudget` (default 100k chars ≈ 25k tokens). Once over, further tool calls are refused with:
+
+> *"Tool-call budget of N chars is exhausted for this turn. Stop calling tools and respond to the user directly with what you have so far."*
+
+The budget's purpose: prevent unbounded tool output from growing the model's context until the provider rejects the request. 100k is a floor safe for 32k-context providers.
+
+## Auto-Continuation
+
+When the result-char budget is exhausted, the model is forced into a text response — which naturally acts as a progress summary. If `enableAutoContinuation` is on and `continuations < maxAutoContinuations`, the loop:
+
+1. Adds the summary text as an assistant message.
+2. Appends a user message: *"Continue from where you left off. The tool-call budget has been reset."*
+3. Begins a fresh `InvocationScope`.
+4. Re-invokes the chat call.
+
+This is **implicit compaction**: between turns, the heavyweight tool-result messages don't persist in chat history — only the assistant's text. The next turn starts with `system + user + assistant-summary + continue` and a clean scope.
+
+Applied identically in `ChatStreamAsync` (direct chats) and `ExecutePlanStepAsync` (plan steps). Each plan step gets its own continuation budget.
+
+## Synthetic-Summary Recovery
+
+When the provider rejects a request with `context window exceeds limit` / `maximum context` / `prompt is too long` — distinct from our own budget circuit — we:
+
+1. Walk the step's `stepHistory` via `SynthesizeHistorySummary`, producing a ~1.5k-char recap of what tool calls ran and what they returned (truncated hard).
+2. Rebuild the history: system + plan context + `"Continue this step. Previous partial progress (tool-call trace): <recap>. Do NOT redo this work."` + step instruction.
+3. Re-invoke with a fresh scope. Counts against `maxAutoContinuations`.
+
+For direct chats, `CompactChatHistoryAsync` does the equivalent on the persistent `_chatHistory`: replaces it with `system + recap + last user message`.
+
+Caveat: recovery isn't flawless. The recap is harness-generated (the turn never completed, so the model produced no summary of its own). Some mid-reasoning nuance is lost. It's "automatic graceful degradation," not "seamless continuation."
+
+## Shell-Aware System Prompt
+
+`ShellEnvironment` detects the OS at startup and appends a rules block to the system prompt:
+
+- **Windows (cmd.exe):** warns against unix tools (`head`, `grep`, `cat`, `ls`), prefers MandoCode's own file tools (`read_file_contents`, `search_text_in_files`, `list_files_match_glob_pattern`).
+- **Linux/macOS (bash):** notes POSIX tools are available, same preference for the typed file tools where possible.
+
+The current execute_command shell is cmd.exe on Windows (see `FileSystemPlugin.cs`). If that changes, update `ShellEnvironment.SystemPromptRules` accordingly — the doc string is the source of truth for what the model sees.
+
+## Integration with `@` File References
+
+`@path` references are resolved by `ProcessFileReferences` in `App.razor` **before** `RequiresPlanning` runs, so the heuristic sees the request's intent, not a multi-kilobyte paste. The resolved file content is injected into the user message. If the injected content is very long, the 400-char threshold may fire the directive — which is usually the right behaviour.
+
+## Configuration
 
 ```json
 {
   "enableTaskPlanning": true,
+  "enableAutoContinuation": true,
+  "maxAutoContinuations": 3,
+  "toolResultCharBudget": 100000,
+  "requestTimeoutMinutes": 15,
   "enableFallbackFunctionParsing": true,
   "functionDeduplicationWindowSeconds": 5,
   "maxRetryAttempts": 2
@@ -68,10 +146,16 @@ When a user includes `@file` references in a complex request, the file content i
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `enableTaskPlanning` | `true` | Enable/disable the task planner |
-| `enableFallbackFunctionParsing` | `true` | Parse function calls from text output |
-| `functionDeduplicationWindowSeconds` | `5` | Window for preventing duplicate operations |
-| `maxRetryAttempts` | `2` | Retry count for transient errors |
+| `enableTaskPlanning` | `true` | Registers the `propose_plan` tool and runs the heuristic directive |
+| `enableAutoContinuation` | `true` | On budget exhaustion, auto-continue with a fresh scope |
+| `maxAutoContinuations` | `3` (0–10) | Cap on auto-continuations per user request |
+| `toolResultCharBudget` | `100000` (50k–4M) | Tool-result chars per scope before the budget circuit fires |
+| `requestTimeoutMinutes` | `15` (1–60) | Per-chat / per-step wall-clock timeout |
+| `enableFallbackFunctionParsing` | `true` | Parse function calls from text output (small models) |
+| `functionDeduplicationWindowSeconds` | `5` | Time-based write dedup (legacy; scope dup-read is the stronger guard) |
+| `maxRetryAttempts` | `2` | Retry count for transient HTTP errors |
+
+CLI equivalents: `mandocode --config set autoContinue false`, `--config set toolBudget 200000`, `--config set timeout 30`.
 
 ---
 
@@ -81,22 +165,27 @@ When a user includes `@file` references in a complex request, the file content i
 
 | File | Purpose |
 |------|---------|
-| `Services/TaskPlannerService.cs` | Complexity detection, plan parsing, execution orchestration |
-| `Services/AIService.cs` | AI communication, plan generation, step execution |
-| `Services/FunctionCompletionTracker.cs` | Event-based function completion tracking |
-| `Services/FunctionInvocationFilter.cs` | Function deduplication, execution events, diff approval interception |
-| `Services/DiffService.cs` | LCS-based diff algorithm with context collapsing |
-| `Models/DiffModels.cs` | Diff line types, approval response enums, result models |
-| `Services/RetryPolicy.cs` | Exponential backoff retry for transient errors |
-| `Services/FileAutocompleteProvider.cs` | File content reading for `@` references (used before planning) |
-| `Models/TaskPlan.cs` | Data models for plans and steps |
+| `Plugins/PlanningPlugin.cs` | The `propose_plan` Semantic Kernel function + `PlanStepProposal` record |
+| `Services/PlanHandoff.cs` | Bridge between `FunctionInvocationFilter` and the UI approval callback |
+| `Services/TaskPlannerService.cs` | Slim heuristic (`RequiresPlanning`), typed proposal mapping (`FromProposals`), step execution orchestration |
+| `Services/InvocationScope.cs` | Per-scope state: read-dedup set, path-modification flags, result-char budget |
+| `Services/FunctionInvocationFilter.cs` | Intercepts `propose_plan`, runs circuit breakers, records scope bookkeeping, diff-approval handoff |
+| `Services/AIService.cs` | Chat loop with auto-continuation + synthetic-summary recovery, per-turn scope lifecycle |
+| `Services/ShellEnvironment.cs` | Runtime shell detection; injects OS-specific rules into the system prompt |
+| `Services/FunctionCompletionTracker.cs` | Event-based function-completion waits between plan steps |
+| `Services/DiffService.cs` | LCS-based diff with context collapsing (used by the approval UI) |
+| `Services/RetryPolicy.cs` | Exponential backoff for transient HTTP errors |
+| `Models/TaskPlan.cs` | `TaskPlan`, `TaskStep`, `TaskPlanStatus`, `TaskStepStatus` |
 | `Models/TaskProgressEvent.cs` | Progress event types for UI updates |
-| `Plugins/WebSearchPlugin.cs` | Web search and page fetching (search_web, fetch_webpage) |
-| `Models/SystemPrompts.cs` | Planning prompt, assistant prompt, learn mode prompt |
+| `Models/SystemPrompts.cs` | `MandoCodeAssistant` (the main prompt; shell rules are appended at runtime) |
 
-### TaskPlan Model
+### Data Models
 
 ```csharp
+public record PlanStepProposal(
+    [property: Description("Short description for UI (<=60 chars)")] string description,
+    [property: Description("Detailed instruction the AI will execute for this step")] string instruction);
+
 public class TaskPlan
 {
     public string OriginalRequest { get; set; }
@@ -108,42 +197,25 @@ public class TaskPlan
 public class TaskStep
 {
     public int StepNumber { get; set; }
-    public string Description { get; set; }     // Short description for UI
-    public string Instruction { get; set; }     // Detailed instruction for AI
+    public string Description { get; set; }     // Short, shown in the approval table
+    public string Instruction { get; set; }     // Detailed, sent to the model for this step
     public TaskStepStatus Status { get; set; }  // Pending, InProgress, Completed, Skipped, Failed
     public string? Result { get; set; }
     public string? ErrorMessage { get; set; }
 }
 ```
 
-### Plan Parsing
+`PlanStepProposal` uses camelCase param names deliberately — matches the JSON the model emits. PascalCase caused silent deserialization failures with local Ollama tool calls (outer array deserialized, inner strings came through empty).
 
-The `TaskPlannerService` supports multiple plan formats (tried in order):
+### Typed Proposal Mapping
 
-1. **Structured format with markers** (preferred):
-   ```
-   ---PLAN-START---
-   STEP 1: Description
-   DO: Detailed instruction
-   ---PLAN-END---
-   ```
+There's exactly one function converting the model's tool-call args to `TaskStep[]`:
 
-2. **JSON format**:
-   ```json
-   [{"description": "Step 1", "instruction": "Details"}]
-   ```
+```csharp
+public static List<TaskStep> FromProposals(PlanStepProposal[] proposals)
+```
 
-3. **Legacy STEP/INSTRUCTION format**:
-   ```
-   STEP 1: Description
-   INSTRUCTION: Detailed instruction
-   ```
-
-4. **Numbered lists**:
-   ```
-   1. Description - instruction
-   2. Another step - details
-   ```
+It drops fully-empty proposals (guard against casing mismatches silently producing a plan of blanks), mirrors a single-populated field into the other if only one arrived, and truncates descriptions to 60 chars. No text parsing — if the model speaks the schema, we materialise straight-line.
 
 ---
 
@@ -151,106 +223,79 @@ The `TaskPlannerService` supports multiple plan formats (tried in order):
 
 ### Event-Based Completion Tracking
 
-Uses `FunctionCompletionTracker` with semaphore-based signaling to wait for all function invocations to complete before proceeding to the next step:
-
-```csharp
-// Waits until all pending function calls finish (up to 30s timeout)
-await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(30));
-```
+`FunctionCompletionTracker` waits for all pending function invocations to settle between steps. `ExecutePlanPlanStepAsync` waits up to 5s for in-flight tool calls before returning, so step N's writes are durable before step N+1 starts.
 
 ### Retry Policy
 
-Transient errors (HTTP, timeout, socket) are automatically retried with exponential backoff:
-
-```
-Attempt 1 -> fail -> wait 500ms
-Attempt 2 -> fail -> wait 1000ms
-Attempt 3 -> fail -> throw
-```
-
-Applied to:
-- `ChatAsync()` — main chat endpoint
-- `ExecutePlanStepAsync()` — plan step execution
+Transient HTTP errors (connection reset, 502/503/504, socket failures) retry with exponential backoff: 500ms → 1s → 2s. Applied to both `ChatStreamAsync` and `ExecutePlanStepAsync`. Provider-side context-window rejections are **not** considered transient — they go to the synthetic-summary recovery path instead.
 
 ### Intelligent Deduplication
 
-Prevents duplicate function calls within configurable time windows:
+Two layers:
 
-| Operation Type | Window | Key Components |
-|---------------|--------|----------------|
-| Read operations | 2 seconds | Function name + all arguments |
-| Write operations | 5 seconds (configurable) | Function name + path + content hash (SHA256) |
+| Layer | Scope | Window/trigger |
+|-------|-------|----------------|
+| Time-based dedup | Global (`FunctionInvocationFilter._recentCalls`) | 2s (reads) / 5s configurable (writes) — identical args within the window reuse the cached result |
+| Scope-level dup-read | Per chat turn / plan step (`InvocationScope`) | Same-path re-read with no intervening write → short-circuit with a stern message |
+
+The scope-level check is the stronger one; the time-based window is a legacy belt-and-braces.
 
 ### Fallback Function Parsing
 
-Some local models output function calls as JSON text instead of proper tool calls. The fallback parser handles multiple formats:
-
-```json
-// Standard format
-{"name": "write_file", "parameters": {...}}
-
-// OpenAI-style function_call
-{"function_call": {"name": "func", "arguments": {...}}}
-
-// Tool calls format
-{"tool_calls": [{"function": {"name": "func", "arguments": {...}}}]}
-```
+Some local models output function calls as JSON text instead of proper tool calls. `AIService.ProcessTextFunctionCallsAsync` detects and executes those. Handles three JSON shapes: `{"name": ..., "parameters": ...}`, `{"function_call": {...}}`, `{"tool_calls": [{"function": ...}]}`. Controlled by `enableFallbackFunctionParsing`.
 
 ---
 
 ## User Interaction Flow
 
-### Plan Display
+### Plan Approval
 
-Plans are presented in a table with step numbers and descriptions. The user chooses:
+When the model calls `propose_plan` and `PlanHandoff.OnPlanRequested` fires, `App.razor.HandleProposedPlanAsync` runs:
 
-- **Execute plan** — runs all steps sequentially with progress output
-- **Execute directly (skip planning)** — sends the original request as-is
-- **Cancel** — aborts the request
+1. Stops the outer "Thinking..." spinner (so Spectre doesn't fight it).
+2. Renders the plan in a bordered table (step number + description).
+3. Prompts: **Execute plan** / **Reject (answer without a plan)** / **Cancel request**.
+4. On *Execute*: drives `TaskPlannerService.ExecutePlanAsync`, handles each progress event, returns a summary string to the model.
+5. On *Reject*: returns *"User rejected the proposed plan; respond to the original request directly."* — the model sees this as the tool result and continues normally.
+6. On *Cancel*: returns a cancel instruction; the model stops.
 
 ### Error Handling During Execution
 
-When a step fails, the user is prompted:
+Step-level failures (thrown exceptions during `ExecutePlanStepAsync`) go through `HandleProgressEventAsync`'s `StepFailed` case. The user gets **Skip this step and continue** or **Cancel the plan**.
 
-- **Skip this step and continue** — marks the step as skipped, proceeds to the next
-- **Cancel the plan** — stops execution, marks the plan as cancelled
+Context-window rejections don't reach this path — they trigger synthetic-summary recovery transparently.
 
 ### Progress Feedback
 
-Each step shows:
-- Step number and description when starting
-- Function invocation notifications in real-time
-- Result summary when completed (truncated to 500 chars for display)
-- Success/failure status
+Per step:
+- Step header on start (`Step 3/5: Create main.js`)
+- Real-time function-invocation lines (`● Writing to path`, `● Read file (72 lines)`)
+- Contextual spinner messages between tool calls (`Analyzing 2 files...`) with an elapsed counter and rotating "fun" message
+- Inline auto-continuation marker when the budget fires: `⟳ Auto-continuing (1/3) — tool budget reset.`
+- Inline recovery marker on provider overflow: `⚠ Provider rejected request (context window full). Restarting step with a compacted summary (1/3).`
 
 ### Taskbar Progress (Windows Terminal)
 
-During plan execution, the Windows Terminal taskbar icon reflects progress via OSC 9;4:
-- **Step starting** — green fill advances proportionally (`(currentStep - 1) / totalSteps * 100`)
-- **Step completed** — fill advances to `currentStep / totalSteps * 100`
-- **Step failed** — turns red at the current progress
-- **Plan completed/cancelled** — progress cleared
-
-Single AI requests (outside task plans) pulse the taskbar with an indeterminate indicator while the spinner is active.
+OSC 9;4 codes fire on step transitions: green fill advances by `currentStep / totalSteps`, turns red on failure, clears on plan completion. Direct chats pulse indeterminate.
 
 ---
 
 ## Testing Recommendations
 
-| Test Case | Expected Behavior |
+| Test Case | Expected Behaviour |
 |-----------|-------------------|
-| "What is 2+2?" | No planning (question) |
-| "What does 'create' mean?" | No planning (question with action word) |
-| "delete poem.txt" | No planning (simple action verb) |
-| "remove the old config file" | No planning (simple action verb) |
-| "show me the contents of Program.cs" | No planning (simple action verb) |
-| "create a function" | No planning (too short, under 12 words) |
-| "add a button" | No planning (too short, under 12 words) |
-| "Create a REST API service with authentication and rate limiting for the user module" | Planning triggered (12+ words, imperative + scope) |
-| "1. Create X\n2. Add Y\n3. Test Z" | Planning triggered (3+ numbered items) |
-| "Create folder TestFolder" | Uses `create_folder` function directly |
-| Same write twice quickly | Second should be skipped (deduplication) |
-| "refactor @src/file.cs to use interfaces and add unit tests and then update the documentation" | Planning triggered (12+ words with file content attached) |
+| `what is 2+2?` | No planning; model answers directly |
+| `delete poem.txt` | No planning; model calls `delete_file` |
+| `create a function that does X` | Heuristic doesn't fire; model decides (usually single-shot) |
+| `1. Scaffold project\n2. Add tests\n3. Wire CI` | Heuristic fires → directive appended → model calls `propose_plan` |
+| `Build a Three.js tic-tac-toe game with hover effects and win detection` | Model calls `propose_plan` on its own (cloud models) |
+| Model repeats `read_file_contents` for same path twice | Second call short-circuits with the "already read" message |
+| Tool results top the 100k-char budget | Budget circuit fires, model emits text summary, auto-continuation kicks in |
+| Provider returns `context window exceeds limit` | Synthetic-summary recovery compacts + retries |
+| User hits Ctrl+C mid-step | Step cancels cleanly; plan status → Cancelled |
+| Plan proposed with empty strings | `FromProposals` drops them; `PlanHandoff` returns "no steps" message |
+
+Unit tests cover the deterministic parts: `TaskPlannerServiceTests`, `InvocationScopeTests`, `PlanHandoffTests`, `ShellEnvironmentTests`, `MandoCodeConfigTests`. End-to-end flows are manual.
 
 ---
 
@@ -258,7 +303,7 @@ Single AI requests (outside task plans) pulse the taskbar with an indeterminate 
 
 ### Diff Approvals
 
-File writes and deletions intercepted by `FunctionInvocationFilter` trigger a diff approval UI before execution. This works alongside the task planner — during planned step execution, each file operation still requires approval (unless globally or per-file bypassed).
+File writes and deletions intercepted by `FunctionInvocationFilter` trigger a diff approval UI before execution. This works alongside the task planner — during planned step execution, each file operation still requires approval (unless globally or per-session bypassed).
 
 See the main [README](../../../README.md#diff-approvals) for user-facing documentation.
 
@@ -267,7 +312,7 @@ See the main [README](../../../README.md#diff-approvals) for user-facing documen
 ## Future Improvements
 
 - [ ] Step dependency graph for parallel execution of independent steps
-- [ ] LLM-based complexity classification for ambiguous requests
-- [ ] Plan persistence for resuming interrupted plans
-- [ ] User-editable steps before execution
-- [ ] Estimated complexity scoring
+- [ ] Plan persistence for resuming interrupted plans across sessions
+- [ ] User-editable plan before approval
+- [ ] Mid-generation progress signals — currently only tool-call boundaries update the UI. A real fix requires switching to SK's `GetStreamingChatMessageContentsAsync` so chunks arrive as the model emits them; current code uses non-streaming because streaming + local Ollama + auto-invoke is unreliable (noted in `ChatStreamAsync`).
+- [ ] Smarter `Required` vs `Auto` tool-choice on plan-step first turn (force a tool call on steps that the model drifts into prose on)

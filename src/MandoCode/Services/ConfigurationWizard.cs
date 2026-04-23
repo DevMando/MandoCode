@@ -31,10 +31,13 @@ public class ConfigurationWizard
         // Step 4: Max Tokens
         config.MaxTokens = ConfigureMaxTokens(config.MaxTokens);
 
-        // Step 5: Ignore Directories
+        // Step 5: Request Timeout
+        config.RequestTimeoutMinutes = ConfigureRequestTimeout(config.RequestTimeoutMinutes);
+
+        // Step 6: Ignore Directories
         config.IgnoreDirectories = ConfigureIgnoreDirectories(config.IgnoreDirectories);
 
-        // Step 6: Save Configuration
+        // Step 7: Save Configuration
         if (ConfirmSave())
         {
             config.Save();
@@ -227,9 +230,35 @@ public class ConfigurationWizard
         return maxTokens;
     }
 
+    private static int ConfigureRequestTimeout(int currentTimeout)
+    {
+        AnsiConsole.Write(new Rule("[yellow]5. Per-Request Timeout[/]").LeftJustified());
+        AnsiConsole.WriteLine();
+
+        AnsiConsole.MarkupLine("[dim]How long a single chat or plan step can run before it's cut off.[/]");
+        AnsiConsole.MarkupLine("[dim]Agentic work with many tool calls may need 15+ minutes.[/]");
+        AnsiConsole.MarkupLine("[dim]You can always cancel mid-request with Ctrl+C.[/]");
+        AnsiConsole.WriteLine();
+
+        var timeout = AnsiConsole.Prompt(
+            new TextPrompt<int>($"[cyan]Timeout in minutes ({MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes}):[/]")
+                .DefaultValue(currentTimeout)
+                .Validate(value =>
+                {
+                    if (MandoCodeConfig.IsValidRequestTimeout(value))
+                        return ValidationResult.Success();
+                    return ValidationResult.Error($"[red]Timeout must be between {MandoCodeConfig.MinRequestTimeoutMinutes} and {MandoCodeConfig.MaxRequestTimeoutMinutes} minutes[/]");
+                })
+        );
+
+        AnsiConsole.MarkupLine($"[green]✓ Request timeout set to: {timeout} min[/]");
+        AnsiConsole.WriteLine();
+        return timeout;
+    }
+
     private static List<string> ConfigureIgnoreDirectories(List<string> currentIgnoreDirectories)
     {
-        AnsiConsole.Write(new Rule("[yellow]5. Ignore Directories[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]6. Ignore Directories[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Current ignore list:[/]");
@@ -357,6 +386,7 @@ public class ConfigurationWizard
         }
         table.AddRow("Temperature", config.Temperature.ToString("F2"));
         table.AddRow("Max Tokens", config.MaxTokens.ToString());
+        table.AddRow("Request Timeout", $"{config.RequestTimeoutMinutes} min");
         table.AddRow("Ignore Dirs", string.Join(", ", config.IgnoreDirectories.Take(5)) +
                                      (config.IgnoreDirectories.Count > 5 ? "..." : ""));
 

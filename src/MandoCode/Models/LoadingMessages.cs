@@ -29,7 +29,7 @@ public static class LoadingMessages
     {
         "Reloading Sound Blaster...",
         "Dialing via 56k...",
-        "Buffering MTV raps...",
+        "Buffering Beats...",
         "Spinning the boombox...",
         "Windmillin'...",
         "Flairin'...",
@@ -37,13 +37,14 @@ public static class LoadingMessages
         "AirTracking...",
         "Six-stepping...",
         "Swipping...",
+        "MoonWalking...",
         "Three-stepping...",
         "AirFlare-ing...",
         "Cranking the mixtape...",
         "Dropping science...",
         "Laying a beat...",
         "Walkin' this way...",
-        "Rocking Adidas shelltoes...",
+        "Rocking shelltoes...",
         "It's Tricky right now...",
         "King of Rock'ing...",
         "Sampling vinyl...",
@@ -80,6 +81,18 @@ public static class LoadingMessages
         "Decoding the Matrix...",
         "Bending the spoon...",
         "Taking the red pill...",
+        "Asking the Oracle...",
+        "Deploying Market Cap...",
+        "DEX Screening...",
+        "WAGMI...",
+        "Dev is Based...",
+        "Holding Bags...",
+        "Dev is Sleeping...",
+        "Respecting the Buys...",
+        "BagWorking...",
+        "Pump & Dumping...",
+        "Deploying Smart Contracts...",
+        "Minting..."
     };
 
     /// <summary>
