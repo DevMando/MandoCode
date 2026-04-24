@@ -94,6 +94,20 @@ public class InvocationScope : IDisposable
         lock (_lock) PlanCancellationRequested = true;
     }
 
+    /// <summary>
+    /// Set when the user denies a tool-approval prompt. Subsequent approval prompts
+    /// in the same scope auto-deny without re-prompting — denying one in a batch
+    /// implicitly denies the rest. Reset when a new scope is begun.
+    /// Distinct from <see cref="PlanCancellationRequested"/>: this only short-circuits
+    /// the current batch's prompts; it does NOT terminate the whole plan.
+    /// </summary>
+    public bool ApprovalsRevoked { get; private set; }
+
+    public void RevokeRemainingApprovals()
+    {
+        lock (_lock) ApprovalsRevoked = true;
+    }
+
     /// <summary>Filter sets this so Dispose pops the scope back to its parent.</summary>
     internal void SetOnDispose(Action onDispose) => _onDispose = onDispose;
 

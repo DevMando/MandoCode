@@ -15,7 +15,8 @@
       "WebFetch(domain:devblogs.microsoft.com)",
       "WebFetch(domain:www.nuget.org)",
       "Bash(python3 *)",
-      "Bash(awk 'NR==841 || NR==869' C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Components/App.razor)"
+      "Bash(awk 'NR==841 || NR==869' C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Components/App.razor)",
+      "Bash(xargs wc *)"
     ]
   }
 }

@@ -26,6 +26,8 @@
     [Inject] private InputStateMachine SM { get; set; } = default!;
 
     private string _inputValue = "";
+    private DateTime _lastInputAt = DateTime.MinValue;
+    private int _lastLength = 0;
 
     protected override void OnParametersSet()
     {
@@ -36,16 +38,32 @@
         }
     }
 
+    // Paste handling: terminals stream paste as a burst of keystrokes, not a discrete event.
+    // RazorConsole 0.5.0's single-line TextInput interprets pasted '\r' as Enter and fires
+    // OnSubmit mid-paste, splitting the buffer. Two layers defend against that:
+    //   A) sanitize '\r'/'\n'/'\t' to space here, push the cleaned value back via SetValue.
+    //   B) HandleSubmit suppresses Submits that fire <30ms after the last OnInput —
+    //      paste '\r' arrives <1ms after the prior char; human Enter is always >100ms.
     private async Task HandleInput(string value)
     {
-        _inputValue = value;
+        var sanitized = value;
+        if (value.IndexOfAny(new[] { '\r', '\n', '\t' }) >= 0)
+        {
+            sanitized = value.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+            SetValue(sanitized);
+        }
 
-        var action = SM.UpdateText(value);
+        _inputValue = sanitized;
+
+        var action = SM.UpdateText(sanitized);
+
+        _lastInputAt = DateTime.UtcNow;
+        _lastLength = sanitized.Length;
 
         // When autocomplete triggers, hand off to imperative mode
         if (action == InputAction.ShowCommandDropdown || action == InputAction.ShowFileDropdown)
         {
-            await OnAutocompleteRequested.InvokeAsync(value);
+            await OnAutocompleteRequested.InvokeAsync(sanitized);
         }
     }
 
@@ -54,10 +72,21 @@
         if (Disabled) return;
         if (string.IsNullOrWhiteSpace(value)) return;
 
+        // Paste-burst guard: a Submit firing within 30ms of the last OnInput is the '\r'
+        // from a paste burst, not a real user Enter. Humans can't reach Enter that fast.
+        var sinceInput = (DateTime.UtcNow - _lastInputAt).TotalMilliseconds;
+        if (sinceInput < 30)
+        {
+            SetValue(value);
+            SM.UpdateText(value);
+            return;
+        }
+
         SM.SubmitInput(value);
 
         var submitted = value;
         _inputValue = "";
+        _lastLength = 0;
         StateHasChanged();
 
         OnSubmit.InvokeAsync(submitted);

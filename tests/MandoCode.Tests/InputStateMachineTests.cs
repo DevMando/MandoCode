@@ -516,6 +516,58 @@ public class InputStateMachineTests
         Assert.Equal(AutocompleteMode.None, machine.State.Mode);
     }
 
+    [Fact]
+    public void ProcessPaste_CarriageReturnBecomesSpace()
+    {
+        // CRLF pastes from Windows clipboards deliver '\r' before '\n' — both must be
+        // mapped to space so the VDOM-side sanitizer in PromptInput.razor mirrors the
+        // contract: paste never leaves \r/\n in the buffer.
+        var machine = CreateMachine();
+
+        var firstKey = new ConsoleKeyInfo('a', ConsoleKey.A, false, false, false);
+        var buffered = new List<ConsoleKeyInfo>
+        {
+            new('\r', ConsoleKey.Enter, false, false, false),
+            new('\n', ConsoleKey.Enter, false, false, false),
+            new('b', ConsoleKey.B, false, false, false),
+        };
+
+        machine.ProcessPaste(firstKey, buffered);
+
+        Assert.Equal("a  b", machine.State.InputText);
+        Assert.DoesNotContain('\r', machine.State.InputText);
+        Assert.DoesNotContain('\n', machine.State.InputText);
+    }
+
+    [Fact]
+    public void UpdateText_WithSanitizedPastedText_AcceptsFullValue()
+    {
+        // Mirrors the VDOM path: PromptInput sanitizes paste to spaces and feeds the
+        // full string through UpdateText. Buffer must absorb it, with cursor at the end
+        // and no spurious autocomplete mode.
+        var machine = CreateMachine();
+
+        var action = machine.UpdateText("hello world from paste");
+
+        Assert.Equal("hello world from paste", machine.State.InputText);
+        Assert.Equal(22, machine.State.CursorPos);
+        Assert.Equal(AutocompleteMode.None, machine.State.Mode);
+        Assert.Equal(InputAction.Redraw, action);
+    }
+
+    [Fact]
+    public void UpdateText_LongPasteStartingWithSlash_DoesNotShowCommandDropdownWhenNoMatch()
+    {
+        // Regression: pasting a long string that happens to start with '/' should not
+        // lock the input into command-autocomplete mode if no command matches.
+        var machine = CreateMachine();
+
+        var action = machine.UpdateText("/notarealcommand and more text from a paste");
+
+        Assert.Equal(AutocompleteMode.None, machine.State.Mode);
+        Assert.NotEqual(InputAction.ShowCommandDropdown, action);
+    }
+
     // ════════════════════════════════════════════════════════════
     //  8. STATIC HELPERS
     //     IsCommand() and GetCommandName() — pure functions.
