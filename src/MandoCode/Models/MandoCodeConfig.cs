@@ -45,12 +45,15 @@ public class MandoCodeConfig
     public const long MaxToolResultCharBudget = 4_000_000;
     public const int MinMaxAutoContinuations = 0;
     public const int MaxMaxAutoContinuations = 10;
+    public const int MinMarkdownRenderTimeoutSeconds = 5;
+    public const int MaxMarkdownRenderTimeoutSeconds = 300;
 
     public static bool IsValidTemperature(double value) => value >= MinTemperature && value <= MaxTemperature;
     public static bool IsValidMaxTokens(int value) => value >= MinMaxTokens && value <= MaxMaxTokens;
     public static bool IsValidRequestTimeout(int value) => value >= MinRequestTimeoutMinutes && value <= MaxRequestTimeoutMinutes;
     public static bool IsValidToolResultCharBudget(long value) => value >= MinToolResultCharBudget && value <= MaxToolResultCharBudget;
     public static bool IsValidMaxAutoContinuations(int value) => value >= MinMaxAutoContinuations && value <= MaxMaxAutoContinuations;
+    public static bool IsValidMarkdownRenderTimeout(int value) => value >= MinMarkdownRenderTimeoutSeconds && value <= MaxMarkdownRenderTimeoutSeconds;
 
     /// <summary>
     /// Ollama endpoint URL.
@@ -117,6 +120,15 @@ public class MandoCodeConfig
     /// </summary>
     [JsonPropertyName("maxAutoContinuations")]
     public int MaxAutoContinuations { get; set; } = 3;
+
+    /// <summary>
+    /// Maximum seconds to spend rendering the final markdown response before falling back
+    /// to raw text. Large tool-grounded responses (many tables, many code blocks, MCP output)
+    /// can legitimately take 20–60 seconds to render — raise this if you frequently see
+    /// "(markdown rendering timed out — showing raw text)".
+    /// </summary>
+    [JsonPropertyName("markdownRenderTimeoutSeconds")]
+    public int MarkdownRenderTimeoutSeconds { get; set; } = 60;
 
     /// <summary>
     /// Additional directories to ignore when scanning files.
@@ -193,6 +205,22 @@ public class MandoCodeConfig
     /// </summary>
     [JsonPropertyName("projectSkillsDirectory")]
     public string? ProjectSkillsDirectory { get; set; }
+
+    /// <summary>
+    /// Master switch for MCP (Model Context Protocol) server integration.
+    /// When enabled, MandoCode spawns/connects to each entry in <see cref="McpServers"/> at startup
+    /// and exposes their tools to the model alongside the built-in plugins.
+    /// </summary>
+    [JsonPropertyName("enableMcp")]
+    public bool EnableMcp { get; set; } = true;
+
+    /// <summary>
+    /// MCP servers to connect to at startup, keyed by a short server name.
+    /// Shape mirrors Claude Desktop's <c>mcpServers</c> block so users can copy-paste
+    /// installation snippets from any MCP server's README without translating.
+    /// </summary>
+    [JsonPropertyName("mcpServers")]
+    public Dictionary<string, McpServerConfig> McpServers { get; set; } = new();
 
     /// <summary>
     /// Music player preferences (volume, genre, autoplay).
@@ -288,10 +316,36 @@ public class MandoCodeConfig
         MaxTokens = Math.Clamp(MaxTokens, MinMaxTokens, MaxMaxTokens);
         FunctionDeduplicationWindowSeconds = Math.Clamp(FunctionDeduplicationWindowSeconds, 0, 60);
         MaxRetryAttempts = Math.Clamp(MaxRetryAttempts, 0, 10);
+        MarkdownRenderTimeoutSeconds = Math.Clamp(MarkdownRenderTimeoutSeconds, MinMarkdownRenderTimeoutSeconds, MaxMarkdownRenderTimeoutSeconds);
         Music.Volume = Math.Clamp(Music.Volume, 0f, 1f);
 
         if (string.IsNullOrWhiteSpace(OllamaEndpoint))
             OllamaEndpoint = "http://localhost:11434";
+
+        // Normalize MCP server lookups to case-insensitive — otherwise InputStateMachine's
+        // lowercasing of commands ("/mcp remove Solana" → "mcp remove solana") would miss
+        // an entry the user originally saved with capital letters. System.Text.Json
+        // deserializes into a default (case-sensitive) dict regardless of the property's
+        // initializer, so we rebuild here once rather than at every lookup site.
+        //
+        // Edge case: user hand-edits config.json with both "Solana" and "solana". The default
+        // ctor that takes an IDictionary + comparer would throw on the collision, which the
+        // outer Load() swallows → silent empty-config disaster. Rebuild manually, keep the
+        // first occurrence, and warn loudly so the user can fix the JSON before a subsequent
+        // Save() permanently drops the second entry.
+        if (McpServers.Comparer != StringComparer.OrdinalIgnoreCase)
+        {
+            var rebuilt = new Dictionary<string, McpServerConfig>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in McpServers)
+            {
+                if (!rebuilt.TryAdd(key, value))
+                {
+                    var keptKey = rebuilt.Keys.First(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+                    Console.WriteLine($"Warning: mcpServers entry '{key}' collides with '{keptKey}' (names are case-insensitive). Keeping '{keptKey}', ignoring '{key}'. Remove or rename one in {GetDefaultConfigPath()} before saving — otherwise the dropped entry is lost on next write.");
+                }
+            }
+            McpServers = rebuilt;
+        }
     }
 
     /// <summary>
@@ -370,6 +424,7 @@ public class MandoCodeConfig
         Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
         Console.WriteLine($"  Tool Result Budget: {ToolResultCharBudget:N0} chars (~{ToolResultCharBudget / 4:N0} tokens)");
         Console.WriteLine($"  Auto-Continuation: {(EnableAutoContinuation ? $"Enabled (max {MaxAutoContinuations})" : "Disabled")}");
+        Console.WriteLine($"  Markdown Render Timeout: {MarkdownRenderTimeoutSeconds}s");
         if (IgnoreDirectories.Any())
         {
             Console.WriteLine($"  Ignore Directories: {string.Join(", ", IgnoreDirectories)}");
@@ -382,7 +437,66 @@ public class MandoCodeConfig
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
         Console.WriteLine($"  Theme Customization: {(EnableThemeCustomization ? "Enabled" : "Disabled")}");
         Console.WriteLine($"  Web Search: {(EnableWebSearch ? "Enabled" : "Disabled")}");
+        Console.WriteLine($"  MCP: {(EnableMcp ? $"Enabled ({McpServers.Count(kv => !kv.Value.Disabled)} active / {McpServers.Count} configured)" : "Disabled")}");
         Console.WriteLine($"  Music Volume: {(int)(Music.Volume * 100)}%  Genre: {Music.Genre}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");
     }
+}
+
+/// <summary>
+/// Per-server MCP configuration. Shape is a superset of Claude Desktop's <c>mcpServers</c>
+/// entry: stdio servers populate <see cref="Command"/> (+ <see cref="Args"/>, <see cref="Env"/>);
+/// remote HTTP servers populate <see cref="Url"/>. MandoCode-only extensions
+/// (<see cref="Disabled"/>, <see cref="AutoApprove"/>, <see cref="Headers"/>) are additive — other
+/// clients ignore unknown fields, so a single config file stays portable.
+/// </summary>
+public class McpServerConfig
+{
+    /// <summary>
+    /// Executable for stdio servers (e.g. <c>npx</c>, <c>uvx</c>, an absolute binary path).
+    /// Leave empty for HTTP servers — <see cref="Url"/> is the discriminator.
+    /// </summary>
+    [JsonPropertyName("command")]
+    public string? Command { get; set; }
+
+    /// <summary>Arguments passed to <see cref="Command"/>.</summary>
+    [JsonPropertyName("args")]
+    public List<string> Args { get; set; } = new();
+
+    /// <summary>Environment variables injected into the child process.</summary>
+    [JsonPropertyName("env")]
+    public Dictionary<string, string> Env { get; set; } = new();
+
+    /// <summary>URL of a remote MCP server over HTTP/SSE (e.g. <c>https://mcp.solana.com/mcp</c>).</summary>
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    /// <summary>Optional transport hint (<c>"stdio"</c> or <c>"http"</c>). Usually inferred from presence of Command vs Url.</summary>
+    [JsonPropertyName("transport")]
+    public string? Transport { get; set; }
+
+    /// <summary>
+    /// Extra HTTP headers for remote servers — typically <c>Authorization: Bearer …</c> for
+    /// servers that accept static tokens (GitHub, Supabase, etc.). Ignored for stdio servers.
+    /// </summary>
+    [JsonPropertyName("headers")]
+    public Dictionary<string, string> Headers { get; set; } = new();
+
+    /// <summary>When true, the server is defined in config but not started — handy for temporarily muting a noisy server.</summary>
+    [JsonPropertyName("disabled")]
+    public bool Disabled { get; set; }
+
+    /// <summary>
+    /// Tool names auto-approved without prompting. First-time calls to tools not in this
+    /// list prompt the user once per session.
+    /// </summary>
+    [JsonPropertyName("autoApprove")]
+    public List<string> AutoApprove { get; set; } = new();
+
+    /// <summary>True when this entry describes a remote HTTP server rather than a local stdio one.</summary>
+    [JsonIgnore]
+    public bool IsHttp =>
+        !string.IsNullOrWhiteSpace(Url) ||
+        string.Equals(Transport, "http", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Transport, "sse", StringComparison.OrdinalIgnoreCase);
 }

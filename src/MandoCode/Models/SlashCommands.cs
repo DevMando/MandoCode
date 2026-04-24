@@ -30,6 +30,11 @@ public static class SlashCommands
         { "/music-list", "Show available tracks" },
         { "/skills", "List installed skills (auto-invoked by the model when relevant)" },
         { "/force-skill", "Override: force a specific skill to run now" },
+        { "/mcp", "List configured MCP servers with status and tool counts" },
+        { "/mcp add", "Interactively add a new MCP server to config" },
+        { "/mcp remove", "Remove an MCP server from config (usage: /mcp remove <name>)" },
+        { "/mcp tools", "List tools exposed by connected MCP servers (usage: /mcp tools <server>)" },
+        { "/mcp-reload", "Restart all MCP servers and re-register their tools" },
         { "/exit", "Exit MandoCode" }
     };
 }

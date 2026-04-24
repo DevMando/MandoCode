@@ -10,6 +10,7 @@ using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Ollama;
 using MandoCode.Models;
 using MandoCode.Plugins;
+using ModelContextProtocol.Client;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -33,6 +34,8 @@ public class AIService
     private readonly TokenTrackingService _tokenTracker;
     private readonly PlanHandoff _planHandoff;
     private readonly SkillLoader _skillLoader;
+    private readonly McpClientManager _mcpManager;
+    private readonly McpApprovalGate _mcpApprovalGate;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     // Named event handlers stored so we can detach them when rebuilding the kernel
@@ -110,13 +113,15 @@ public class AIService
         }
     }
 
-    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader)
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader, McpClientManager mcpManager, McpApprovalGate mcpApprovalGate)
     {
         _projectRootAccessor = projectRootAccessor;
         _config = config;
         _tokenTracker = tokenTracker;
         _planHandoff = planHandoff;
         _skillLoader = skillLoader;
+        _mcpManager = mcpManager;
+        _mcpApprovalGate = mcpApprovalGate;
         // Append shell-specific rules (cmd.exe vs bash) + the skill index so the model
         // knows which user-defined workflows are available for load_skill().
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
@@ -140,7 +145,38 @@ public class AIService
     {
         _config = config;
         BuildKernel();
+        await AttachMcpPluginsAsync();
         await ClearHistoryAsync();
+    }
+
+    /// <summary>
+    /// Registers tools from every active MCP client as SK plugins on the current kernel.
+    /// Idempotent within a single kernel instance — plugin registration is skipped if a
+    /// plugin with the same <c>mcp_&lt;server&gt;</c> name is already present. BuildKernel
+    /// discards the old kernel, so after a rebuild the next call re-registers from scratch.
+    /// </summary>
+    public async Task AttachMcpPluginsAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_config.EnableMcp || _mcpManager.ActiveClients.Count == 0) return;
+
+        foreach (var (serverName, client) in _mcpManager.ActiveClients)
+        {
+            var pluginName = $"mcp_{serverName}";
+            if (_kernel.Plugins.Any(p => p.Name == pluginName)) continue;
+
+            try
+            {
+                var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+                if (tools.Count == 0) continue;
+                _kernel.Plugins.AddFromFunctions(
+                    pluginName,
+                    tools.Select(t => t.AsKernelFunction()));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MCP] Failed to list tools for '{serverName}': {ex.Message}");
+            }
+        }
     }
 
     private void BuildKernel()
@@ -217,6 +253,9 @@ public class AIService
         {
             _functionFilter.OnCommandApprovalRequested = _onCommandApprovalRequested;
         }
+
+        // MCP gate — filter delegates to the gate for any plugin whose name starts with "mcp_"
+        _functionFilter.McpApprovalGate = _mcpApprovalGate;
 
         _kernel.FunctionInvocationFilters.Add(_functionFilter);
     }

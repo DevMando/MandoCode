@@ -326,15 +326,21 @@ public static class CommandAutocomplete
         for (int i = 0; i < commands.Count; i++)
         {
             var cmd = commands[i];
-            var description = Commands.ContainsKey(cmd) ? Commands[cmd] : "";
+            // Descriptions may contain literal brackets (e.g. "/mcp tools [server]") which
+            // Spectre would otherwise parse as color/style markup and throw. Escape defensively
+            // so no future description can crash the autocomplete dropdown.
+            var rawDescription = Commands.ContainsKey(cmd) ? Commands[cmd] : "";
+            var description = Markup.Escape(rawDescription);
+            var paddedDescription = description + new string(' ', Math.Max(0, 30 - rawDescription.Length));
+            var paddedCmd = Markup.Escape(cmd) + new string(' ', Math.Max(0, 15 - cmd.Length));
 
             if (i == selectedIndex)
             {
-                AnsiConsole.MarkupLine($"[black on cyan]│ {cmd,-15} {description,-30}[/]");
+                AnsiConsole.MarkupLine($"[black on cyan]│ {paddedCmd} {paddedDescription}[/]");
             }
             else
             {
-                AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{cmd,-15}[/] [dim]{description,-30}[/]");
+                AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{paddedCmd}[/] [dim]{paddedDescription}[/]");
             }
         }
 

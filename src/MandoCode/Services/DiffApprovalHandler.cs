@@ -399,4 +399,73 @@ public class DiffApprovalHandler
         Console.WriteLine("\u2570" + new string('\u2500', innerWidth) + "\u256f");
         Console.WriteLine();
     }
+
+    /// <summary>
+    /// Prompt UI for first-call MCP tool approvals. Wired into <see cref="McpApprovalGate"/>
+    /// via App.razor. The gate remembers "approve for session" decisions itself, so this
+    /// handler only renders the prompt for genuinely new (server, tool) pairs.
+    /// </summary>
+    public Task<DiffApprovalResult> HandleMcpApproval(string serverName, string toolName, string? description)
+    {
+        _spinner.Stop();
+
+        var title = $"[cyan]Allow MCP tool \"{Markup.Escape(toolName)}\" from \"{Markup.Escape(serverName)}\"?[/]";
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine(title);
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            AnsiConsole.MarkupLine($"[dim]{Markup.Escape(description!)}[/]");
+        }
+        AnsiConsole.WriteLine();
+
+        // Global write bypass covers MCP too \u2014 someone who picked "approve everything"
+        // on an earlier write shouldn't be re-prompted for an MCP call.
+        if (_globalWriteBypass)
+        {
+            AnsiConsole.MarkupLine("[green]\u2713 Auto-approved MCP tool[/]");
+            AnsiConsole.WriteLine();
+            _spinner.Start();
+            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+        }
+
+        var mcpChoices = new List<string>
+        {
+            "Approve",
+            $"Approve - don't ask again for {toolName} this session",
+            "Deny"
+        };
+        if (_planHandoff.IsExecuting) mcpChoices.Add(CancelPlanLabel);
+
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Run this MCP tool?[/]")
+                .AddChoices(mcpChoices)
+        );
+
+        DiffApprovalResult result;
+        if (choice == "Approve")
+        {
+            AnsiConsole.MarkupLine("[green]Approved.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+        }
+        else if (choice.StartsWith("Approve - don't ask"))
+        {
+            AnsiConsole.MarkupLine("[green]Approved for session.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+        }
+        else if (choice == CancelPlanLabel)
+        {
+            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Denied.[/]");
+            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+        }
+
+        AnsiConsole.WriteLine();
+        _spinner.Start();
+        return Task.FromResult(result);
+    }
 }

@@ -18,6 +18,8 @@
 @inject TerminalThemeService ThemeService
 @inject InputStateMachine StateMachine
 @inject SkillLoader Skills
+@inject McpClientManager McpManager
+@inject McpApprovalGate McpGate
 @implements IDisposable
 
 <Banner />
@@ -75,6 +77,30 @@
                  Disabled="@_isProcessing" />
 }
 
+@* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
+   autocomplete machinery. Used by /mcp add and any future wizards that need free-form input. *@
+@if (_showWizardInput)
+{
+    <TextInput @bind-Value="_wizardInputValue"
+               OnSubmit="HandleWizardInputSubmit"
+               Placeholder="@_wizardInputPlaceholder"
+               ValueColor="@(new Color(255, 200, 80))"
+               PlaceholderColor="Color.Grey"
+               BorderColor="Color.Purple"
+               FocusedBorderColor="Color.Purple"
+               BorderStyle="BoxBorder.Rounded"
+               Expand="true"
+               FocusOrder="0" />
+}
+@if (_showWizardSelect)
+{
+    <Select TItem="string"
+            Options="_wizardSelectOptions"
+            Value="_wizardSelectValue"
+            ValueChanged="HandleWizardSelectSubmit"
+            Expand="true" />
+}
+
 @code {
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
@@ -105,6 +131,19 @@
     // await user input from the PromptInput Blazor component without blocking
     private TaskCompletionSource<string>? _inputTcs;
     private bool _showPrompt = false;
+
+    // Wizard input state — separate from the main prompt so we can spawn bare TextInput/Select
+    // components for /mcp add and future wizards without inheriting PromptInput's
+    // slash/at autocomplete state machine.
+    private bool _showWizardInput = false;
+    private string _wizardInputValue = "";
+    private string _wizardInputPlaceholder = "";
+    private TaskCompletionSource<string>? _wizardInputTcs;
+
+    private bool _showWizardSelect = false;
+    private string[] _wizardSelectOptions = Array.Empty<string>();
+    private string _wizardSelectValue = "";
+    private TaskCompletionSource<string>? _wizardSelectTcs;
     private bool _isProcessing = false;
     private bool _autocompleteActive = false;
     private string _promptInitialValue = "";
@@ -234,6 +273,7 @@
             AI.OnWriteApprovalRequested = DiffApproval.HandleDiffApproval;
             AI.OnDeleteApprovalRequested = DiffApproval.HandleDeleteApproval;
             AI.OnCommandApprovalRequested = DiffApproval.HandleCommandApproval;
+            McpGate.OnApprovalRequested = DiffApproval.HandleMcpApproval;
         }
 
         // Detect terminal theme and apply curated palette
@@ -293,6 +333,7 @@
         {
             _connectionStatusMessage = null;
             await ValidateCurrentModelAsync();
+            await InitializeMcpAsync();
         }
         else
         {
@@ -301,6 +342,35 @@
 
         // Re-render so the VDOM updates from /learn content to the ready state
         await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Start MCP clients and attach their tools to the kernel. Failures per-server are
+    /// surfaced via `/mcp` — a broken server never blocks the app from starting.
+    /// </summary>
+    private async Task InitializeMcpAsync()
+    {
+        if (!Config.EnableMcp || Config.McpServers.Count == 0) return;
+
+        try
+        {
+            await McpManager.StartAllAsync();
+            await AI.AttachMcpPluginsAsync();
+
+            var active = McpManager.ActiveClients.Count;
+            var failed = McpManager.StartupErrors.Count;
+            if (active > 0 || failed > 0)
+            {
+                var summary = failed == 0
+                    ? $"[dim]MCP: {active} server(s) connected.[/]"
+                    : $"[dim]MCP: {active} connected, {failed} failed (type /mcp for details).[/]";
+                AnsiConsole.MarkupLine(summary);
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]MCP startup error: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
+        }
     }
 
     private async Task ValidateCurrentModelAsync()
@@ -545,6 +615,11 @@
                     table.AddRow("/copy-code", "Copy code blocks from last response");
                     table.AddRow("/skills", "List installed skills (auto-invoked when relevant)");
                     table.AddRow("/force-skill", "Override: force a specific skill to run now");
+                    table.AddRow("/mcp", "List MCP servers with status and tool counts");
+                    table.AddRow("/mcp add", "Interactively add a new MCP server");
+                    table.AddRow("/mcp remove <name>", "Remove an MCP server from config");
+                    table.AddRow("/mcp tools <server>", "List tools exposed by connected MCP servers (server optional)");
+                    table.AddRow("/mcp-reload", "Restart MCP servers and re-register their tools");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -629,6 +704,42 @@
                     continue;
                 }
 
+                if (command == "mcp")
+                {
+                    await HandleMcpListCommandAsync();
+                    continue;
+                }
+
+                if (command == "mcp add" || command.StartsWith("mcp add "))
+                {
+                    await HandleMcpAddCommandAsync();
+                    continue;
+                }
+
+                if (command == "mcp remove" || command.StartsWith("mcp remove "))
+                {
+                    var serverArg = command.Length > "mcp remove".Length
+                        ? command["mcp remove".Length..].Trim()
+                        : "";
+                    await HandleMcpRemoveCommandAsync(serverArg);
+                    continue;
+                }
+
+                if (command == "mcp tools" || command.StartsWith("mcp tools "))
+                {
+                    var serverFilter = command.Length > "mcp tools".Length
+                        ? command["mcp tools".Length..].Trim()
+                        : null;
+                    await HandleMcpToolsCommandAsync(string.IsNullOrWhiteSpace(serverFilter) ? null : serverFilter);
+                    continue;
+                }
+
+                if (command == "mcp-reload")
+                {
+                    await HandleMcpReloadCommandAsync();
+                    continue;
+                }
+
                 // Unknown command
                 AnsiConsole.MarkupLine($"[red]Unknown command: {Spectre.Console.Markup.Escape(input)}[/]");
                 AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
@@ -687,6 +798,110 @@
     private void HandleVdomSubmit(string input)
     {
         _inputTcs?.TrySetResult(input);
+    }
+
+    /// <summary>
+    /// Bound to the wizard's bare TextInput.OnSubmit. Completes whichever wizard step is awaiting.
+    /// </summary>
+    private void HandleWizardInputSubmit(string value)
+    {
+        _wizardInputTcs?.TrySetResult(value);
+    }
+
+    /// <summary>
+    /// Bound to the wizard's Select.ValueChanged — fires when the user presses Enter on a
+    /// highlighted option (RazorConsole's Select uses Enter as the commit signal).
+    /// </summary>
+    private void HandleWizardSelectSubmit(string value)
+    {
+        _wizardSelectValue = value;
+        _wizardSelectTcs?.TrySetResult(value);
+    }
+
+    /// <summary>
+    /// Show a single-line text prompt rendered through RazorConsole's TextInput component.
+    /// Avoids Spectre's TextPrompt entirely so there's no Console.ReadLine vs VDOM render-loop
+    /// conflict. Optional <paramref name="validate"/> returns null on success, an error message
+    /// on failure — failure prints the error and re-prompts.
+    /// </summary>
+    private async Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null)
+    {
+        while (true)
+        {
+            // Render the title as a separate scrollback line above the input box so it
+            // persists after the input is dismissed.
+            AnsiConsole.MarkupLine($"[cyan]{Spectre.Console.Markup.Escape(title)}[/]");
+
+            _wizardInputValue = "";
+            _wizardInputPlaceholder = placeholder;
+            _wizardInputTcs = new TaskCompletionSource<string>();
+            _showWizardInput = true;
+            _showPrompt = false;
+            await InvokeAsync(StateHasChanged);
+
+            var result = await _wizardInputTcs.Task;
+
+            _showWizardInput = false;
+            await InvokeAsync(StateHasChanged);
+            // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
+            await Task.Delay(50);
+
+            if (validate != null)
+            {
+                var error = validate(result);
+                if (error != null)
+                {
+                    AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
+                    AnsiConsole.WriteLine();
+                    continue;
+                }
+            }
+
+            // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
+            Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Show a list of options rendered through RazorConsole's Select component. User navigates
+    /// with arrow keys and commits with Enter. Returns the selected option string.
+    /// </summary>
+    private async Task<string> WizardPromptSelectAsync(string title, params string[] options)
+    {
+        if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
+
+        AnsiConsole.MarkupLine($"[cyan]{Spectre.Console.Markup.Escape(title)}[/]");
+
+        _wizardSelectOptions = options;
+        _wizardSelectValue = options[0];
+        _wizardSelectTcs = new TaskCompletionSource<string>();
+        _showWizardSelect = true;
+        _showPrompt = false;
+        await InvokeAsync(StateHasChanged);
+
+        var result = await _wizardSelectTcs.Task;
+
+        _showWizardSelect = false;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(50);
+
+        Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
+        return result;
+    }
+
+    /// <summary>
+    /// Convenience: yes/no confirm rendered as a Select with two options. Used by wizards
+    /// instead of <c>AnsiConsole.Confirm</c> so the entire flow stays inside the VDOM render
+    /// pipeline.
+    /// </summary>
+    private async Task<bool> WizardConfirmAsync(string title, bool defaultYes = false)
+    {
+        var yes = "Yes";
+        var no = "No";
+        var options = defaultYes ? new[] { yes, no } : new[] { no, yes };
+        var picked = await WizardPromptSelectAsync(title, options);
+        return picked == yes;
     }
 
     /// <summary>
@@ -1053,18 +1268,21 @@
                                 AnsiConsole.Write(renderable);
                             });
 
-                            // Show a spinner if rendering takes more than 1 second
+                            // Show a spinner if rendering takes more than 1 second. The remaining
+                            // budget comes from config — big tool-grounded responses (MCP,
+                            // many tables) can legitimately take 30+ seconds to render.
                             if (!renderTask.Wait(TimeSpan.FromSeconds(1)))
                             {
                                 Spinner.Start("Rendering...");
-                                if (!renderTask.Wait(TimeSpan.FromSeconds(29)))
+                                var remainingSeconds = Math.Max(1, Config.MarkdownRenderTimeoutSeconds - 1);
+                                if (!renderTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
                                 {
                                     Spinner.Stop();
-                                    // Rendering took over 30 seconds — fall back to raw text
+                                    // Rendering exceeded the configured budget — fall back to raw text
                                     Console.WriteLine();
                                     Console.Write(responseText);
                                     Console.WriteLine();
-                                    AnsiConsole.MarkupLine("[dim](markdown rendering timed out — showing raw text)[/]");
+                                    AnsiConsole.MarkupLine($"[dim](markdown rendering timed out after {Config.MarkdownRenderTimeoutSeconds}s — showing raw text. Raise with /config or mandocode --config set renderTimeout 120)[/]");
                                 }
                                 else if (renderTask.IsFaulted)
                                 {
@@ -1446,6 +1664,398 @@
 
         _messages.Add(new ChatMsg { Role = "user", Text = $"/force-skill {skill.Name}" });
         await ProcessDirectRequestAsync(forcedPrompt);
+    }
+
+    private async Task HandleMcpListCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+
+        if (!Config.EnableMcp)
+        {
+            AnsiConsole.MarkupLine("[yellow]MCP is disabled.[/] Enable with [cyan]mandocode --config set mcp true[/].");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (Config.McpServers.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No MCP servers configured.[/]");
+            AnsiConsole.MarkupLine($"[dim]Add servers to the 'mcpServers' block in {Spectre.Console.Markup.Escape(MandoCodeConfig.GetDefaultConfigPath())}[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("Server");
+        table.AddColumn("Transport");
+        table.AddColumn("Status");
+        table.AddColumn("Tools");
+
+        foreach (var (name, serverCfg) in Config.McpServers)
+        {
+            var transport = serverCfg.IsHttp ? "http" : "stdio";
+            string status;
+            string toolCount = "-";
+
+            if (serverCfg.Disabled)
+            {
+                status = "[dim]disabled[/]";
+            }
+            else if (McpManager.ActiveClients.TryGetValue(name, out var client))
+            {
+                status = "[green]connected[/]";
+                try
+                {
+                    var tools = await client.ListToolsAsync();
+                    toolCount = tools.Count.ToString();
+                }
+                catch { toolCount = "?"; }
+            }
+            else if (McpManager.StartupErrors.TryGetValue(name, out var err))
+            {
+                status = $"[red]failed:[/] [dim]{Spectre.Console.Markup.Escape(err)}[/]";
+            }
+            else
+            {
+                status = "[yellow]not started[/]";
+            }
+
+            table.AddRow(Spectre.Console.Markup.Escape(name), transport, status, toolCount);
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+    }
+
+    private async Task HandleMcpReloadCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Reloading MCP servers...[/]");
+
+        McpGate.ResetSession();
+        await McpManager.ReloadAsync();
+        // Full kernel rebuild so previously-registered mcp_* plugins are dropped before re-attaching.
+        await AI.ReinitializeAsync(Config);
+
+        var active = McpManager.ActiveClients.Count;
+        var failed = McpManager.StartupErrors.Count;
+        AnsiConsole.MarkupLine(failed == 0
+            ? $"[green]MCP reloaded: {active} server(s) connected.[/]"
+            : $"[yellow]MCP reloaded: {active} connected, {failed} failed.[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Removes a server from config (and teardown of its connection) after a confirm.
+    /// If <paramref name="serverArg"/> is empty, lists configured servers and aborts.
+    /// </summary>
+    private async Task HandleMcpRemoveCommandAsync(string serverArg)
+    {
+        AnsiConsole.WriteLine();
+
+        if (string.IsNullOrWhiteSpace(serverArg))
+        {
+            AnsiConsole.MarkupLine("[yellow]Usage:[/] /mcp remove <name>");
+            if (Config.McpServers.Count > 0)
+            {
+                AnsiConsole.MarkupLine($"[dim]Configured: {string.Join(", ", Config.McpServers.Keys)}[/]");
+            }
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (!Config.McpServers.ContainsKey(serverArg))
+        {
+            AnsiConsole.MarkupLine($"[yellow]No server named '{Spectre.Console.Markup.Escape(serverArg)}' is configured.[/]");
+            if (Config.McpServers.Count > 0)
+            {
+                AnsiConsole.MarkupLine($"[dim]Configured: {string.Join(", ", Config.McpServers.Keys)}[/]");
+            }
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var confirmed = await WizardConfirmAsync($"Remove MCP server '{serverArg}'?", defaultYes: false);
+        if (!confirmed)
+        {
+            AnsiConsole.MarkupLine("[dim]Cancelled.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        Config.McpServers.Remove(serverArg);
+        try { Config.Save(); }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Failed to save config:[/] {Spectre.Console.Markup.Escape(ex.Message)}");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[dim]Removed '{Spectre.Console.Markup.Escape(serverArg)}'. Reloading...[/]");
+        McpGate.ResetSession();
+        await McpManager.ReloadAsync();
+        await AI.ReinitializeAsync(Config);
+        AnsiConsole.MarkupLine($"[green]✓ '{Spectre.Console.Markup.Escape(serverArg)}' removed.[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Lists tools exposed by one or all connected MCP servers, with descriptions.
+    /// If <paramref name="serverFilter"/> is null, iterates every active server.
+    /// </summary>
+    private async Task HandleMcpToolsCommandAsync(string? serverFilter)
+    {
+        AnsiConsole.WriteLine();
+
+        if (McpManager.ActiveClients.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No MCP servers are connected.[/]");
+            AnsiConsole.MarkupLine("[dim]Type /mcp for status, or /mcp add to configure one.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (serverFilter != null && !McpManager.ActiveClients.ContainsKey(serverFilter))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Server '{Spectre.Console.Markup.Escape(serverFilter)}' is not connected.[/]");
+            AnsiConsole.MarkupLine($"[dim]Connected: {string.Join(", ", McpManager.ActiveClients.Keys)}[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var clients = serverFilter != null
+            ? new[] { (serverFilter, McpManager.ActiveClients[serverFilter]) }
+            : McpManager.ActiveClients.Select(kv => (kv.Key, kv.Value)).ToArray();
+
+        foreach (var (serverName, client) in clients)
+        {
+            IList<ModelContextProtocol.Client.McpClientTool> tools;
+            try
+            {
+                tools = await client.ListToolsAsync();
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(serverName)}:[/] [dim]{Spectre.Console.Markup.Escape(ex.Message)}[/]");
+                continue;
+            }
+
+            var table = new Table().Border(TableBorder.Rounded).Title($"[cyan]{Spectre.Console.Markup.Escape(serverName)}[/] [dim]({tools.Count} tool{(tools.Count == 1 ? "" : "s")})[/]");
+            table.AddColumn("Tool");
+            table.AddColumn("Description");
+            foreach (var t in tools)
+            {
+                var desc = string.IsNullOrWhiteSpace(t.Description) ? "[dim](no description)[/]" : Spectre.Console.Markup.Escape(t.Description);
+                table.AddRow(Spectre.Console.Markup.Escape(t.Name), desc);
+            }
+            AnsiConsole.Write(table);
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Interactive wizard for adding a new MCP server. Writes straight to the live
+    /// <see cref="Config"/> singleton, persists to disk via <c>Config.Save()</c>, then
+    /// reuses the /mcp-reload path so the new server connects without an app restart.
+    /// All prompts flow through RazorConsole's TextInput / Select components — no
+    /// Spectre TextPrompt / SelectionPrompt — to avoid the Console.ReadKey vs VDOM
+    /// render-loop conflict that swallows keystrokes on Windows.
+    /// </summary>
+    private async Task HandleMcpAddCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[cyan bold]Add an MCP server[/]");
+        AnsiConsole.MarkupLine("[dim]Ctrl+C at any prompt to cancel.[/]");
+        AnsiConsole.WriteLine();
+
+        var rawName = await WizardPromptTextAsync(
+            "Server name (e.g. solana):",
+            placeholder: "short identifier, no spaces",
+            validate: n => string.IsNullOrWhiteSpace(n)
+                ? "Name cannot be empty"
+                : n.Contains(' ')
+                    ? "Name cannot contain spaces"
+                    : null);
+
+        // Normalize to lowercase — MCP servers are referenced by name in tool prefixes
+        // (mcp_<server>) and in /mcp-reload etc. Keeping case sensitivity just leaves
+        // room for hard-to-spot "Solana" vs "solana" mistakes.
+        var name = rawName.ToLowerInvariant();
+
+        // Duplicate-name check — offer overwrite rather than silently clobber.
+        if (Config.McpServers.ContainsKey(name))
+        {
+            var overwrite = await WizardConfirmAsync($"'{name}' already exists. Overwrite?", defaultYes: false);
+            if (!overwrite)
+            {
+                AnsiConsole.MarkupLine("[dim]Cancelled.[/]");
+                AnsiConsole.WriteLine();
+                return;
+            }
+        }
+
+        var transport = await WizardPromptSelectAsync("Transport:", "http (remote server)", "stdio (local process)");
+        var isHttp = transport.StartsWith("http");
+
+        var server = new McpServerConfig();
+
+        if (isHttp)
+        {
+            server.Url = await WizardPromptTextAsync(
+                "URL (e.g. https://mcp.solana.com/mcp):",
+                placeholder: "https://...",
+                validate: u => !Uri.TryCreate(u, UriKind.Absolute, out _)
+                    ? "Must be an absolute URL"
+                    : null);
+            server.Transport = "http";
+
+            if (await WizardConfirmAsync("Add custom headers (e.g. Authorization)?", defaultYes: false))
+            {
+                await CollectKeyValuePairsVdomAsync("Header", server.Headers);
+            }
+        }
+        else
+        {
+            server.Command = await WizardPromptTextAsync(
+                "Command (e.g. npx, uvx, binary path):",
+                placeholder: "executable",
+                validate: c => string.IsNullOrWhiteSpace(c) ? "Command cannot be empty" : null);
+
+            var argsLine = await WizardPromptTextAsync(
+                "Arguments (space-separated, leave empty for none):",
+                placeholder: "-y @scope/server-foo",
+                validate: null);
+            if (!string.IsNullOrWhiteSpace(argsLine))
+            {
+                // Split on whitespace, preserve quoted segments.
+                server.Args = ParseShellLikeArgs(argsLine);
+            }
+
+            if (await WizardConfirmAsync("Add environment variables?", defaultYes: false))
+            {
+                await CollectKeyValuePairsVdomAsync("Environment variable", server.Env);
+            }
+        }
+
+        // Preview — show the user exactly what'll be written before we touch the disk.
+        // We hand-build the object graph so empty collections / nulls don't clutter the
+        // preview ("command": null, "args": [], "env": {}).
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[cyan]Preview:[/]");
+        var previewWrapper = new Dictionary<string, object> { [name] = BuildPreviewDict(server) };
+        var previewJson = System.Text.Json.JsonSerializer.Serialize(previewWrapper,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        AnsiConsole.WriteLine(previewJson);
+        AnsiConsole.WriteLine();
+
+        if (!await WizardConfirmAsync("Save and reload?", defaultYes: true))
+        {
+            AnsiConsole.MarkupLine("[dim]Cancelled — nothing written.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        Config.McpServers[name] = server;
+        try
+        {
+            Config.Save();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Failed to save config:[/] {Spectre.Console.Markup.Escape(ex.Message)}");
+            AnsiConsole.WriteLine();
+            Config.McpServers.Remove(name);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[dim]Saved. Connecting to '{Spectre.Console.Markup.Escape(name)}'...[/]");
+        McpGate.ResetSession();
+        await McpManager.ReloadAsync();
+        await AI.ReinitializeAsync(Config);
+
+        if (McpManager.ActiveClients.TryGetValue(name, out var client))
+        {
+            try
+            {
+                var tools = await client.ListToolsAsync();
+                AnsiConsole.MarkupLine($"[green]✓ Server '{Spectre.Console.Markup.Escape(name)}' connected ({tools.Count} tool(s)).[/]");
+            }
+            catch
+            {
+                AnsiConsole.MarkupLine($"[green]✓ Server '{Spectre.Console.Markup.Escape(name)}' connected.[/]");
+            }
+        }
+        else if (McpManager.StartupErrors.TryGetValue(name, out var err))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Server saved but failed to connect:[/] [dim]{Spectre.Console.Markup.Escape(err)}[/]");
+            AnsiConsole.MarkupLine($"[dim]Edit {Spectre.Console.Markup.Escape(MandoCodeConfig.GetDefaultConfigPath())} and run /mcp-reload to retry.[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[yellow]Server saved but did not appear in active clients. Type /mcp for details.[/]");
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// VDOM version of the key/value collector — used by the headers and env-vars steps
+    /// of the /mcp add wizard. Loops until the user submits an empty name.
+    /// </summary>
+    private async Task CollectKeyValuePairsVdomAsync(string label, Dictionary<string, string> into)
+    {
+        AnsiConsole.MarkupLine($"[dim]Enter one {label.ToLower()} at a time. Leave the name empty to finish.[/]");
+        while (true)
+        {
+            var key = await WizardPromptTextAsync($"{label} name (empty to finish):", placeholder: "", validate: null);
+            if (string.IsNullOrWhiteSpace(key)) break;
+
+            var value = await WizardPromptTextAsync($"{label} value:", placeholder: "", validate: null);
+            into[key] = value;
+        }
+    }
+
+    /// <summary>
+    /// Build the preview dict for /mcp add, skipping null / empty fields so the JSON
+    /// block in the prompt stays tight. The full object with defaults still hits disk via
+    /// Config.Save(); this is purely display shaping.
+    /// </summary>
+    private static Dictionary<string, object> BuildPreviewDict(McpServerConfig server)
+    {
+        var dict = new Dictionary<string, object>();
+        if (!string.IsNullOrWhiteSpace(server.Command)) dict["command"] = server.Command!;
+        if (server.Args.Count > 0) dict["args"] = server.Args;
+        if (server.Env.Count > 0) dict["env"] = server.Env;
+        if (!string.IsNullOrWhiteSpace(server.Url)) dict["url"] = server.Url!;
+        if (!string.IsNullOrWhiteSpace(server.Transport)) dict["transport"] = server.Transport!;
+        if (server.Headers.Count > 0) dict["headers"] = server.Headers;
+        if (server.Disabled) dict["disabled"] = server.Disabled;
+        if (server.AutoApprove.Count > 0) dict["autoApprove"] = server.AutoApprove;
+        return dict;
+    }
+
+    /// <summary>
+    /// Split a command-line-style argument string, honoring double-quoted segments so users
+    /// can include paths with spaces. Not a full shell parser — no escapes, no single quotes —
+    /// which matches how Claude Desktop / Cursor treat these args (plain JSON array of strings).
+    /// </summary>
+    private static List<string> ParseShellLikeArgs(string input)
+    {
+        var result = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inQuotes = false;
+        foreach (var ch in input)
+        {
+            if (ch == '"') { inQuotes = !inQuotes; continue; }
+            if (ch == ' ' && !inQuotes)
+            {
+                if (current.Length > 0) { result.Add(current.ToString()); current.Clear(); }
+                continue;
+            }
+            current.Append(ch);
+        }
+        if (current.Length > 0) result.Add(current.ToString());
+        return result;
     }
 
     private async Task HandleLearnCommandAsync()

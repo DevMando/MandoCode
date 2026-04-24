@@ -128,6 +128,7 @@ If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare
 |-|---------|-------------|
 | **AI** | Project-aware assistant | Reads, writes, deletes, and searches your entire codebase |
 | **AI** | Web search & fetch | DuckDuckGo search and webpage reading — no API keys needed |
+| **AI** | MCP server support | Connect to any Model Context Protocol server (stdio or remote HTTP) — Claude-Desktop-compatible config |
 | **AI** | Streaming responses | Real-time output with animated spinners |
 | **AI** | Task planner | Auto-detects complex requests and breaks them into steps |
 | **AI** | Fallback function parsing | Handles models that output tool calls as raw JSON |
@@ -170,6 +171,11 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/music-lofi` | Switch to lofi |
 | `/music-synthwave` | Switch to synthwave |
 | `/music-list` | List available tracks |
+| `/mcp` | List configured MCP servers with status and tool counts |
+| `/mcp add` | Interactively add a new MCP server to config |
+| `/mcp remove <name>` | Remove an MCP server from config |
+| `/mcp tools <server>` | List tools exposed by connected MCP servers (server optional) |
+| `/mcp-reload` | Restart all MCP servers and re-register their tools |
 | `/clear` | Clear conversation history |
 | `/exit` | Exit MandoCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
@@ -417,6 +423,85 @@ The `/learn` command helps new users understand local LLMs and get set up.
 ### AI Educator Chat Mode
 
 When Ollama is running, `/learn` offers an interactive chat mode where the AI explains LLM concepts using beginner-friendly language. Type `/clear` to return to normal mode.
+
+</details>
+
+<details>
+<summary><h2>MCP Servers — Deep Dive</h2></summary>
+
+MandoCode speaks the [Model Context Protocol](https://modelcontextprotocol.io) as a client, which means you can plug in any published MCP server — filesystem, database, GitHub, Linear, Slack, whatever — and its tools show up to the model alongside MandoCode's built-in plugins.
+
+### Adding a server
+
+Two ways:
+
+- **`/mcp add`** inside MandoCode — an interactive wizard that prompts through name, transport, URL/command, and optional headers/env vars, previews the JSON, and saves + reloads automatically.
+- **Hand-edit `~/.mandocode/config.json`** — useful when copy-pasting a `mcpServers` block from a server's README. Run `/mcp-reload` after saving.
+
+### Config shape
+
+The `mcpServers` block mirrors [Claude Desktop's schema](https://modelcontextprotocol.io/docs/develop/connect-local-servers), so you can copy-paste any server's README installation snippet directly into `~/.mandocode/config.json`:
+
+```json
+{
+  "enableMcp": true,
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
+    },
+    "solana": {
+      "url": "https://mcp.solana.com/mcp",
+      "transport": "http"
+    },
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ghp_your_token_here" },
+      "autoApprove": ["list_issues", "get_pr"]
+    }
+  }
+}
+```
+
+### Transports
+
+- **stdio** — for local servers. Populate `command` + `args` + optional `env`. Works with any server published as an npm/pip/go binary.
+- **HTTP / SSE** — for remote servers. Populate `url`; the client auto-detects Streamable HTTP or SSE. Custom headers go in `headers` — most commonly `Authorization: Bearer …` for servers that accept static tokens.
+
+### Does MandoCode need Node?
+
+**No.** MandoCode itself is pure .NET. But *individual servers* may need whatever runtime their `command` points at — Node for `npx`, Python for `uvx`, or nothing extra for standalone binaries. Same situation as Claude Desktop, Cursor, and VS Code.
+
+### OAuth-only servers
+
+Native OAuth is not in this release. For servers that require an OAuth flow (some hosted connectors like Google Drive), wrap them in stdio via the community [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) proxy, which handles the browser dance itself:
+
+```json
+"gdrive": {
+  "command": "npx",
+  "args": ["mcp-remote", "https://example.com/mcp"]
+}
+```
+
+### Approvals
+
+MandoCode cannot tell a read-only MCP tool from a destructive one by inspecting arguments, so the first call of each `(server, tool)` pair prompts you with **Approve / Approve for session / Deny**. Pre-trusted tools can be listed under `autoApprove` in a server's config entry to skip the prompt entirely.
+
+### Slash commands
+
+- `/mcp` — shows each configured server with its transport, connection status, and live tool count
+- `/mcp add` — interactive wizard for adding a new server without hand-editing JSON
+- `/mcp remove <name>` — remove a server from config (with confirm)
+- `/mcp tools <server>` — list every tool exposed by connected servers with descriptions (server arg optional — omit to list all)
+- `/mcp-reload` — tears down every MCP client, restarts them, and re-registers their tools on the kernel (useful when you edit the config mid-session)
+
+### Toggle
+
+```bash
+mandocode --config set mcp false   # disable all MCP integration
+```
+
+Individual servers can be muted without deleting them — set `"disabled": true` on any entry in `mcpServers`.
 
 </details>
 

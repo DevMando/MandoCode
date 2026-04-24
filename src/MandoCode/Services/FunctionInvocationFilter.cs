@@ -43,6 +43,13 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// </summary>
     public Func<string, Task<DiffApprovalResult>>? OnCommandApprovalRequested { get; set; }
 
+    /// <summary>
+    /// Gate consulted for any function whose plugin name starts with <c>"mcp_"</c>.
+    /// First call of each (server, tool) pair prompts the user unless the tool is in the
+    /// server's <c>autoApprove</c> list. Null in tests that bypass the UI layer.
+    /// </summary>
+    public McpApprovalGate? McpApprovalGate { get; set; }
+
     // Project root accessor for resolving file paths when reading existing content
     private readonly ProjectRootAccessor? _projectRootAccessor;
     private string? ProjectRoot => _projectRootAccessor?.ProjectRoot;
@@ -164,6 +171,36 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                     return;
                 }
+            }
+        }
+
+        // MCP approval gate — any tool coming from an "mcp_<server>" plugin must be
+        // approved by the user the first time it runs in a session. Kept ahead of the
+        // dedup/UI-event logic so a denied call never hits the event bus.
+        if (McpApprovalGate != null &&
+            !string.IsNullOrEmpty(context.Function.PluginName) &&
+            context.Function.PluginName.StartsWith("mcp_", StringComparison.Ordinal))
+        {
+            var serverName = context.Function.PluginName.Substring("mcp_".Length);
+            var approval = await McpApprovalGate.RequestAsync(serverName, context.Function.Name, context.Function.Description);
+
+            if (approval.Response != DiffApprovalResponse.Approved &&
+                approval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
+            {
+                if (approval.Response == DiffApprovalResponse.CancelPlan)
+                    _currentScope.Value?.RequestPlanCancellation();
+
+                var denial = approval.Response switch
+                {
+                    DiffApprovalResponse.Denied =>
+                        $"User denied the MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.",
+                    DiffApprovalResponse.CancelPlan =>
+                        $"User cancelled the plan while reviewing MCP tool '{context.Function.Name}'. Stop all further work.",
+                    _ =>
+                        $"User rejected the MCP tool call and provided new instructions: {approval.UserMessage}"
+                };
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, denial);
+                return;
             }
         }
 
