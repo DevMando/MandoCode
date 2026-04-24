@@ -82,6 +82,12 @@ class Program
                 return new SkillLoader(cfg, projectRootAccessor);
             });
 
+            // MCP lifecycle — manager owns client connections, gate guards first-use approvals.
+            // Manager.StartAllAsync() is invoked from App.razor's initial render so the UI is
+            // ready to surface connection failures inline.
+            services.AddSingleton(provider => new McpClientManager(provider.GetRequiredService<MandoCodeConfig>()));
+            services.AddSingleton(provider => new McpApprovalGate(provider.GetRequiredService<MandoCodeConfig>()));
+
             // Register TerminalThemeService as singleton
             services.AddSingleton(provider =>
             {
@@ -99,7 +105,9 @@ class Program
                 var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
                 var planHandoff = provider.GetRequiredService<PlanHandoff>();
                 var skillLoader = provider.GetRequiredService<SkillLoader>();
-                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader);
+                var mcpManager = provider.GetRequiredService<McpClientManager>();
+                var mcpGate = provider.GetRequiredService<McpApprovalGate>();
+                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader, mcpManager, mcpGate);
             });
 
             // Register TaskPlannerService as singleton
@@ -220,6 +228,8 @@ class Program
         Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
         Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
         Console.WriteLine("  • webSearch          - Enable/disable web search capabilities (true/false)");
+        Console.WriteLine("  • mcp                - Enable/disable MCP server integration (true/false)");
+        Console.WriteLine("  • renderTimeout      - Markdown render timeout in seconds (5-300)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode --config show");
@@ -384,6 +394,39 @@ class Program
                 {
                     config.EnableWebSearch = enableWebSearch;
                     Console.WriteLine($"✓ Web search {(enableWebSearch ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    Console.WriteLine("Error: Value must be 'true' or 'false'");
+                    return;
+                }
+                break;
+
+            case "rendertimeout":
+            case "markdownrendertimeout":
+            case "markdownrendertimeoutseconds":
+                if (int.TryParse(value, out var renderTimeout) && MandoCodeConfig.IsValidMarkdownRenderTimeout(renderTimeout))
+                {
+                    config.MarkdownRenderTimeoutSeconds = renderTimeout;
+                    Console.WriteLine($"✓ Set markdown render timeout to: {renderTimeout}s");
+                }
+                else
+                {
+                    Console.WriteLine($"Error: Render timeout must be between {MandoCodeConfig.MinMarkdownRenderTimeoutSeconds} and {MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds} seconds");
+                    return;
+                }
+                break;
+
+            case "mcp":
+            case "enablemcp":
+                if (bool.TryParse(value, out var enableMcp))
+                {
+                    config.EnableMcp = enableMcp;
+                    Console.WriteLine($"✓ MCP {(enableMcp ? "enabled" : "disabled")}");
+                    if (enableMcp && config.McpServers.Count == 0)
+                    {
+                        Console.WriteLine($"  Edit {MandoCodeConfig.GetDefaultConfigPath()} to add servers under \"mcpServers\".");
+                    }
                 }
                 else
                 {
