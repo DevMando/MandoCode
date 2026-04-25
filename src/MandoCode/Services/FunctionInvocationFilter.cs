@@ -182,6 +182,15 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             context.Function.PluginName.StartsWith("mcp_", StringComparison.Ordinal))
         {
             var serverName = context.Function.PluginName.Substring("mcp_".Length);
+
+            // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+            if (_currentScope.Value?.ApprovalsRevoked == true)
+            {
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function,
+                    $"User denied a previous tool in this batch — auto-denying MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.");
+                return;
+            }
+
             var approval = await McpApprovalGate.RequestAsync(serverName, context.Function.Name, context.Function.Description);
 
             if (approval.Response != DiffApprovalResponse.Approved &&
@@ -189,6 +198,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 if (approval.Response == DiffApprovalResponse.CancelPlan)
                     _currentScope.Value?.RequestPlanCancellation();
+                if (approval.Response == DiffApprovalResponse.Denied)
+                    _currentScope.Value?.RevokeRemainingApprovals();
 
                 var denial = approval.Response switch
                 {
@@ -308,6 +319,22 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             var newText = newTextObj?.ToString() ?? "";
             var editPath = editPathObj?.ToString() ?? "";
 
+            // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+            if (_currentScope.Value?.ApprovalsRevoked == true)
+            {
+                var autoDenyMsg = $"User denied a previous tool in this batch — auto-denying edit to '{editPath}'. Do not retry unless the user asks.";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, autoDenyMsg);
+                OnFunctionCompleted?.Invoke(new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = autoDenyMsg,
+                    Success = true
+                });
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+
             var preview = BuildEditPreview(capturedOldContent, oldText, newText);
             if (preview.Error != null)
             {
@@ -336,6 +363,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 if (editApproval.Response == DiffApprovalResponse.CancelPlan)
                     _currentScope.Value?.RequestPlanCancellation();
+                if (editApproval.Response == DiffApprovalResponse.Denied)
+                    _currentScope.Value?.RevokeRemainingApprovals();
 
                 var resultMsg = editApproval.Response switch
                 {
@@ -892,6 +921,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (string.IsNullOrEmpty(relativePath) || newContent == null)
             return null;
 
+        // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+        if (_currentScope.Value?.ApprovalsRevoked == true)
+            return $"User denied a previous tool in this batch — auto-denying write to '{relativePath}'. Do not retry unless the user asks.";
+
         // Request approval from the UI (oldContent is pre-captured, null for new files)
         var approval = await OnWriteApprovalRequested(relativePath, oldContent, newContent);
 
@@ -902,6 +935,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 return null; // Proceed with the write
 
             case DiffApprovalResponse.Denied:
+                _currentScope.Value?.RevokeRemainingApprovals();
                 return $"User denied the file write to '{relativePath}'. Do not retry this write unless the user asks.";
 
             case DiffApprovalResponse.NewInstructions:
@@ -932,6 +966,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (string.IsNullOrEmpty(relativePath))
             return null;
 
+        // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+        if (_currentScope.Value?.ApprovalsRevoked == true)
+            return $"User denied a previous tool in this batch — auto-denying deletion of '{relativePath}'. Do not retry unless the user asks.";
+
         var approval = await OnDeleteApprovalRequested(relativePath, existingContent);
 
         switch (approval.Response)
@@ -941,6 +979,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 return null; // Proceed with the delete
 
             case DiffApprovalResponse.Denied:
+                _currentScope.Value?.RevokeRemainingApprovals();
                 return $"User denied the deletion of '{relativePath}'. Do not retry unless the user asks.";
 
             case DiffApprovalResponse.NewInstructions:
@@ -970,6 +1009,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (string.IsNullOrEmpty(command))
             return null;
 
+        // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+        if (_currentScope.Value?.ApprovalsRevoked == true)
+            return $"User denied a previous tool in this batch — auto-denying command '{command}'. Do not retry unless the user asks.";
+
         var approval = await OnCommandApprovalRequested(command);
 
         switch (approval.Response)
@@ -979,6 +1022,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 return null; // Proceed with the command
 
             case DiffApprovalResponse.Denied:
+                _currentScope.Value?.RevokeRemainingApprovals();
                 return $"User denied the command '{command}'. Do not retry this command unless the user asks.";
 
             case DiffApprovalResponse.NewInstructions:
