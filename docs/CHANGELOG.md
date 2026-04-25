@@ -4,6 +4,8 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-04-25
+
 ### Added
 - **MCP (Model Context Protocol) support** — MandoCode can now connect to any MCP server (stdio or remote HTTP/SSE) at startup and expose its tools to the model alongside the built-in plugins. Config shape mirrors Claude Desktop's `mcpServers` block, so snippets from any MCP server's README drop in unchanged. Static bearer tokens via `headers` work; OAuth-only servers can be reached through the `npx mcp-remote` wrapper. First call of each `(server, tool)` pair prompts for approval (reuses the existing diff-approval UX); servers list their tools under an `mcp_<server>` plugin. New commands: `/mcp` (status + tool counts per server), `/mcp add` (interactive wizard that adds a server without hand-editing JSON — uses RazorConsole's native `TextInput`/`Select` so it stays compatible with the VDOM render loop), `/mcp remove <name>`, `/mcp tools [server]`, `/mcp-reload` (restart and re-register). New config keys: `enableMcp` (master switch, default true) and `mcpServers` (empty by default).
 - **Configurable markdown render timeout** — new `markdownRenderTimeoutSeconds` config key (default 60, range 5–300). Large tool-grounded responses (MCP output, many tables, many code blocks) can legitimately take 30–60 seconds to render; the previous hardcoded 30s guard fell back to raw text too eagerly. Raise via `mandocode --config set renderTimeout 120`.
