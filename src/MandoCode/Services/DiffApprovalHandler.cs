@@ -12,24 +12,42 @@ public class DiffApprovalHandler
     private readonly SpinnerService _spinner;
     private readonly ProjectRootAccessor _projectRoot;
     private readonly PlanHandoff _planHandoff;
+    private readonly CancelKeyCoordinator _keyCoordinator;
+    private readonly InstructionPromptCoordinator _instructionPrompt;
 
     private bool _globalWriteBypass = false;
     private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    public DiffApprovalHandler(SpinnerService spinner, ProjectRootAccessor projectRoot, PlanHandoff planHandoff)
+    public DiffApprovalHandler(
+        SpinnerService spinner,
+        ProjectRootAccessor projectRoot,
+        PlanHandoff planHandoff,
+        CancelKeyCoordinator keyCoordinator,
+        InstructionPromptCoordinator instructionPrompt)
     {
         _spinner = spinner;
         _projectRoot = projectRoot;
         _planHandoff = planHandoff;
+        _keyCoordinator = keyCoordinator;
+        _instructionPrompt = instructionPrompt;
     }
 
-    // Labels used as both UI text and switch discriminators.
-    private const string CancelPlanLabel = "Cancel the plan";
+    // Labels used as both UI text and switch discriminators. Spectre markup is
+    // baked into the strings so SelectionPrompt renders them in color while
+    // string equality at selection time still resolves correctly.
+    private const string ApproveLabel = "[green]Approve[/]";
+    private const string ApproveDeletionLabel = "[green]Approve deletion[/]";
+    private const string ApproveNoAskWriteLabel = "[green]Approve - okay to write & modify files don't ask me again[/]";
+    private const string ApproveNoAskRunLabel = "[green]Approve - okay to run commands don't ask me again[/]";
+    private const string ApproveNoAskDeleteLabel = "[green]Approve - okay to write, modify & delete files don't ask me again[/]";
+    private const string DenyLabel = "[red]Deny[/]";
+    private const string ProvideInstructionsLabel = "[mediumpurple1]Provide new instructions[/]";
+    private const string CancelPlanLabel = "[red]Cancel the plan[/]";
 
     private string FileLink(string relativePath) =>
         FileLinkHelper.FileLink(_projectRoot.ProjectRoot, relativePath);
 
-    public Task<DiffApprovalResult> HandleDiffApproval(string relativePath, string? oldContent, string newContent)
+    public async Task<DiffApprovalResult> HandleDiffApproval(string relativePath, string? oldContent, string newContent)
     {
         // Stop the spinner so we have clean console output
         _spinner.Stop();
@@ -51,74 +69,79 @@ public class DiffApprovalHandler
             AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved[/]");
             AnsiConsole.WriteLine();
             _spinner.Start();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+            return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
         // Build choices for the SelectionPrompt — now safe since our spinner is stopped
         var noAskLabel = isNewFile
-            ? "Approve - okay to write & modify files don't ask me again"
-            : $"Approve - Don't ask again to modify {fileName}";
+            ? ApproveNoAskWriteLabel
+            : $"[green]Approve - Don't ask again to modify {Spectre.Console.Markup.Escape(fileName)}[/]";
 
         var choices = new List<string>
         {
-            "Approve",
+            ApproveLabel,
             noAskLabel,
-            "Deny",
-            "Provide new instructions"
+            DenyLabel,
+            ProvideInstructionsLabel
         };
         // "Cancel the plan" only makes sense when a plan is actually running — in a direct
         // chat, the user can just pick Deny to abort this single tool call.
         if (_planHandoff.IsExecuting) choices.Add(CancelPlanLabel);
 
-        var approvalChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Apply these changes?[/]")
-                .AddChoices(choices)
-        );
-
+        // Single suppression scope spans BOTH prompts and the if/else dispatch.
+        // If the user picks "Provide new instructions" and starts typing ahead
+        // before the TextPrompt opens, those queued keys aren't eaten by the
+        // listener during the gap.
         DiffApprovalResult result;
-
-        if (approvalChoice == "Approve")
+        using (_keyCoordinator.Suppress())
         {
-            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
-        }
-        else if (approvalChoice == noAskLabel)
-        {
-            AnsiConsole.MarkupLine("[green]Changes approved.[/]");
-            if (isNewFile)
-            {
-                _globalWriteBypass = true;
-                AnsiConsole.MarkupLine("[dim]All future writes will be auto-approved for this session.[/]");
-            }
-            else
-            {
-                _approvedFiles.Add(relativePath);
-                AnsiConsole.MarkupLine($"[dim]Future modifications to {Spectre.Console.Markup.Escape(fileName)} will be auto-approved.[/]");
-            }
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
-        }
-        else if (approvalChoice == "Deny")
-        {
-            AnsiConsole.MarkupLine("[red]Changes denied.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
-        }
-        else if (approvalChoice == CancelPlanLabel)
-        {
-            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
-        }
-        else // "Provide new instructions"
-        {
-            var instructions = AnsiConsole.Prompt(
-                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            var approvalChoice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Apply these changes?[/]")
+                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    .AddChoices(choices)
             );
-            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
-            result = new DiffApprovalResult
+
+            if (approvalChoice == ApproveLabel)
             {
-                Response = DiffApprovalResponse.NewInstructions,
-                UserMessage = instructions
-            };
+                AnsiConsole.MarkupLine("[green]Changes approved.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+            }
+            else if (approvalChoice == noAskLabel)
+            {
+                AnsiConsole.MarkupLine("[green]Changes approved.[/]");
+                if (isNewFile)
+                {
+                    _globalWriteBypass = true;
+                    AnsiConsole.MarkupLine("[dim]All future writes will be auto-approved for this session.[/]");
+                }
+                else
+                {
+                    _approvedFiles.Add(relativePath);
+                    AnsiConsole.MarkupLine($"[dim]Future modifications to {Spectre.Console.Markup.Escape(fileName)} will be auto-approved.[/]");
+                }
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+            }
+            else if (approvalChoice == DenyLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Changes denied.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+            }
+            else if (approvalChoice == CancelPlanLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
+            }
+            else // "Provide new instructions"
+            {
+                var instructions = await _instructionPrompt.RequestAsync("Enter your instructions:");
+                AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+                result = new DiffApprovalResult
+                {
+                    Response = DiffApprovalResponse.NewInstructions,
+                    UserMessage = instructions
+                };
+            }
         }
 
         AnsiConsole.WriteLine();
@@ -126,10 +149,10 @@ public class DiffApprovalHandler
         // Resume spinner for the rest of the AI call
         _spinner.Start();
 
-        return Task.FromResult(result);
+        return result;
     }
 
-    public Task<DiffApprovalResult> HandleCommandApproval(string command)
+    public async Task<DiffApprovalResult> HandleCommandApproval(string command)
     {
         // Stop the spinner so we have clean console output
         _spinner.Stop();
@@ -155,59 +178,60 @@ public class DiffApprovalHandler
             AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved command[/]");
             AnsiConsole.WriteLine();
             _spinner.Start();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+            return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
         var cmdChoices = new List<string>
         {
-            "Approve",
-            "Approve - okay to run commands don't ask me again",
-            "Deny",
-            "Provide new instructions"
+            ApproveLabel,
+            ApproveNoAskRunLabel,
+            DenyLabel,
+            ProvideInstructionsLabel
         };
         if (_planHandoff.IsExecuting) cmdChoices.Add(CancelPlanLabel);
 
-        var approvalChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Run this command?[/]")
-                .AddChoices(cmdChoices)
-        );
-
         DiffApprovalResult result;
-
-        if (approvalChoice == "Approve")
+        using (_keyCoordinator.Suppress())
         {
-            AnsiConsole.MarkupLine("[green]Command approved.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
-        }
-        else if (approvalChoice.StartsWith("Approve - okay"))
-        {
-            AnsiConsole.MarkupLine("[green]Command approved.[/]");
-            _globalWriteBypass = true;
-            AnsiConsole.MarkupLine("[dim]All future writes, deletions, and commands will be auto-approved for this session.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
-        }
-        else if (approvalChoice == "Deny")
-        {
-            AnsiConsole.MarkupLine("[red]Command denied.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
-        }
-        else if (approvalChoice == CancelPlanLabel)
-        {
-            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
-        }
-        else // "Provide new instructions"
-        {
-            var instructions = AnsiConsole.Prompt(
-                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            var approvalChoice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Run this command?[/]")
+                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    .AddChoices(cmdChoices)
             );
-            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
-            result = new DiffApprovalResult
+
+            if (approvalChoice == ApproveLabel)
             {
-                Response = DiffApprovalResponse.NewInstructions,
-                UserMessage = instructions
-            };
+                AnsiConsole.MarkupLine("[green]Command approved.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+            }
+            else if (approvalChoice == ApproveNoAskRunLabel)
+            {
+                AnsiConsole.MarkupLine("[green]Command approved.[/]");
+                _globalWriteBypass = true;
+                AnsiConsole.MarkupLine("[dim]All future writes, deletions, and commands will be auto-approved for this session.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+            }
+            else if (approvalChoice == DenyLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Command denied.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+            }
+            else if (approvalChoice == CancelPlanLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
+            }
+            else // "Provide new instructions"
+            {
+                var instructions = await _instructionPrompt.RequestAsync("Enter your instructions:");
+                AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+                result = new DiffApprovalResult
+                {
+                    Response = DiffApprovalResponse.NewInstructions,
+                    UserMessage = instructions
+                };
+            }
         }
 
         AnsiConsole.WriteLine();
@@ -215,10 +239,10 @@ public class DiffApprovalHandler
         // Resume spinner for the rest of the AI call
         _spinner.Start();
 
-        return Task.FromResult(result);
+        return result;
     }
 
-    public Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
+    public async Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
     {
         // Stop the spinner so we have clean console output
         _spinner.Stop();
@@ -274,59 +298,60 @@ public class DiffApprovalHandler
             AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved deletion[/]");
             AnsiConsole.WriteLine();
             _spinner.Start();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+            return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
         var delChoices = new List<string>
         {
-            "Approve deletion",
-            "Approve - okay to write, modify & delete files don't ask me again",
-            "Deny",
-            "Provide new instructions"
+            ApproveDeletionLabel,
+            ApproveNoAskDeleteLabel,
+            DenyLabel,
+            ProvideInstructionsLabel
         };
         if (_planHandoff.IsExecuting) delChoices.Add(CancelPlanLabel);
 
-        var approvalChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Delete this file?[/]")
-                .AddChoices(delChoices)
-        );
-
         DiffApprovalResult result;
-
-        if (approvalChoice == "Approve deletion")
+        using (_keyCoordinator.Suppress())
         {
-            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
-        }
-        else if (approvalChoice.StartsWith("Approve - okay"))
-        {
-            AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
-            _globalWriteBypass = true;
-            AnsiConsole.MarkupLine("[dim]All future writes and deletions will be auto-approved for this session.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
-        }
-        else if (approvalChoice == "Deny")
-        {
-            AnsiConsole.MarkupLine("[red]Deletion denied.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
-        }
-        else if (approvalChoice == CancelPlanLabel)
-        {
-            AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
-            result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
-        }
-        else // "Provide new instructions"
-        {
-            var instructions = AnsiConsole.Prompt(
-                new TextPrompt<string>("[yellow]Enter your instructions:[/]")
+            var approvalChoice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Delete this file?[/]")
+                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    .AddChoices(delChoices)
             );
-            AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
-            result = new DiffApprovalResult
+
+            if (approvalChoice == ApproveDeletionLabel)
             {
-                Response = DiffApprovalResponse.NewInstructions,
-                UserMessage = instructions
-            };
+                AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
+            }
+            else if (approvalChoice == ApproveNoAskDeleteLabel)
+            {
+                AnsiConsole.MarkupLine("[green]Deletion approved.[/]");
+                _globalWriteBypass = true;
+                AnsiConsole.MarkupLine("[dim]All future writes and deletions will be auto-approved for this session.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };
+            }
+            else if (approvalChoice == DenyLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Deletion denied.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.Denied };
+            }
+            else if (approvalChoice == CancelPlanLabel)
+            {
+                AnsiConsole.MarkupLine("[red]Plan cancellation requested.[/]");
+                result = new DiffApprovalResult { Response = DiffApprovalResponse.CancelPlan };
+            }
+            else // "Provide new instructions"
+            {
+                var instructions = await _instructionPrompt.RequestAsync("Enter your instructions:");
+                AnsiConsole.MarkupLine("[yellow]Redirecting with new instructions...[/]");
+                result = new DiffApprovalResult
+                {
+                    Response = DiffApprovalResponse.NewInstructions,
+                    UserMessage = instructions
+                };
+            }
         }
 
         AnsiConsole.WriteLine();
@@ -334,7 +359,7 @@ public class DiffApprovalHandler
         // Resume spinner for the rest of the AI call
         _spinner.Start();
 
-        return Task.FromResult(result);
+        return result;
     }
 
     private void RenderDiffPanel(string relativePath, List<DiffLine> displayLines, int additions, int deletions, bool isNewFile)
@@ -428,27 +453,33 @@ public class DiffApprovalHandler
             return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
         }
 
+        var noAskMcpLabel = $"[green]Approve - don't ask again for {Spectre.Console.Markup.Escape(toolName)} this session[/]";
         var mcpChoices = new List<string>
         {
-            "Approve",
-            $"Approve - don't ask again for {toolName} this session",
-            "Deny"
+            ApproveLabel,
+            noAskMcpLabel,
+            DenyLabel
         };
         if (_planHandoff.IsExecuting) mcpChoices.Add(CancelPlanLabel);
 
-        var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Run this MCP tool?[/]")
-                .AddChoices(mcpChoices)
-        );
+        string choice;
+        using (_keyCoordinator.Suppress())
+        {
+            choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Run this MCP tool?[/]")
+                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    .AddChoices(mcpChoices)
+            );
+        }
 
         DiffApprovalResult result;
-        if (choice == "Approve")
+        if (choice == ApproveLabel)
         {
             AnsiConsole.MarkupLine("[green]Approved.[/]");
             result = new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
-        else if (choice.StartsWith("Approve - don't ask"))
+        else if (choice == noAskMcpLabel)
         {
             AnsiConsole.MarkupLine("[green]Approved for session.[/]");
             result = new DiffApprovalResult { Response = DiffApprovalResponse.ApprovedNoAskAgain };

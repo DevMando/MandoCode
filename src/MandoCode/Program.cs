@@ -62,6 +62,14 @@ class Program
             // Register OperationDisplayRenderer as singleton
             services.AddSingleton<OperationDisplayRenderer>();
 
+            // Register CancelKeyCoordinator — pauses App's background Escape listener
+            // while a Spectre prompt is active so arrow keys aren't silently eaten.
+            services.AddSingleton<CancelKeyCoordinator>();
+
+            // Register InstructionPromptCoordinator — bridges DiffApprovalHandler's
+            // "Provide new instructions" path to a VDOM TextInput in App.razor.
+            services.AddSingleton<InstructionPromptCoordinator>();
+
             // Register DiffApprovalHandler as singleton
             services.AddSingleton<DiffApprovalHandler>();
 
