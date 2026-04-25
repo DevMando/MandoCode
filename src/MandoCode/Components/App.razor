@@ -14,6 +14,8 @@
 @inject SpinnerService Spinner
 @inject OperationDisplayRenderer OperationRenderer
 @inject DiffApprovalHandler DiffApproval
+@inject CancelKeyCoordinator KeyCoordinator
+@inject InstructionPromptCoordinator InstructionCoordinator
 @inject ShellCommandHandler Shell
 @inject TerminalThemeService ThemeService
 @inject InputStateMachine StateMachine
@@ -68,13 +70,31 @@
     }
 </Rows>
 
-@* VDOM input — always rendered once interactive loop starts, disabled during processing *@
-@if (_showPrompt)
+@* VDOM input — always rendered once interactive loop starts, disabled during processing.
+   Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
+@if (_showPrompt && !InstructionCoordinator.IsActive)
 {
     <PromptInput OnSubmit="HandleVdomSubmit"
                  OnAutocompleteRequested="HandleAutocompleteRequested"
                  InitialValue="@_promptInitialValue"
                  Disabled="@_isProcessing" />
+}
+
+@* Instruction input — surfaced by DiffApprovalHandler's "Provide new instructions" branch.
+   Bridged via InstructionPromptCoordinator (TCS) so the imperative handler can await VDOM input. *@
+@if (InstructionCoordinator.IsActive)
+{
+    <TextInput @bind-Value="_instructionValue"
+               OnSubmit="HandleInstructionSubmit"
+               Label="@InstructionCoordinator.Prompt"
+               LabelColor="Color.Yellow"
+               ValueColor="@(new Color(255, 200, 80))"
+               PlaceholderColor="Color.Grey"
+               BorderColor="Color.Yellow"
+               FocusedBorderColor="Color.Yellow"
+               BorderStyle="BoxBorder.Rounded"
+               Expand="true"
+               FocusOrder="0" />
 }
 
 @* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
@@ -144,6 +164,11 @@
     private string[] _wizardSelectOptions = Array.Empty<string>();
     private string _wizardSelectValue = "";
     private TaskCompletionSource<string>? _wizardSelectTcs;
+
+    // Instruction input — bound to the VDOM TextInput surfaced when DiffApprovalHandler
+    // requests instructions via InstructionPromptCoordinator.
+    private string _instructionValue = "";
+
     private bool _isProcessing = false;
     private bool _autocompleteActive = false;
     private string _promptInitialValue = "";
@@ -266,6 +291,9 @@
 
         // Wire the propose_plan tool handoff to the approval + execution UI
         PlanHandoff.OnPlanRequested = HandleProposedPlanAsync;
+
+        // Re-render when DiffApprovalHandler activates the instruction TextInput.
+        InstructionCoordinator.StateChanged += OnInstructionStateChanged;
 
         // Wire up diff approval callbacks if enabled
         if (Config.EnableDiffApprovals)
@@ -809,6 +837,21 @@
     }
 
     /// <summary>
+    /// Bound to the instruction TextInput.OnSubmit. Hands the value back to whichever
+    /// DiffApprovalHandler call is awaiting via the coordinator.
+    /// </summary>
+    private void HandleInstructionSubmit(string value)
+    {
+        _instructionValue = "";
+        InstructionCoordinator.Submit(value ?? string.Empty);
+    }
+
+    private void OnInstructionStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
     /// Bound to the wizard's Select.ValueChanged — fires when the user presses Enter on a
     /// highlighted option (RazorConsole's Select uses Enter as the commit signal).
     /// </summary>
@@ -1129,7 +1172,9 @@
             {
                 while (!listenerCts.Token.IsCancellationRequested)
                 {
-                    if (Console.KeyAvailable)
+                    // Skip ReadKey while a Spectre prompt owns the console — otherwise
+                    // we race the prompt's own reader and silently drop arrow keys.
+                    if (!KeyCoordinator.Suppressed && Console.KeyAvailable)
                     {
                         var key = Console.ReadKey(intercept: true);
                         if (key.Key == ConsoleKey.Escape)
@@ -1264,7 +1309,7 @@
                             // Large responses with many tables/code blocks can take 10+ seconds to render.
                             var renderTask = Task.Run(() =>
                             {
-                                var renderable = MarkdownRenderer.BuildRenderable(responseText);
+                                var renderable = MarkdownHtmlRenderer.BuildRenderable(responseText, ProjectRoot.ProjectRoot);
                                 AnsiConsole.Write(renderable);
                             });
 
@@ -1380,11 +1425,15 @@
         AnsiConsole.WriteLine();
         DisplayPlan(plan);
 
-        var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("The assistant proposes this plan. What would you like to do?")
-                .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
-        );
+        string choice;
+        using (KeyCoordinator.Suppress())
+        {
+            choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("The assistant proposes this plan. What would you like to do?")
+                    .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
+            );
+        }
 
         if (choice == "Cancel request")
         {
@@ -1499,11 +1548,15 @@
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
-                var failChoice = AnsiConsole.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("How would you like to proceed?")
-                        .AddChoices(new[] { "Skip this step and continue", "Cancel the plan" })
-                );
+                string failChoice;
+                using (KeyCoordinator.Suppress())
+                {
+                    failChoice = AnsiConsole.Prompt(
+                        new SelectionPrompt<string>()
+                            .Title("How would you like to proceed?")
+                            .AddChoices(new[] { "Skip this step and continue", "Cancel the plan" })
+                    );
+                }
 
                 if (failChoice == "Cancel the plan")
                 {
@@ -2478,6 +2531,8 @@
             AI.OnFunctionCompleted -= _onFunctionCompletedHandler;
         if (_cancelKeyHandler != null)
             Console.CancelKeyPress -= _cancelKeyHandler;
+
+        InstructionCoordinator.StateChanged -= OnInstructionStateChanged;
 
         // Clear the PlanHandoff callback so late-arriving propose_plan calls don't
         // hit a disposed App. AIService stays, but plan requests just return the

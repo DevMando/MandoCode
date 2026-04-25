@@ -16,7 +16,16 @@
       "WebFetch(domain:www.nuget.org)",
       "Bash(python3 *)",
       "Bash(awk 'NR==841 || NR==869' C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Components/App.razor)",
-      "Bash(xargs wc *)"
+      "Bash(xargs wc *)",
+      "Read(//c/Users/MandoAdmin/.nuget/packages/razorconsole.core/**)",
+      "Read(//c/Users/MandoAdmin/.nuget/packages/razorconsole.core//**)",
+      "PowerShell($dll = \"C:\\\\Users\\\\MandoAdmin\\\\.nuget\\\\packages\\\\razorconsole.core\\\\0.5.0-alpha.20260225-7c02f3c\\\\lib\\\\net8.0\\\\RazorConsole.Core.dll\"; $bytes = [System.IO.File]::ReadAllBytes\\($dll\\); $text = [System.Text.Encoding]::UTF8.GetString\\($bytes\\); $matches = [regex]::Matches\\($text, '[\\\\x20-\\\\x7e]{8,}'\\); $markdownHits = $matches | Where-Object { $_.Value -match 'Markdown|MarkdigTranslator|LinkInline|SetLink|OSC|Hyperlink' } | Select-Object -ExpandProperty Value -Unique; $markdownHits | Select-Object -First 60)",
+      "PowerShell($dll = \"C:\\\\Users\\\\MandoAdmin\\\\.nuget\\\\packages\\\\razorconsole.core\\\\0.5.0-alpha.20260225-7c02f3c\\\\lib\\\\net8.0\\\\RazorConsole.Core.dll\"; $bytes = [System.IO.File]::ReadAllBytes\\($dll\\); $text = [System.Text.Encoding]::UTF8.GetString\\($bytes\\); $matches = [regex]::Matches\\($text, '[\\\\x20-\\\\x7e]{6,}'\\); $hits = $matches | Where-Object { $_.Value -match 'LinkInline|AutolinkInline|SetLink|Hyperlink|\\\\]8;|OSC|osc8' } | Select-Object -ExpandProperty Value -Unique; $hits | Select-Object -First 80)",
+      "PowerShell($dll = \"C:\\\\Users\\\\MandoAdmin\\\\.nuget\\\\packages\\\\razorconsole.core\\\\0.5.0-alpha.20260225-7c02f3c\\\\lib\\\\net8.0\\\\RazorConsole.Core.dll\"; $bytes = [System.IO.File]::ReadAllBytes\\($dll\\); $text = [System.Text.Encoding]::UTF8.GetString\\($bytes\\); $matches = [regex]::Matches\\($text, '[\\\\x20-\\\\x7e]{6,}'\\); $hits = $matches | Where-Object { $_.Value -match 'Markdig' } | Select-Object -ExpandProperty Value -Unique; $hits | Select-Object -First 80)",
+      "Bash(gh api *)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if 'markdown' in x['path'].lower\\(\\) or 'markdig' in x['path'].lower\\(\\) or 'link' in x['path'].lower\\(\\)]\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if 'Translator' in x['path'] and x['path'].endswith\\('.cs'\\)]\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if x['path'].endswith\\('.cs'\\) and \\('Render' in x['path'] or 'Vdom' in x['path']\\)]\")"
     ]
   }
 }
