@@ -14,7 +14,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.9.7</Version>
+    <Version>0.9.8</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -25,18 +25,27 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.9.6 — Quality, stability, and safety improvements
+v0.9.8 — MCP support, agentic robustness, and live shell streaming
 
 Added:
-- Unit test suite (65 tests) covering InputStateMachine and DiffService
-- Empty response recovery — helpful message instead of blank screen on context overflow
-- Rendering timeout guard with spinner — prevents permanent freezes on large responses
+- MCP (Model Context Protocol) support — connect to any MCP server (stdio or remote HTTP/SSE), tools auto-registered alongside built-in plugins. Interactive `/mcp add` wizard, per-tool first-use approval, `/mcp`, `/mcp tools`, `/mcp remove`, `/mcp-reload`.
+- Skills — model can auto-invoke user-defined skills based on name/description, or be force-loaded manually.
+- propose_plan tool — models self-classify multi-step requests via a Semantic Kernel function instead of a separate planning round-trip; ~300 lines of fragile text-parsing removed.
+- Per-turn circuit breakers, auto-continuation, and synthetic-summary recovery on context-window overflow — long agentic loops no longer silently hang or crash.
+- Streaming execute_command — shell tool now streams stdout/stderr line-by-line; the spinner shows live `$ &lt;cmd&gt; → &lt;latest line&gt;` activity.
+- Idle-based shell timeout — replaces the old 30s wall-clock kill with a 30s idle timeout (kills only after 30s of no output) plus a 10-minute hard ceiling. Long legitimate builds now run to completion as long as they're emitting output.
+- Configurable per-request timeout (`requestTimeoutMinutes`, default 15), tool-result char budget (`toolResultCharBudget`, default 100k), and markdown render timeout (`markdownRenderTimeoutSeconds`, default 60).
+- Shell-aware system prompt — detects cmd.exe vs bash and stops the model from emitting `head`/`grep`/`cat` on Windows.
 
-Fixed:
-- Timeout retry deadlock — timeouts no longer silently retry for up to 15 minutes
-- Silent exception suppression — 6 bare catch blocks now log to Debug
-- Shell command safety — uses ArgumentList instead of manual string escaping
-- Config validation consistency — maxTokens enforces [256, 131072] everywhere
+UI:
+- Spinner shows elapsed time and rotates its random message every 15s during long waits.
+- Live activity row above the spinner (used by streamed shell output, plan steps, MCP tools); persists in scrollback after the spinner stops if it was ever updated.
+- Inline auto-continuation and overflow-recovery markers so automatic restarts are visible instead of silent.
+- New plan approval UI (Execute / Reject / Cancel) replaces the old "Analyzing..." spinner phase.
+
+Changed:
+- Default per-request timeout raised from 5 min to 15 min.
+- AIService constructor signature gained PlanHandoff and SpinnerService; FileSystemPlugin constructor gained an optional SpinnerService.
     </PackageReleaseNotes>
   </PropertyGroup>
 

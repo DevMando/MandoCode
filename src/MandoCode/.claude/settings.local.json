@@ -7,7 +7,11 @@
       "Bash(git config:*)",
       "Bash(git checkout:*)",
       "Bash(dotnet add:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(dotnet clean *)",
+      "Bash(awk 'NR>=98 && NR<=110' /mnt/c/Users/DevMando/Desktop/MandoCode/src/MandoCode/Services/SpinnerService.cs)",
+      "Bash(python3 *)",
+      "Bash(git *)"
     ]
   }
 }

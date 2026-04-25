@@ -12,6 +12,15 @@ public class SpinnerService
     private Task? _spinnerTask;
     private readonly object _spinnerLock = new();
 
+    // Live-updatable activity line shown above the spinner. Mutable so callers
+    // (e.g. ExecuteCommand streaming subprocess output) can refresh it mid-spin.
+    private volatile string? _liveActivity;
+
+    // Tracks whether UpdateActivity fired during this spin. If it did, we preserve
+    // the final activity line in scrollback on Stop instead of clearing it — the
+    // streamed updates are signal worth keeping; the static initial activity isn't.
+    private volatile bool _activityWasUpdated;
+
     // How often to rotate the random "fun" message so long waits don't feel frozen.
     private static readonly TimeSpan MessageRotationInterval = TimeSpan.FromSeconds(15);
 
@@ -26,11 +35,13 @@ public class SpinnerService
         var frames = spinner.Frames.ToArray();
         var interval = (int)spinner.Interval.TotalMilliseconds;
         var hasActivity = !string.IsNullOrEmpty(activity);
+        _liveActivity = activity;
+        _activityWasUpdated = false;
         var startTime = DateTime.UtcNow;
         var lastMessageRotation = startTime;
 
-        // Write activity line immediately on the calling thread so it's visible
-        // before the background spinner task gets scheduled
+        // Reserve the activity line above the spinner. Live updates rewrite this
+        // same line via cursor-up so the streamed output doesn't scroll the screen.
         if (hasActivity)
         {
             Console.Write($"[2m  {activity}[0m\n");
@@ -42,6 +53,8 @@ public class SpinnerService
             _spinnerTask = Task.Run(async () =>
             {
                 var i = 0;
+                var lastRenderedActivity = activity;
+                var activityLineReserved = hasActivity;
                 try
                 {
                     while (!token.IsCancellationRequested)
@@ -53,6 +66,19 @@ public class SpinnerService
                         {
                             message = LoadingMessages.GetRandom();
                             lastMessageRotation = now;
+                        }
+
+                        // Pick up any live activity update. If the activity line
+                        // wasn't reserved at Start, we can't add one mid-flight
+                        // without scrolling — silently ignore in that case.
+                        var currentActivity = _liveActivity;
+                        if (activityLineReserved && currentActivity != lastRenderedActivity)
+                        {
+                            // Move up to the activity line, clear it, rewrite, drop back down.
+                            // [A = up one, \r = col 0, [2K = clear line, [B = down one.
+                            var redraw = currentActivity ?? string.Empty;
+                            Console.Write($"\r[2K[A\r[2K  [2m{redraw}[0m[B\r");
+                            lastRenderedActivity = currentActivity;
                         }
 
                         var frame = frames[i++ % frames.Length];
@@ -72,17 +98,36 @@ public class SpinnerService
                 catch (OperationCanceledException) { }
                 finally
                 {
-                    // Clear the spinner line
+                    // Clear the spinner line - animation is ephemeral, never preserved.
                     Console.Write($"\r[2K");
-                    // If we had an activity line, move cursor up and clear it too
-                    if (hasActivity)
+                    if (activityLineReserved)
                     {
+                        // Move up to the activity line and clear it.
                         Console.Write($"[A[2K");
+                        // If UpdateActivity ever fired, the streamed updates are
+                        // worth keeping in scrollback (e.g. "$ dotnet run -> ...").
+                        // Re-print as a normal line - \n drops cursor back onto
+                        // the (already-cleared) spinner line, ready for next output.
+                        if (_activityWasUpdated && !string.IsNullOrEmpty(lastRenderedActivity))
+                        {
+                            Console.WriteLine($"  [2m{lastRenderedActivity}[0m");
+                        }
                     }
                     Console.Write("\r");
                 }
             });
         }
+    }
+
+    /// <summary>
+    /// Updates the activity text shown above the spinner. Safe to call from any thread.
+    /// No-op if the spinner isn't running or wasn't started with an activity (the line
+    /// has to be reserved at Start time — we won't insert a new line mid-spin because
+    /// that would scroll the terminal).
+    /// </summary>
+    public void UpdateActivity(string? activity)
+    {
+        _liveActivity = activity;
     }
 
     /// <summary>
