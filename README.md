@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/images/MC.png" alt="MandoCode Logo" width="120">
+  <img src="docs/images/mcbanner.png" alt="MandoCode Logo" width="800">
 </p>
-
-<h1 align="center">MandoCode</h1>
 
 <p align="center">
   <strong>Your AI coding assistant — run locally or in the cloud with Ollama.</strong><br>
