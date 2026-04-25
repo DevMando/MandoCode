@@ -29,7 +29,7 @@ v0.9.8 — MCP support, agentic robustness, and live shell streaming
 
 Added:
 - MCP (Model Context Protocol) support — connect to any MCP server (stdio or remote HTTP/SSE), tools auto-registered alongside built-in plugins. Interactive `/mcp add` wizard, per-tool first-use approval, `/mcp`, `/mcp tools`, `/mcp remove`, `/mcp-reload`.
-- Skills — model can auto-invoke user-defined skills based on name/description, or be force-loaded manually.
+- Skills — user-defined skill packs (a folder containing a SKILL.md file) that the model can auto-invoke based on name/description via the new `load_skill(name)` function. Loaded from `~/.mandocode/skills/` and project-local `./.mandocode/skills/`. New `/skills` slash command lists installed skills.
 - propose_plan tool — models self-classify multi-step requests via a Semantic Kernel function instead of a separate planning round-trip; ~300 lines of fragile text-parsing removed.
 - Per-turn circuit breakers, auto-continuation, and synthetic-summary recovery on context-window overflow — long agentic loops no longer silently hang or crash.
 - Streaming execute_command — shell tool now streams stdout/stderr line-by-line; the spinner shows live `$ &lt;cmd&gt; → &lt;latest line&gt;` activity.
@@ -42,10 +42,15 @@ UI:
 - Live activity row above the spinner (used by streamed shell output, plan steps, MCP tools); persists in scrollback after the spinner stops if it was ever updated.
 - Inline auto-continuation and overflow-recovery markers so automatic restarts are visible instead of silent.
 - New plan approval UI (Execute / Reject / Cancel) replaces the old "Analyzing..." spinner phase.
+- Tighter markdown / HTML rendering — reworked renderer produces noticeably more compact output for headings, bullets, and tables, plus a refreshed color palette.
 
 Changed:
 - Default per-request timeout raised from 5 min to 15 min.
 - AIService constructor signature gained PlanHandoff and SpinnerService; FileSystemPlugin constructor gained an optional SpinnerService.
+
+Fixed:
+- Paste with newlines no longer auto-submits the prompt before the user finishes editing.
+- Keystrokes typed during diff-approval "additional instructions" prompts are no longer dropped by the parent input loop.
     </PackageReleaseNotes>
   </PropertyGroup>
 
