@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.SemanticKernel;
 using MandoCode.Models;
@@ -13,6 +14,7 @@ namespace MandoCode.Plugins;
 public class FileSystemPlugin
 {
     private readonly ProjectRootAccessor ProjectRootAccessor;
+    private readonly SpinnerService? _spinner;
     private string ProjectRoot => ProjectRootAccessor.ProjectRoot;
     private readonly HashSet<string> _ignoreDirectories = new(MandoCodeConfig.DefaultIgnoreDirectories);
 
@@ -22,9 +24,10 @@ public class FileSystemPlugin
     private readonly object _cacheLock = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
 
-    public FileSystemPlugin(ProjectRootAccessor projectRootAccessor)
+    public FileSystemPlugin(ProjectRootAccessor projectRootAccessor, SpinnerService? spinner = null)
     {
         ProjectRootAccessor = projectRootAccessor;
+        _spinner = spinner;
     }
 
     /// <summary>
@@ -498,21 +501,25 @@ public class FileSystemPlugin
     }
 
     /// <summary>
-    /// Executes a shell command in the project root directory.
+    /// Executes a shell command in the project root directory with idle-based timeout.
     /// </summary>
     [KernelFunction("execute_command")]
-    [Description("Executes a shell command (e.g., git status, dotnet build, npm install). Runs in the project root directory. 30-second timeout. Output capped at 5000 characters. Avoid long-running commands.")]
+    [Description("Executes a shell command (e.g., git status, dotnet build, npm install). Runs in the project root directory. Killed after 30 seconds of no output, or 10 minutes total. Output capped at 5000 characters.")]
     public async Task<string> ExecuteCommand(
         [Description("The shell command to execute (e.g., 'git status', 'dotnet build')")] string command)
     {
+        // Intercept cd commands to update the project root
+        if (command == "cd" || command.StartsWith("cd "))
+        {
+            return HandleCdCommand(command);
+        }
+
+        const int maxOutputChars = 5000;
+        var idleTimeout = TimeSpan.FromSeconds(30);
+        var hardCeiling = TimeSpan.FromMinutes(10);
+
         try
         {
-            // Intercept cd commands to update the project root
-            if (command == "cd" || command.StartsWith("cd "))
-            {
-                return HandleCdCommand(command);
-            }
-
             var isWindows = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo
             {
@@ -532,39 +539,110 @@ public class FileSystemPlugin
                 return "Error: Failed to start process.";
             }
 
-            var stderrTask = proc.StandardError.ReadToEndAsync();
-            var stdout = await proc.StandardOutput.ReadToEndAsync();
-            var stderr = await stderrTask;
+            var output = new StringBuilder();
+            var startedAt = DateTime.UtcNow;
+            var stateLock = new object();
+            var lastOutputAt = startedAt;
+            var lastLine = string.Empty;
+            var capped = false;
 
-            var exited = proc.WaitForExit(30_000);
-            if (!exited)
+            void OnLine(string? line, bool isErr)
             {
-                try { proc.Kill(); } catch (Exception ex) { Debug.WriteLine($"Failed to kill timed-out process: {ex.Message}"); }
-                return "Error: Command timed out after 30 seconds.";
+                if (line == null) return;
+                lock (stateLock)
+                {
+                    lastOutputAt = DateTime.UtcNow;
+                    lastLine = line;
+                    if (!capped)
+                    {
+                        var prefix = isErr ? "[err] " : string.Empty;
+                        // Reserve room for the truncation footer; cap when we'd cross.
+                        if (output.Length + prefix.Length + line.Length + 1 > maxOutputChars)
+                        {
+                            capped = true;
+                        }
+                        else
+                        {
+                            output.Append(prefix).AppendLine(line);
+                        }
+                    }
+                }
+                _spinner?.UpdateActivity(BuildActivity(command, line));
             }
 
-            var output = string.Empty;
-            if (!string.IsNullOrEmpty(stdout))
-                output += stdout;
-            if (!string.IsNullOrEmpty(stderr))
-                output += (string.IsNullOrEmpty(output) ? "" : "\n") + stderr;
-            if (string.IsNullOrEmpty(output))
-                output = "(no output)";
+            proc.OutputDataReceived += (_, e) => OnLine(e.Data, false);
+            proc.ErrorDataReceived += (_, e) => OnLine(e.Data, true);
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
 
-            // Cap output to prevent context blowup from large command results
-            const int maxOutputChars = 5000;
-            if (output.Length > maxOutputChars)
+            _spinner?.UpdateActivity(BuildActivity(command, null));
+
+            string? killReason = null;
+            while (!proc.HasExited)
             {
-                output = output[..maxOutputChars] + "\n... [output truncated at 5000 characters]";
+                var now = DateTime.UtcNow;
+                DateTime lastSeen;
+                lock (stateLock) { lastSeen = lastOutputAt; }
+
+                if (now - lastSeen > idleTimeout)
+                {
+                    killReason = $"idle {(int)idleTimeout.TotalSeconds}s with no output";
+                    break;
+                }
+                if (now - startedAt > hardCeiling)
+                {
+                    killReason = $"hit {(int)hardCeiling.TotalMinutes}m hard ceiling";
+                    break;
+                }
+                await Task.Delay(250);
             }
 
-            return $"Exit code: {proc.ExitCode}\n{output}";
+            if (killReason != null)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch (Exception ex) { Debug.WriteLine($"Kill failed: {ex.Message}"); }
+                try { proc.WaitForExit(2000); } catch { }
+
+                var elapsed = (int)(DateTime.UtcNow - startedAt).TotalSeconds;
+                string snapshot;
+                lock (stateLock) { snapshot = output.ToString().TrimEnd(); }
+                var lastLineSafe = string.IsNullOrEmpty(lastLine) ? "(none)" : Truncate(lastLine, 200);
+                var partial = string.IsNullOrEmpty(snapshot) ? "(no output before kill)" : snapshot;
+                return $"Killed: {killReason}. Elapsed: {elapsed}s. Last line: {lastLineSafe}\n--- partial output ---\n{partial}";
+            }
+
+            // Process exited cleanly. WaitForExit() (no timeout) flushes any
+            // outstanding async OutputDataReceived callbacks.
+            proc.WaitForExit();
+
+            string result;
+            bool wasCapped;
+            lock (stateLock)
+            {
+                result = output.ToString().TrimEnd();
+                wasCapped = capped;
+            }
+
+            if (string.IsNullOrEmpty(result)) result = "(no output)";
+            if (wasCapped) result += "\n... [output truncated at 5000 characters]";
+
+            return $"Exit code: {proc.ExitCode}\n{result}";
         }
         catch (Exception ex)
         {
             return $"Error executing command: {ex.Message}";
         }
     }
+
+    private static string BuildActivity(string command, string? latestLine)
+    {
+        var cmd = Truncate(command, 60);
+        if (string.IsNullOrEmpty(latestLine))
+            return $"$ {cmd}";
+        return $"$ {cmd} → {Truncate(latestLine, 80)}";
+    }
+
+    private static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..(max - 1)] + "…";
 
     private string HandleCdCommand(string command)
     {

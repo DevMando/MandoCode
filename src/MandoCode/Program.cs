@@ -115,7 +115,8 @@ class Program
                 var skillLoader = provider.GetRequiredService<SkillLoader>();
                 var mcpManager = provider.GetRequiredService<McpClientManager>();
                 var mcpGate = provider.GetRequiredService<McpApprovalGate>();
-                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader, mcpManager, mcpGate);
+                var spinner = provider.GetRequiredService<SpinnerService>();
+                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader, mcpManager, mcpGate, spinner);
             });
 
             // Register TaskPlannerService as singleton

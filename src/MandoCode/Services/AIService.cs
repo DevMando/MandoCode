@@ -36,6 +36,7 @@ public class AIService
     private readonly SkillLoader _skillLoader;
     private readonly McpClientManager _mcpManager;
     private readonly McpApprovalGate _mcpApprovalGate;
+    private readonly SpinnerService _spinner;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     // Named event handlers stored so we can detach them when rebuilding the kernel
@@ -113,7 +114,7 @@ public class AIService
         }
     }
 
-    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader, McpClientManager mcpManager, McpApprovalGate mcpApprovalGate)
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader, McpClientManager mcpManager, McpApprovalGate mcpApprovalGate, SpinnerService spinner)
     {
         _projectRootAccessor = projectRootAccessor;
         _config = config;
@@ -122,6 +123,7 @@ public class AIService
         _skillLoader = skillLoader;
         _mcpManager = mcpManager;
         _mcpApprovalGate = mcpApprovalGate;
+        _spinner = spinner;
         // Append shell-specific rules (cmd.exe vs bash) + the skill index so the model
         // knows which user-defined workflows are available for load_skill().
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
@@ -195,7 +197,7 @@ public class AIService
             endpoint: new Uri(_config.OllamaEndpoint)
         );
 
-        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor);
+        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner);
         if (_config.IgnoreDirectories.Any())
         {
             fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);

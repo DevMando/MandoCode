@@ -15,6 +15,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Shell-aware system prompt** — `ShellEnvironment` detects cmd.exe vs bash at startup and appends OS-specific rules so the model stops emitting `head`/`grep`/`cat` on Windows. Prefers MandoCode's own `read_file_contents` / `search_text_in_files` / `list_files_match_glob_pattern` over shelling out.
 - **Config keys**: `requestTimeoutMinutes` (default 15, range 1–60), `toolResultCharBudget` (default 100k, range 50k–4M), `enableAutoContinuation` (default true), `maxAutoContinuations` (default 3, range 0–10).
 - **Clearer overflow error** — when recovery can't rescue the turn (e.g. max continuations hit), `FormatErrorMessage` now detects context-overflow patterns and returns an actionable message (`/clear`, lower budget, switch model) instead of "make sure Ollama is running".
+- **Streaming `execute_command` with idle-based timeout** — the `execute_command` tool no longer buffers stdout/stderr until the process exits. Output is now streamed line-by-line via `OutputDataReceived`/`ErrorDataReceived` handlers, with each line piped to the spinner's live activity row (`$ <cmd> → <latest line>`). The hardcoded 30s wall-clock timeout has been replaced by a 30-second **idle** timeout (kills only after 30s of *no new output*) plus a 10-minute hard ceiling. A long but progressing build (`dotnet build`, `npm install`, full test runs) now runs to completion as long as it keeps emitting output; a genuinely hung process still dies at 30s of silence. On kill, the LLM gets a richer message — `Killed: idle 30s with no output. Elapsed: 47s. Last line: …` plus the partial output captured so far — instead of `"Error: Command timed out after 30 seconds."`.
 
 ### UI
 - **Spinner shows elapsed time** — long waits now display `Defragging drives... · 2m 15s` so it's clear the model is still working vs. frozen.
@@ -25,11 +26,13 @@ All notable changes to MandoCode will be documented in this file.
 - **Inline overflow-recovery markers** — when the provider rejects the request, the user sees `⚠ Provider rejected request (context window full). Restarting step with a compacted summary (1/3).` instead of a raw Ollama stack trace.
 - **Config display updated** — `mandocode --config show` and the `/config` "View current configuration" panel now include `Request Timeout`, `Tool Result Budget`, and `Auto-Continuation` rows.
 - **Wizard** — `ConfigurationWizard` has a new "Per-Request Timeout" step (step 5), and the summary table gained a `Request Timeout` row.
+- **Live shell-command activity** — `SpinnerService` gained `UpdateActivity(string?)` so callers can refresh the dim line above the spinner mid-spin. `ExecuteCommand` calls it on every streamed line, giving the same "kinda like web search" status feedback for shell commands. On `Stop()`, if the activity was ever live-updated during the spin, the final line is preserved in scrollback (`$ dotnet run → Build succeeded.`) instead of being cleared along with the spinner — so you can scroll back and see what the last meaningful output was.
 
 ### Changed
 - Default per-request timeout raised from 5 min to 15 min, now configurable via `--config set timeout <N>`.
 - Task planning routes through the `propose_plan` tool instead of a separate `GetPlanAsync` round-trip. The heuristic `TaskPlannerService.RequiresPlanning` is trimmed to two near-zero-false-positive signals (3+ numbered items or >400 chars) and only exists as a directive nudge for models that won't self-invoke the tool.
 - `AIService` constructor now takes `PlanHandoff`. DI registration updated in `Program.cs`.
+- `FileSystemPlugin` constructor now takes an optional `SpinnerService` (passed by `AIService` so streamed shell output can update the live activity row). `AIService` constructor signature gained `SpinnerService spinner` as its final parameter; DI registration in `Program.cs` resolves the singleton and threads it through.
 
 ### Removed
 - `AIService.GetPlanAsync` and `SystemPrompts.TaskPlannerPrompt` — replaced by the tool-call path.
