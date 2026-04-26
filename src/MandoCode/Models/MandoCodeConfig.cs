@@ -34,11 +34,18 @@ public class MandoCodeConfig
         "packages", "dist", "build", "__pycache__", ".idea", ".claude"
     };
 
+    /// <summary>
+    /// Cloud model auto-pulled by the onboarding wizard when a signed-in user has no
+    /// models yet. Tuned for the broadest "best out-of-box" experience on hardware-light
+    /// setups; bump as Ollama publishes newer cloud-tier defaults.
+    /// </summary>
+    public const string DefaultCloudModel = "minimax-m2.7:cloud";
+
     // ── Validation ranges (single source of truth) ──
     public const double MinTemperature = 0.0;
     public const double MaxTemperature = 1.0;
     public const int MinMaxTokens = 256;
-    public const int MaxMaxTokens = 131072;
+    public const int MaxMaxTokens = 204800; // 200k — top of the reliable cloud-model context range. Cloud models advertised at 256k typically have a practical ceiling closer to 200k once system prompts, tool defs, and response budget are accounted for.
     public const int MinRequestTimeoutMinutes = 1;
     public const int MaxRequestTimeoutMinutes = 60;
     public const long MinToolResultCharBudget = 50_000;
@@ -82,10 +89,12 @@ public class MandoCodeConfig
     public double Temperature { get; set; } = 0.7;
 
     /// <summary>
-    /// Maximum tokens for model responses.
+    /// Maximum tokens for model responses. Default is 32k — large enough for
+    /// multi-file refactors on capable cloud models or 16 GB+ GPUs without forcing
+    /// users to think about it on first run. Lower it if local-model latency suffers.
     /// </summary>
     [JsonPropertyName("maxTokens")]
-    public int MaxTokens { get; set; } = 4096;
+    public int MaxTokens { get; set; } = 32768;
 
     /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
@@ -229,6 +238,15 @@ public class MandoCodeConfig
     public MusicConfig Music { get; set; } = new();
 
     /// <summary>
+    /// True once the user has completed (or explicitly skipped) the first-run onboarding
+    /// wizard. Stops the wizard from auto-launching on every cold start once the user has
+    /// made it through it. Reset to false to re-trigger; users can also re-run it on
+    /// demand via the /setup slash command.
+    /// </summary>
+    [JsonPropertyName("hasCompletedOnboarding")]
+    public bool HasCompletedOnboarding { get; set; } = false;
+
+    /// <summary>
     /// Resolves the effective user-skills directory, falling back to ~/.mandocode/skills.
     /// </summary>
     public string GetEffectiveUserSkillsDirectory()
@@ -322,6 +340,10 @@ public class MandoCodeConfig
         if (string.IsNullOrWhiteSpace(OllamaEndpoint))
             OllamaEndpoint = "http://localhost:11434";
 
+        // Note: we deliberately do NOT trim trailing slashes here — config preserves
+        // exactly what the user typed. Heal happens at probe time (OllamaSetupHelper)
+        // and only when the as-typed URL actually fails to reach the daemon.
+
         // Normalize MCP server lookups to case-insensitive — otherwise InputStateMachine's
         // lowercasing of commands ("/mcp remove Solana" → "mcp remove solana") would miss
         // an entry the user originally saved with capital letters. System.Text.Json
@@ -365,7 +387,7 @@ public class MandoCodeConfig
         }
 
         // Final fallback to default model with tool support
-        return "minimax-m2.5:cloud";
+        return DefaultCloudModel;
     }
 
     /// <summary>
@@ -393,9 +415,9 @@ public class MandoCodeConfig
         return new MandoCodeConfig
         {
             OllamaEndpoint = "http://localhost:11434",
-            ModelName = "minimax-m2.5:cloud",
+            ModelName = DefaultCloudModel,
             Temperature = 0.7,
-            MaxTokens = 4096,
+            MaxTokens = 32768,
             RequestTimeoutMinutes = 15,
             ToolResultCharBudget = 100_000,
             EnableAutoContinuation = true,

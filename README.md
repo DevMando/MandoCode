@@ -26,14 +26,27 @@ Run locally or connect to Ollama cloud — no API keys required for anything, in
 
 ---
 
+## Prerequisites
+
+- **.NET 8 SDK** — [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) *(SDK includes the runtime — install only the SDK)*
+- **Ollama** — [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
+
 ## Install
 
 ```bash
-# Prerequisites: .NET 8.0 SDK + Ollama installed and running
-
 dotnet tool install -g MandoCode
 mandocode
 ```
+
+First run launches a guided wizard: it detects Ollama, offers to start it, walks you through cloud sign-in if you'd like more powerful models, and auto-pulls a sensible default. You can re-run it any time with `/setup`.
+
+## Troubleshooting
+
+```bash
+mandocode --doctor
+```
+
+Prints your runtime version, Ollama status, models pulled, and cloud sign-in state.
 
 ### Or build from source
 
@@ -42,13 +55,6 @@ git clone https://github.com/DevMando/MandoCode.git
 cd MandoCode
 dotnet build src/MandoCode/MandoCode.csproj
 dotnet run --project src/MandoCode/MandoCode.csproj -- /path/to/your/project
-```
-
-On first run, MandoCode uses `minimax-m2.5:cloud` by default. Run `/config` inside the app or configure from the command line:
-
-```bash
-mandocode config set model qwen2.5-coder:14b
-mandocode config set endpoint http://localhost:11434
 ```
 
 ---
@@ -210,7 +216,7 @@ Models with **tool/function calling** support work best with MandoCode.
 
 | Model | Notes |
 |-------|-------|
-| `minimax-m2.5:cloud` | Default — excellent tool support |
+| `minimax-m2.7:cloud` | Default — excellent tool support |
 | `kimi-k2.5:cloud` | Strong general-purpose |
 | `qwen3-coder:480b-cloud` | Code-focused |
 
@@ -238,7 +244,7 @@ Located at `~/.mandocode/config.json`
 ```json
 {
   "ollamaEndpoint": "http://localhost:11434",
-  "modelName": "minimax-m2.5:cloud",
+  "modelName": "minimax-m2.7:cloud",
   "modelPath": null,
   "temperature": 0.7,
   "maxTokens": 4096,
@@ -263,7 +269,7 @@ Located at `~/.mandocode/config.json`
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ollamaEndpoint` | `http://localhost:11434` | Ollama server URL |
-| `modelName` | `minimax-m2.5:cloud` | Model to use |
+| `modelName` | `minimax-m2.7:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `4096` | Maximum response token length |

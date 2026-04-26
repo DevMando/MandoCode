@@ -59,7 +59,7 @@ public static class LearnContent
                 new Markup("Ollama supports [bold]two types[/] of models:"),
                 new Markup(""),
                 new Markup("  [green]Cloud models[/]  Run remotely — [bold]no GPU needed[/] on your machine."),
-                new Markup("                 Examples: kimi-k2.5:cloud, minimax-m2.5:cloud, qwen3-coder:480b-cloud"),
+                new Markup("                 Examples: kimi-k2.5:cloud, minimax-m2.7:cloud, qwen3-coder:480b-cloud"),
                 new Markup(""),
                 new Markup("  [yellow]Local models[/]  Run on your hardware — fully offline and private."),
                 new Markup("                 Requires enough VRAM for the model size (see above).")
@@ -83,7 +83,7 @@ public static class LearnContent
         table.AddColumn(new TableColumn("[bold]Notes[/]"));
 
         table.AddRow("[green]Cloud[/]", "kimi-k2.5:cloud", "No GPU required");
-        table.AddRow("[green]Cloud[/]", "minimax-m2.5:cloud", "No GPU required");
+        table.AddRow("[green]Cloud[/]", "minimax-m2.7:cloud", "No GPU required");
         table.AddRow("[green]Cloud[/]", "qwen3-coder:480b-cloud", "No GPU required, code-focused");
         table.AddRow("[yellow]Local[/]", "[bold]qwen3:8b[/]", "Recommended — good balance of speed & quality");
         table.AddRow("[yellow]Local[/]", "qwen2.5-coder:7b", "Code-focused, ~5-6 GB VRAM");
@@ -101,7 +101,7 @@ public static class LearnContent
                 new Markup("[bold]Step 1:[/] Install Ollama from [link]https://ollama.com[/]"),
                 new Markup("[bold]Step 2:[/] Open a terminal and run [cyan]ollama serve[/]"),
                 new Markup("[bold]Step 3:[/] Pull a model: [cyan]ollama pull qwen3:8b[/]"),
-                new Markup("[bold]Step 4:[/] Come back to MandoCode and run [cyan]/config[/] to configure")
+                new Markup("[bold]Step 4:[/] Come back to MandoCode — run [cyan]/setup[/] for a guided walkthrough or [cyan]/config[/] to pick the model directly")
             ))
         {
             Border = BoxBorder.Rounded,

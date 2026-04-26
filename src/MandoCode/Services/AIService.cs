@@ -11,6 +11,7 @@ using Microsoft.SemanticKernel.Connectors.Ollama;
 using MandoCode.Models;
 using MandoCode.Plugins;
 using ModelContextProtocol.Client;
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -274,7 +275,7 @@ public class AIService
 
             // Check if model exists and get its info
             var response = await client.PostAsync(
-                $"{_config.OllamaEndpoint}/api/show",
+                OllamaSetupHelper.BuildUrl(_config.OllamaEndpoint, "api/show"),
                 new StringContent(JsonSerializer.Serialize(new { name = modelName }), System.Text.Encoding.UTF8, "application/json")
             );
 
@@ -409,9 +410,7 @@ public class AIService
         }
         catch (HttpRequestException ex)
         {
-            response = $"Error: Connection to Ollama failed.\n\n" +
-                      $"Details: {ex.Message}\n\n" +
-                      "Make sure Ollama is running: ollama serve";
+            response = FormatHttpFailure(ex);
         }
         catch (Exception ex)
         {
@@ -422,10 +421,52 @@ public class AIService
     }
 
     /// <summary>
+    /// Formats HttpRequestException specifically. 401 is the most common "weird"
+    /// connection failure — the daemon is running fine but the user got signed out
+    /// of ollama.com. The default "Make sure Ollama is running: ollama serve"
+    /// message misleads users into running `ollama serve` again, which then fails
+    /// with "port already in use" because the daemon they're hitting is already up.
+    /// </summary>
+    private string FormatHttpFailure(HttpRequestException ex)
+    {
+        if (IsUnauthorizedError(ex))
+        {
+            // Brief — the auto-launched cloud sign-in walkthrough that fires right
+            // after this response covers all the "what to do" guidance inline.
+            return "<red>Error: Ollama returned 401 Unauthorized.</red>\n\n" +
+                   "You're using a cloud model but the local Ollama daemon isn't authenticated.";
+        }
+
+        return "Error: Connection to Ollama failed.\n\n" +
+               $"Details: {ex.Message}\n\n" +
+               "What to do:\n" +
+               "  • Make sure Ollama is running: ollama serve\n" +
+               "  • Then type /retry to reconnect, OR\n" +
+               "  • Run /setup to walk through setup again.";
+    }
+
+    private static bool IsUnauthorizedError(HttpRequestException ex)
+        => ex.StatusCode == HttpStatusCode.Unauthorized
+           || (ex.Message?.Contains("401") ?? false)
+           || (ex.Message?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    /// <summary>
     /// Formats error messages for display.
     /// </summary>
     private string FormatErrorMessage(Exception ex)
     {
+        // 401 surfaces here too when the plan-step path rethrows as a generic Exception.
+        if (ex is HttpRequestException http && IsUnauthorizedError(http))
+            return FormatHttpFailure(http);
+        if (ex.Message != null
+            && (ex.Message.Contains("401")
+                || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Brief — App.razor auto-launches the sign-in walkthrough right after this.
+            return "<red>Error: Ollama returned 401 Unauthorized.</red>\n\n" +
+                   "You're using a cloud model but the local Ollama daemon isn't authenticated.";
+        }
+
         // Context-window overflow — actionable message, don't blame Ollama setup.
         if (IsContextOverflowError(ex))
         {
@@ -433,6 +474,7 @@ public class AIService
                    $"Details: {ex.Message}\n\n" +
                    "What to do:\n" +
                    "  • Try /clear to start a fresh conversation, OR\n" +
+                   $"  • Run /config and lower 'Max response tokens' (currently {_config.MaxTokens / 1024}k) — large limits eat into the context budget, OR\n" +
                    $"  • Lower the tool-result budget: mandocode --config set toolBudget 50000, OR\n" +
                    "  • Switch to a model with a larger context window via /config.";
         }
@@ -446,7 +488,7 @@ public class AIService
                    $"To change your model, run /config and select a model that supports tool use.\n\n" +
                    $"Cloud models (no GPU required):\n" +
                    $"  • kimi-k2.5:cloud\n" +
-                   $"  • minimax-m2.5:cloud\n" +
+                   $"  • minimax-m2.7:cloud\n" +
                    $"  • qwen3-coder:480b-cloud\n\n" +
                    $"Local models:\n" +
                    $"  • qwen3:8b (recommended, runs on most hardware)\n" +
@@ -455,7 +497,7 @@ public class AIService
                    $"  • llama3.1";
         }
 
-        return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}";
+        return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}\n\nOr run /setup to walk through setup again.";
     }
 
     /// <summary>
