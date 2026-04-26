@@ -12,7 +12,17 @@ public class ConfigurationWizard
     /// <summary>
     /// Runs the interactive configuration wizard.
     /// </summary>
-    public static async Task<MandoCodeConfig> RunAsync(MandoCodeConfig? existingConfig = null)
+    /// <param name="promptTextVdom">
+    /// Optional VDOM-aware text prompt (App.razor's WizardPromptTextAsync). When
+    /// provided, the endpoint step routes through RazorConsole's TextInput component,
+    /// which captures keystrokes reliably alongside the VDOM render loop. Without
+    /// this delegate, falls back to Spectre's TextPrompt — fine for CLI invocation,
+    /// but users have reported dropped keystrokes when Spectre's prompt runs while
+    /// the VDOM is live.
+    /// </param>
+    public static async Task<MandoCodeConfig> RunAsync(
+        MandoCodeConfig? existingConfig = null,
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
     {
         var config = existingConfig ?? MandoCodeConfig.CreateDefault();
 
@@ -20,7 +30,7 @@ public class ConfigurationWizard
         DisplayWizardHeader();
 
         // Step 1: Ollama Endpoint
-        config.OllamaEndpoint = await ConfigureOllamaEndpoint(config.OllamaEndpoint);
+        config.OllamaEndpoint = await ConfigureOllamaEndpoint(config.OllamaEndpoint, promptTextVdom);
 
         // Step 2: Model Selection
         config = await ConfigureModel(config);
@@ -71,22 +81,41 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
     }
 
-    private static async Task<string> ConfigureOllamaEndpoint(string currentEndpoint)
+    private static async Task<string> ConfigureOllamaEndpoint(
+        string currentEndpoint,
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
     {
         AnsiConsole.Write(new Rule("[yellow]1. Ollama Connection[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        var endpoint = AnsiConsole.Prompt(
-            new TextPrompt<string>("[cyan]Ollama endpoint URL:[/]")
-                .DefaultValue(currentEndpoint)
-                .ValidationErrorMessage("[red]Please enter a valid URL[/]")
-                .Validate(url =>
-                {
-                    if (Uri.TryCreate(url, UriKind.Absolute, out _))
-                        return ValidationResult.Success();
-                    return ValidationResult.Error("[red]Invalid URL format[/]");
-                })
-        );
+        // Prefer the VDOM TextInput when wired in — Spectre's TextPrompt drops
+        // keystrokes when the VDOM render loop is active. Pre-fill the input with
+        // the current endpoint so the user can press Enter to keep it or edit in
+        // place rather than retyping.
+        string endpoint;
+        if (promptTextVdom != null)
+        {
+            var entered = await promptTextVdom("Ollama endpoint URL (press Enter to keep current):", currentEndpoint, v =>
+            {
+                if (string.IsNullOrWhiteSpace(v)) return null; // empty → falls back to default
+                return Uri.TryCreate(v, UriKind.Absolute, out _) ? null : "Invalid URL format";
+            }, currentEndpoint);
+            endpoint = string.IsNullOrWhiteSpace(entered) ? currentEndpoint : entered.Trim();
+        }
+        else
+        {
+            endpoint = AnsiConsole.Prompt(
+                new TextPrompt<string>("[cyan]Ollama endpoint URL:[/]")
+                    .DefaultValue(currentEndpoint)
+                    .ValidationErrorMessage("[red]Please enter a valid URL[/]")
+                    .Validate(url =>
+                    {
+                        if (Uri.TryCreate(url, UriKind.Absolute, out _))
+                            return ValidationResult.Success();
+                        return ValidationResult.Error("[red]Invalid URL format[/]");
+                    })
+            );
+        }
 
         // Test connection
         await AnsiConsole.Status()
@@ -145,14 +174,14 @@ public class ConfigurationWizard
                 else
                 {
                     AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
-                    AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.5:cloud[/]");
+                    AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.7:cloud[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", "minimax-m2.5:cloud");
+                    config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", "minimax-m2.7:cloud");
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", config.ModelName ?? "minimax-m2.5:cloud");
+                config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", config.ModelName ?? "minimax-m2.7:cloud");
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;
@@ -179,10 +208,14 @@ public class ConfigurationWizard
         AnsiConsole.Write(new Rule("[yellow]3. Temperature (Creativity)[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        AnsiConsole.MarkupLine("[dim]Temperature controls response creativity:[/]");
-        AnsiConsole.MarkupLine("[dim]  0.0-0.3: Very focused (code generation)[/]");
-        AnsiConsole.MarkupLine("[dim]  0.4-0.7: Balanced (recommended)[/]");
-        AnsiConsole.MarkupLine("[dim]  0.8-1.0: Creative (brainstorming)[/]");
+        AnsiConsole.MarkupLine("[dim]Temperature controls how predictable vs. creative the model's replies are.[/]");
+        AnsiConsole.MarkupLine("[dim]At 0.0 the model picks the single most likely next word every time —[/]");
+        AnsiConsole.MarkupLine("[dim]identical prompts give identical answers. Higher values let it sample[/]");
+        AnsiConsole.MarkupLine("[dim]from less-likely options, so replies become more varied (and noisier).[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]  0.0-0.3  Very focused — best for code generation, refactors, exact formats[/]");
+        AnsiConsole.MarkupLine("[dim]  0.4-0.7  Balanced — recommended for general use, technical writing, Q&A[/]");
+        AnsiConsole.MarkupLine("[dim]  0.8-1.0  Creative — brainstorming, naming ideas, prose. Can hallucinate more.[/]");
         AnsiConsole.WriteLine();
 
         var temperature = AnsiConsole.Prompt(
@@ -202,33 +235,62 @@ public class ConfigurationWizard
         return temperature;
     }
 
-    private static int ConfigureMaxTokens(int currentMaxTokens)
+    public static int ConfigureMaxTokens(int currentMaxTokens)
     {
         AnsiConsole.Write(new Rule("[yellow]4. Maximum Response Tokens[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        AnsiConsole.MarkupLine("[dim]Controls the maximum length of AI responses.[/]");
-        AnsiConsole.MarkupLine("[dim]If a response hits this limit, it will be cut off with a warning.[/]");
+        AnsiConsole.MarkupLine("[dim]This is the upper bound on how long a single reply can be — counted in tokens[/]");
+        AnsiConsole.MarkupLine("[dim](roughly 4 characters or ¾ of a word each). If a reply hits the limit, it gets[/]");
+        AnsiConsole.MarkupLine("[dim]cut off mid-sentence and you'll see a warning.[/]");
         AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Bigger isn't always better:[/]");
+        AnsiConsole.MarkupLine("[dim]  • Local models slow down a lot at very high limits.[/]");
+        AnsiConsole.MarkupLine("[dim]  • The number must fit in your model's [italic]context window[/] (e.g. qwen3.5 = 256k).[/]");
+        AnsiConsole.MarkupLine("[dim]  • Setting it lower than you need is fine — the model only uses what it needs.[/]");
+        AnsiConsole.WriteLine();
+
+        // Spectre's SelectionPrompt always highlights the FIRST item — there's no
+        // "default selection" API. To honor the user's existing setting (or the
+        // baseline 32k for fresh installs), put the preferred value first and let
+        // the rest follow in ascending order.
+        // Capping the picker at 200k. The 256k tier was misleading — many cloud models
+        // advertise 256k but have a practical limit below that once system prompts,
+        // tool definitions, and response budget are accounted for. 200k aligns with
+        // the largest real-world reliable ceiling. Labels are neutral (no specific
+        // model names) so they don't go stale as cloud-model lineups change.
+        var allTokens = new[] { 2048, 4096, 8192, 16384, 32768, 65536, 131072, 204800 };
+        var preferred = allTokens.Contains(currentMaxTokens) ? currentMaxTokens : 32768;
+        var ordered = new[] { preferred }.Concat(allTokens.Where(t => t != preferred)).ToArray();
 
         var maxTokens = AnsiConsole.Prompt(
             new SelectionPrompt<int>()
-                .Title("[cyan]Max tokens:[/]")
-                .AddChoices(2048, 4096, 8192, 16384)
-                .UseConverter(tokens => tokens switch
+                .Title("[cyan]Max response tokens:[/]")
+                .AddChoices(ordered)
+                .UseConverter(tokens =>
                 {
-                    2048  => "2048  - Quick Q&A, short answers",
-                    4096  => "4096  - General coding assistance (default)",
-                    8192  => "8192  - Multi-component generation, detailed code",
-                    16384 => "16384 - Full-page scaffolding, large file rewrites",
-                    _     => tokens.ToString()
+                    var marker = tokens == preferred ? "  ← current" : "";
+                    return tokens switch
+                    {
+                        2048   => $"2k     Quick Q&A, short answers{marker}",
+                        4096   => $"4k     General coding assistance{marker}",
+                        8192   => $"8k     Multi-component generation, detailed code{marker}",
+                        16384  => $"16k    Full-page scaffolding, large file rewrites{marker}",
+                        32768  => $"32k    Large multi-file refactors (default){marker}",
+                        65536  => $"64k    Very long outputs, larger codebases{marker}",
+                        131072 => $"128k   Maximum for many cloud models{marker}",
+                        204800 => $"200k   Very long sessions, top of the reliable range{marker}",
+                        _      => tokens.ToString()
+                    };
                 })
         );
 
-        AnsiConsole.MarkupLine($"[green]✓ Max tokens set to: {maxTokens}[/]");
+        AnsiConsole.MarkupLine($"[green]✓ Max tokens set to: {FormatK(maxTokens)}[/]");
         AnsiConsole.WriteLine();
         return maxTokens;
     }
+
+    private static string FormatK(int tokens) => tokens >= 1024 ? $"{tokens / 1024}k" : tokens.ToString();
 
     private static int ConfigureRequestTimeout(int currentTimeout)
     {
@@ -319,50 +381,12 @@ public class ConfigurationWizard
 
     private static async Task<bool> TestOllamaConnection(string endpoint)
     {
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = await client.GetAsync($"{endpoint}/api/tags");
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
+        var probe = await OllamaSetupHelper.ProbeAsync(endpoint);
+        return probe.Ok;
     }
 
-    private static async Task<List<string>> GetAvailableOllamaModels(string endpoint)
-    {
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            var response = await client.GetAsync($"{endpoint}/api/tags");
-
-            if (!response.IsSuccessStatusCode)
-                return new List<string>();
-
-            var content = await response.Content.ReadAsStringAsync();
-            using var json = JsonDocument.Parse(content);
-
-            var models = new List<string>();
-            if (json.RootElement.TryGetProperty("models", out var modelsArray))
-            {
-                foreach (var model in modelsArray.EnumerateArray())
-                {
-                    if (model.TryGetProperty("name", out var name))
-                    {
-                        models.Add(name.GetString() ?? "");
-                    }
-                }
-            }
-
-            return models.Where(m => !string.IsNullOrEmpty(m)).ToList();
-        }
-        catch
-        {
-            return new List<string>();
-        }
-    }
+    private static Task<List<string>> GetAvailableOllamaModels(string endpoint)
+        => OllamaSetupHelper.ListModelsAsync(endpoint);
 
     /// <summary>
     /// Shows a quick configuration summary.
@@ -385,7 +409,7 @@ public class ConfigurationWizard
             table.AddRow("Model Path", config.ModelPath);
         }
         table.AddRow("Temperature", config.Temperature.ToString("F2"));
-        table.AddRow("Max Tokens", config.MaxTokens.ToString());
+        table.AddRow("Max Tokens", FormatK(config.MaxTokens));
         table.AddRow("Request Timeout", $"{config.RequestTimeoutMinutes} min");
         table.AddRow("Ignore Dirs", string.Join(", ", config.IgnoreDirectories.Take(5)) +
                                      (config.IgnoreDirectories.Count > 5 ? "..." : ""));

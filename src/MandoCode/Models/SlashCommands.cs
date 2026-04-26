@@ -14,7 +14,9 @@ public static class SlashCommands
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
     {
         { "/help", "Show this help message" },
-        { "/config", "Open configuration menu" },
+        { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
+        { "/model", "Quick switch — pick a different model + context size" },
+        { "/config", "Adjust settings — model, temperature, max tokens, timeout, ignore dirs" },
         { "/copy", "Copy last AI response to clipboard" },
         { "/copy-code", "Copy code blocks from last AI response" },
         { "/command", "Run a shell command (also: !<cmd>)" },

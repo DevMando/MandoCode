@@ -4,6 +4,77 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-04-26
+
+### Onboarding overhaul
+
+First-run is now a guided wizard instead of a static "install Ollama, run serve, pull a model, then come back" panel. Every step that *can* be auto-detected, auto-installed, or auto-recovered now is.
+
+### Added
+- **Guided first-run wizard** — auto-fires when no config exists and on `/setup`. Walks users through Ollama install → daemon start → cloud sign-in → model pick → context size, all from inside the terminal.
+- **Auto-install Ollama** — wizard runs `winget install Ollama.Ollama` (Windows), `brew install ollama` (macOS), or `curl -fsSL https://ollama.com/install.sh | sh` (Linux) as a child process with inherited stdio so users see the installer's own progress and can answer UAC/license/sudo prompts directly. Auto-falls back to opening ollama.com/download in the browser if the install fails for any reason (winget missing, UAC denied, no curl on minimal Linux, etc.).
+- **Auto-launch `ollama signin`** — the cloud sign-in walkthrough spawns the CLI command for the user. Browser opens to confirm, the CLI writes the local token. Closes the "browser sign-in alone isn't enough" trap that was returning 401 on first chat.
+- **Auto-launch `ollama serve`** — when the daemon isn't running, the wizard offers to start it. Spectre `Status` spinner shows `Starting ollama serve... → Waiting for Ollama at <url>...` so users see live progress.
+- **401 auto-recovery on chat** — if a chat response surfaces a 401, the cloud sign-in walkthrough fires immediately after the error message renders. No need to type `/setup` and re-pick the model.
+- **Trailing-slash heal** — `http://localhost:11434/` is detected and silently corrected to `http://localhost:11434`. Persisted to config so the heal is permanent.
+- **Wrong-port auto-fallback** — when "Start Ollama for me" succeeds but the configured URL doesn't reach the daemon (e.g. config points at `:1313` but `ollama serve` binds to `:11434`), the wizard auto-probes `http://localhost:11434` and switches if reachable. No retype required.
+- **Status-aware model-list fetch** — `/api/tags` now distinguishes "user has zero models" (genuine empty) from "request itself failed" (transient daemon hiccup). Auto-retries once with delay; if the second attempt fails, surfaces a clear `/setup` recovery message instead of misrouting users with pulled models into the no-models flow.
+- **Picked-model validation** — wizard runs `/api/show` against the picked model before declaring success, surfacing models listed in `/api/tags` but not actually loadable.
+- **Post-pick cloud auth check** — `TestCloudAuthAsync` does a 1-token `/api/generate` call after the user picks a cloud model. Catches the case where the model is in `/api/tags` (so the heuristic says "signed in") but the daemon's actual auth token is gone.
+- **Tiered local-model picker** with hardware guidance: `qwen3.5:0.8b` (CPU-only), `2b` (4 GB+ GPU), `4b` (mid-range), `9b` (8+ GB VRAM) with size/VRAM expectations spelled out. Auto-pulls the user's selection.
+- **Cloud auto-pull** — when the user picks Cloud in the empty-models flow, `minimax-m2.7:cloud` is auto-pulled with a streamed progress spinner.
+- **Cloud upsell** — after a successful local pull, surfaces a dim tip recommending `minimax-m2.7:cloud` as the more capable alternative (free with `ollama signin`).
+- **Combined cloud/local model picker** — single screen with `(cloud)` / `(local)` badges, cloud bubbles to top, alphabetical otherwise. Replaces the old two-step "Cloud or Local? → list" flow.
+- **`/model` slash command** — quick switch model + context size. Skips the rest of `/config`. Tip at the end points users to `/config` for temperature, timeout, and other settings.
+- **`/setup` slash command** — guided wizard, always interactive (skips the silent fast path that `/config` would fall into when the user is trying to fix a broken state).
+- **`--doctor` CLI flag** — non-interactive preflight that prints .NET runtime version, OS, dotnet tool path, Ollama CLI status, daemon reachability, models pulled, and cloud sign-in state. Exits 0 when everything's green, 1 otherwise. README now points to it as the troubleshooting target.
+- **PATH-refresh detection on Windows** — `IsOllamaCliInstalled` falls back to checking canonical install paths (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`, `/opt/homebrew/bin/ollama`, `/usr/local/bin/ollama`, etc.) when `where`/`which` fails. The wizard detects a fresh Ollama install without users having to relaunch mandocode.
+- **Inline color tags** — new `<red>` / `<green>` / `<yellow>` / `<cyan>` HTML tag handlers in `MarkdownHtmlRenderer` for chat error responses. The 401 error now renders the `Error:` header in red and the recommended action in green; backticked `ollama signin` keeps its existing purple inline-code styling.
+- **Educational intros** on temperature and max-tokens picker steps — explain what each setting actually does, the relationship between max-tokens and the model's context window, and per-tier usage examples.
+
+### UI
+- **k-notation labels** in the max-tokens picker (`32k`, `64k`, `128k`, `200k`) replacing raw token numbers (`32768`, etc).
+- **Current-value highlighting** — picker reorders so the user's existing setting (or 32k for fresh installs) appears at the top with a `← current` marker. Spectre's `SelectionPrompt` doesn't support default-selection natively, so the workaround is positional reordering.
+- **VDOM-aware text input for URL entry** in `/setup` and `/config` step 1 — uses RazorConsole's `<TextInput>` instead of Spectre's `TextPrompt`, which was dropping keystrokes alongside the live VDOM render loop. Pre-filled with the current URL (`press Enter to keep current`) so users don't have to retype.
+- **`HomeView` Razor component** — extracted the dynamic info block (static info + connection state + ready/help) into its own component so it can be cleanly hidden via `@if (!_setupActive)` during `/setup` and the 401 auto-recovery walkthrough, preventing VDOM redraws from stomping on the wizard's imperative output.
+- **Runtime version on banner** — startup line now includes `Runtime: .NET 8.0.x` so users always know the runtime they're on (also reported by `--doctor`).
+- **Help table reorganized** — `/setup` and `/model` rows added next to `/config`, with descriptions disambiguated so users can tell which command does what.
+
+### Changed
+- **Default cloud model** bumped from `minimax-m2.5:cloud` → `minimax-m2.7:cloud` everywhere (config defaults, `CreateDefault`, `GetEffectiveModelName` fallback, README, `/learn` content, system prompt, `/config` examples, error messages).
+- **Default `MaxTokens`** bumped from 4k → 32k for new installs. Existing configs with explicit values are preserved.
+- **`MaxMaxTokens`** lowered from 256k → 200k after testing showed many cloud models hit a practical limit closer to 200k once system prompts, tool definitions, and response budget are accounted for. Existing configs with 256k saved are clamped to 200k on next load.
+- **README install section** rewritten — compact Prerequisites block (.NET 8 SDK + Ollama links), single install command (`dotnet tool install -g MandoCode`), new Troubleshooting section pointing at `--doctor`. Per-OS install matrix removed in favor of letting the wizard handle install.
+- **16+ failure messages** across the app now consistently surface `/setup` and `/retry` as recovery paths.
+- **`/setup` always runs the wizard interactively** — skips the silent fast path that `/config` would take when everything looks superficially fine, so users explicitly running `/setup` always get the wizard (rather than a no-op that lands them back at the same broken state).
+- **Cloud sign-in walkthrough** — dropped the misleading "Open the sign-in page for me" button (sent users to website-only sign-in, which doesn't authenticate the local daemon). Replaced with explicit messaging that `ollama signin` is a CLI command, plus the new "Sign me in now" auto-run option.
+- **Cloud sign-in heuristic** — `CheckCloudSignInAsync` now returns `Unknown` (instead of `NotSignedIn`) when the daemon is reachable but no `:cloud` tags are visible, since pulled cloud models stick around in `/api/tags` after sign-out and the heuristic can't distinguish "no cloud models yet" from "signed out". Wizard treats `Unknown` and `NotSignedIn` the same way (offer sign-in walkthrough) but with softer copy.
+
+### Fixed
+- **Trailing-slash bug on Ollama URL** — config like `http://localhost:11434/` no longer breaks model detection. Probe heals it silently; persisted to config.
+- **Misleading "Couldn't start Ollama" error** — when `Process.Start("ollama", "serve")` succeeded but the configured URL didn't reach the daemon (port mismatch), the wizard previously falsely blamed the start. Now distinguishes "process didn't launch" from "process launched but URL unreachable" with an accurate hint.
+- **`<Markup>` Razor component bracket markup** — the inline VDOM render block was using `[yellow]…[/]` style inside `<Markup Content="...">`, which renders as literal text (RazorConsole's `<Markup>` uses `Foreground`/`Background` props for color, not bracket parsing). Replaced with proper Foreground props so failure-state lines actually render in color.
+- **`LearnContent.Display()` double-render** — was being called inside the `else if (!_isConnected)` render block, which fired on every `StateHasChanged`. Removed from the render path; `/learn` slash command still works as the explicit way to see the content.
+
+### New & changed slash commands
+| Command | Status | Description |
+|---|---|---|
+| `/setup` | New | Guided wizard — reconnect to Ollama or pick a different model. Always interactive. |
+| `/model` | New | Quick switch — pick a different model + context size. |
+| `/config` | Updated | Adjust settings — model, temperature, max tokens, timeout, ignore dirs. Description disambiguated from `/setup`. |
+| `/help` | Updated | New `/setup` and `/model` rows; reorganized to group setup/model commands. |
+
+### Files
+- **New**: `Components/HomeView.razor`, `Services/OllamaSetupHelper.cs`, `Services/OnboardingFlow.cs`, `tests/OllamaSetupHelperTests.cs`, `tests/MandoCodeConfigOnboardingTests.cs`
+- **Modified**: `Components/App.razor`, `Components/HelpDisplay.razor`, `Models/MandoCodeConfig.cs`, `Models/SlashCommands.cs`, `Models/LearnContent.cs`, `Models/SystemPrompts.cs`, `Services/AIService.cs`, `Services/ConfigurationWizard.cs`, `Services/MarkdownHtmlRenderer.cs`, `Program.cs`, `README.md`
+
+### Test coverage
+183/183 tests passing. New tests cover URL probe slash-heal, `BuildUrl` permutations, no-daemon failure modes, `HasCompletedOnboarding` defaults, endpoint-preservation under `ValidateAndClamp`, and `DefaultCloudModel` constant pinning.
+
+### Breaking changes
+- Configs with `MaxTokens > 200k` (i.e. saved 256k) get clamped to 200,800 on next load. Picker shows 32k highlighted next time `/config` or `/model` opens.
+- Configs without an explicit `maxTokens` key now default to 32k instead of 4k. Configs with `"maxTokens": 4096` are unaffected.
+
 ## [0.9.8] - 2026-04-25
 
 ### Added

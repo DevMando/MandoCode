@@ -26,49 +26,22 @@
 
 <Banner />
 
-<Rows>
-    <Markup Content="@($"Project Root: {ProjectRoot.ProjectRoot}")" Background="Color.Black" />
-    <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
-    <Markup Content="@($"Model: {Config.GetEffectiveModelName()}")" />
-
-    @if (!_connectionChecked)
-    {
-        <Markup Content="🔄 Connecting to Ollama..." />
-    }
-    else if (!_isConnected)
-    {
-        <Panel Border="@BoxBorder.Rounded" BorderColor="Color.Yellow">
-            <Rows>
-                <Markup Content="@($"[yellow]Unable to reach Ollama at[/] [white]{Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}[/]")" />
-                @if (!string.IsNullOrEmpty(_connectionStatusMessage))
-                {
-                    <Markup Content="@_connectionStatusMessage" />
-                }
-                <Markup Content="[bold]Next steps:[/]" />
-                <Markup Content="  1. Install Ollama from https://ollama.com" />
-                <Markup Content="  2. In another terminal run: [cyan]ollama serve[/]" />
-                <Markup Content="  3. Pull a model (e.g. [cyan]ollama pull qwen3:8b[/])" />
-                <Markup Content="  4. Return here and type [cyan]/retry[/] to reconnect" />
-                <Markup Content="[dim]You can still run /config or /learn while offline.[/]" />
-            </Rows>
-        </Panel>
-        LearnContent.Display();
-    }
-    else if (!string.IsNullOrEmpty(_modelWarning))
-    {
-        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Yellow">
-            <Rows>
-                <Markup Content="@_modelWarning" />
-            </Rows>
-        </Panel>
-    }
-    else
-    {
-        <Markup Content="✅ MandoCode is ready!" />
-        <HelpDisplay />
-        <Markup Content="@("Tip: reference files inline, e.g. What does @Program.cs do?")" />
-    }
-</Rows>
+@* Banner stays always-on (it's static, no overlap risk). The dynamic section
+   below — static info + connection state + ready/help block — is hidden during
+   /setup via _setupActive so the VDOM doesn't redraw on top of the wizard's
+   imperative AnsiConsole output. Extracted into HomeView so the suppression is
+   a single @if gate rather than wrapping a long inline block. *@
+@if (!_setupActive)
+{
+    <HomeView ProjectRoot="@ProjectRoot.ProjectRoot"
+              RuntimeVersion="@Environment.Version.ToString()"
+              OllamaEndpoint="@Config.OllamaEndpoint"
+              ModelName="@Config.GetEffectiveModelName()"
+              ConnectionChecked="@_connectionChecked"
+              IsConnected="@_isConnected"
+              OnboardingStatus="@_onboardingStatus"
+              ModelWarning="@_modelWarning" />
+}
 
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
@@ -127,7 +100,17 @@
     private bool _hasRendered = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
-    private string? _connectionStatusMessage = null;
+
+    // Onboarding live status — set by OnboardingFlow during preflight / serve start /
+    // pull progress so the user sees a heartbeat instead of a frozen line. Empty hides
+    // the indicator. Updated through SetOnboardingStatus which fires StateHasChanged.
+    private string _onboardingStatus = "";
+
+    // True while /setup-triggered onboarding is running. Hides the HomeView component
+    // (static info + ready state + help table) so the wizard's imperative AnsiConsole
+    // output isn't overlapped by VDOM redraws of that block. Banner stays visible the
+    // whole time. Toggled with StateHasChanged in the /setup handler.
+    private bool _setupActive = false;
 
     // Last AI response for /copy command
     private string? _lastAiResponse;
@@ -353,23 +336,185 @@
 
     private async Task InitializeConnectionAsync()
     {
-        // Check Ollama connection asynchronously (moved from OnInitialized to avoid blocking)
-        _isConnected = await CheckOllamaConnectionAsync();
+        // Probe with auto-heal — silently fixes a trailing slash on the configured URL
+        // (the most common config-time foot-gun) before any wizard or warning fires.
+        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        if (probe.WasHealed)
+        {
+            Config.OllamaEndpoint = probe.NormalizedUrl;
+            Config.Save();
+            AnsiConsole.MarkupLine($"[cyan]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
+        }
+
+        // First-run or recovering-from-broken-state: launch the guided wizard. Once a
+        // user has completed (or explicitly skipped) onboarding, an unreachable Ollama
+        // falls through to the static panel + /retry / /setup loop instead.
+        var shouldOnboard = MandoCodeConfig.IsFirstRun() || (!probe.Ok && !Config.HasCompletedOnboarding);
+        if (shouldOnboard)
+        {
+            await RunOnboardingFlowAsync();
+            probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        }
+
+        _isConnected = probe.Ok;
         _connectionChecked = true;
 
         if (_isConnected)
         {
-            _connectionStatusMessage = null;
             await ValidateCurrentModelAsync();
             await InitializeMcpAsync();
-        }
-        else
-        {
-            _connectionStatusMessage = "[dim]Start 'ollama serve', pull a model, then type /retry to check again.[/]";
         }
 
         // Re-render so the VDOM updates from /learn content to the ready state
         await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Runs the OnboardingFlow. Uses Spectre's imperative prompts for selects/confirms
+    /// (the VDOM Select had a `>` cursor redraw glitch on the second loop iteration),
+    /// but routes URL text entry through the VDOM TextInput because Spectre's
+    /// TextPrompt was dropping keystrokes alongside the live render loop.
+    /// </summary>
+    private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
+    {
+        var flow = new OnboardingFlow(
+            setStatus: SetOnboardingStatus,
+            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+
+        try
+        {
+            var result = await flow.RunAsync(Config, forceInteractive);
+            if (result.Connected && !string.IsNullOrEmpty(result.FinalModel))
+            {
+                await AI.ReinitializeAsync(Config);
+            }
+        }
+        finally
+        {
+            SetOnboardingStatus("");
+        }
+    }
+
+    private void SetOnboardingStatus(string status)
+    {
+        _onboardingStatus = status ?? "";
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Quick string sniff for "this response is a 401 cloud-auth error." Matches the
+    /// `<red>Error: Ollama returned 401 Unauthorized.</red>` header used by both 401
+    /// branches of <see cref="AIService.FormatHttpFailure"/> / <see cref="AIService.FormatErrorMessage"/>.
+    /// </summary>
+    private static bool Looks401(string responseText)
+        => !string.IsNullOrEmpty(responseText)
+           && responseText.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Quick model-switch flow. Lists pulled models, lets the user pick one with
+    /// cloud/local badges, then pipes them straight into the same context-size picker
+    /// /config uses. Skips the rest of /config (temperature, timeout, ignore dirs) —
+    /// those are reachable via /config as the final tip mentions.
+    /// </summary>
+    private async Task HandleModelCommandAsync()
+    {
+        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        if (!probe.Ok)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
+            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+            return;
+        }
+
+        var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
+        if (!fetched.Ok)
+        {
+            AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
+            AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
+            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+            return;
+        }
+        if (fetched.Models.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
+            AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
+            return;
+        }
+
+        // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
+        // alphabetical otherwise, badge after each tag, single-space split for
+        // the tag.
+        AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
+        AnsiConsole.WriteLine();
+        var labeled = fetched.Models
+            .OrderBy(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
+            .Select(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase)
+                ? $"{m}   (cloud)"
+                : $"{m}   (local)")
+            .ToArray();
+
+        var picked = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Select a model:[/]")
+                .AddChoices(labeled));
+        var modelTag = picked.Split(' ')[0];
+
+        Config.ModelName = modelTag;
+        Config.ModelPath = null;
+
+        // Same context-size picker /config uses — k-notation labels, current value
+        // highlighted at top, 200k/256k tiers for capable cloud models.
+        AnsiConsole.WriteLine();
+        Config.MaxTokens = ConfigurationWizard.ConfigureMaxTokens(Config.MaxTokens);
+
+        Config.Save();
+        await AI.ReinitializeAsync(Config);
+
+        AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)} with {Config.MaxTokens / 1024}k max tokens.[/]");
+        AnsiConsole.MarkupLine("[dim]Tip: run /config to tweak temperature, timeout, ignore dirs, or other settings.[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Auto-launch the cloud sign-in walkthrough after a chat response surfaced a 401.
+    /// Same flow as the menu inside /setup, but invoked inline so the user doesn't have
+    /// to type /setup → re-pick the model → wait for the auth check just to reach the
+    /// "Sign me in now" prompt they obviously need. Hides HomeView via _setupActive so
+    /// the walkthrough's imperative output isn't overlapped by VDOM redraws.
+    /// </summary>
+    private async Task TryAutoSigninAfter401Async()
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[cyan]Launching sign-in walkthrough so you can fix this now...[/]");
+        AnsiConsole.WriteLine();
+
+        _setupActive = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var flow = new OnboardingFlow(
+                setStatus: SetOnboardingStatus,
+                promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+
+            var signedIn = await flow.WalkThroughCloudSigninAsync(Config.OllamaEndpoint);
+            if (signedIn)
+            {
+                // Reinitialize the kernel against the (now-authenticated) daemon so
+                // the next chat doesn't re-hit a stale connection.
+                await AI.ReinitializeAsync(Config);
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[green]✓ Signed in. Re-send your message to try again.[/]");
+                AnsiConsole.WriteLine();
+            }
+        }
+        finally
+        {
+            SetOnboardingStatus("");
+            _setupActive = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     /// <summary>
@@ -544,16 +689,15 @@
 
     private async Task<bool> CheckOllamaConnectionAsync()
     {
-        try
+        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        if (probe.WasHealed)
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = await client.GetAsync($"{Config.OllamaEndpoint}/api/tags");
-            return response.IsSuccessStatusCode;
+            // /retry hit the slash bug — heal silently here too so the user doesn't have
+            // to restart to clear the typo.
+            Config.OllamaEndpoint = probe.NormalizedUrl;
+            Config.Save();
         }
-        catch
-        {
-            return false;
-        }
+        return probe.Ok;
     }
 
     private async Task RunInteractiveLoopAsync()
@@ -627,7 +771,9 @@
                     table.AddColumn("Command");
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
-                    table.AddRow("/config", "Open configuration menu");
+                    table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
+                    table.AddRow("/model", "Quick switch — pick a different model + context size");
+                    table.AddRow("/config", "Adjust settings — model, temperature, max tokens, timeout, ignore dirs");
                     table.AddRow("/retry", "Retry Ollama connection");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
@@ -664,6 +810,43 @@
                 if (command == "config")
                 {
                     await HandleConfigCommandAsync();
+                    continue;
+                }
+
+                if (command == "model")
+                {
+                    await HandleModelCommandAsync();
+                    continue;
+                }
+
+                if (command == "setup")
+                {
+                    // Hide the HomeView component (static info + ready + help table)
+                    // while the wizard runs imperatively — without this the VDOM
+                    // redraws that block on top of the wizard's output every time
+                    // SetOnboardingStatus fires StateHasChanged. forceInteractive
+                    // ensures the wizard always shows visible UI rather than hitting
+                    // the silent fast path, so users don't end up with a blank screen.
+                    _setupActive = true;
+                    await InvokeAsync(StateHasChanged);
+
+                    try
+                    {
+                        await RunOnboardingFlowAsync(forceInteractive: true);
+                    }
+                    finally
+                    {
+                        _setupActive = false;
+                    }
+
+                    // Re-probe after the flow so /setup can also recover the connection state.
+                    var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+                    _isConnected = probe.Ok;
+                    if (_isConnected)
+                    {
+                        await ValidateCurrentModelAsync();
+                    }
+                    await InvokeAsync(StateHasChanged);
                     continue;
                 }
 
@@ -867,7 +1050,7 @@
     /// conflict. Optional <paramref name="validate"/> returns null on success, an error message
     /// on failure — failure prints the error and re-prompts.
     /// </summary>
-    private async Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null)
+    private async Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null)
     {
         while (true)
         {
@@ -875,7 +1058,10 @@
             // persists after the input is dismissed.
             AnsiConsole.MarkupLine($"[cyan]{Spectre.Console.Markup.Escape(title)}[/]");
 
-            _wizardInputValue = "";
+            // Pre-fill with initialValue when provided (e.g., default URL for endpoint
+            // entry — user can press Enter to accept or edit in place). Empty otherwise,
+            // and the placeholder hint shows in greyed text until the user types.
+            _wizardInputValue = initialValue ?? "";
             _wizardInputPlaceholder = placeholder;
             _wizardInputTcs = new TaskCompletionSource<string>();
             _showWizardInput = true;
@@ -1153,7 +1339,7 @@
         var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[yellow]MandoCode can't reach Ollama at {endpoint}.[/]");
-        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect.[/]");
+        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect — or /setup to walk through setup again.[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -1357,6 +1543,15 @@
                             Role = "assistant",
                             Text = responseText
                         });
+
+                        // 401 auto-recovery: if the response is a 401 sign-in error,
+                        // immediately launch the cloud sign-in walkthrough so the user
+                        // can hit "Sign me in now" without typing /setup. Saves a step
+                        // every single time this hits.
+                        if (Looks401(responseText))
+                        {
+                            await TryAutoSigninAfter401Async();
+                        }
 
                         // Show per-response token summary (right-aligned, tight to response)
                         if (Config.EnableTokenTracking)
@@ -2449,15 +2644,13 @@
 
         if (connected)
         {
-            _connectionStatusMessage = null;
             AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
             await ValidateCurrentModelAsync();
         }
         else
         {
-            _connectionStatusMessage = $"[dim]Still unable to reach {endpoint}. Ensure 'ollama serve' is running.[/]";
             AnsiConsole.MarkupLine($"[red]Unable to reach Ollama at {endpoint}.[/]");
-            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry.[/]");
+            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry — or /setup to walk through setup again.[/]");
         }
 
         AnsiConsole.WriteLine();
@@ -2481,7 +2674,9 @@
         switch (choice)
         {
             case "Run configuration wizard":
-                var updatedConfig = await ConfigurationWizard.RunAsync(Config);
+                var updatedConfig = await ConfigurationWizard.RunAsync(
+                    Config,
+                    promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
                 await AI.ReinitializeAsync(updatedConfig);
                 AnsiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");

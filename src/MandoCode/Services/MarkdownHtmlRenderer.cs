@@ -450,6 +450,27 @@ public static class MarkdownHtmlRenderer
                 Wrap(node, sb, "[black on yellow]", "[/]");
                 break;
 
+            // Lightweight color tags for chat responses that want to highlight specific
+            // bullets — e.g. AIService's 401 message uses <green> to call attention to
+            // the recommended recovery action and <red> for the error header. Backticked
+            // inline code nested inside still renders as [mediumpurple1] because the
+            // <code> handler runs separately on its own subtree.
+            case "red":
+                Wrap(node, sb, "[red]", "[/]");
+                break;
+
+            case "green":
+                Wrap(node, sb, "[green]", "[/]");
+                break;
+
+            case "yellow":
+                Wrap(node, sb, "[yellow]", "[/]");
+                break;
+
+            case "cyan":
+                Wrap(node, sb, "[cyan]", "[/]");
+                break;
+
             case "code":
                 // Inline code: soft purple on dark grey, matching the project's
                 // synthwave palette. Sits visually distinct from the syntax

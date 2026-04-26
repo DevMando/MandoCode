@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RazorConsole.Core;
 using RazorConsole.Core.Abstractions.Rendering;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace MandoCode;
@@ -23,6 +24,14 @@ class Program
         if (args.Length > 0 && args[0].ToLower() == "--config")
         {
             HandleConfigCommand(args.Skip(1).ToArray());
+            return;
+        }
+
+        // Preflight diagnostic — fast, non-interactive. Useful when troubleshooting why
+        // mandocode won't connect; readme points users at it.
+        if (args.Length > 0 && args[0].ToLower() == "--doctor")
+        {
+            Environment.ExitCode = await RunDoctorAsync();
             return;
         }
 
@@ -168,6 +177,61 @@ class Program
         await host.RunAsync();
     }
 
+    /// <summary>
+    /// Preflight check printed in plain text so it works in any terminal. Returns the
+    /// suggested process exit code (0 = all good, 1 = at least one problem).
+    /// </summary>
+    static async Task<int> RunDoctorAsync()
+    {
+        var problems = 0;
+        Console.WriteLine("MandoCode Doctor");
+        Console.WriteLine("================");
+
+        Console.WriteLine($".NET runtime    : {Environment.Version}");
+        Console.WriteLine($"OS              : {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})");
+        Console.WriteLine($"Config file     : {MandoCodeConfig.GetDefaultConfigPath()}");
+
+        var config = MandoCodeConfig.Load();
+        Console.WriteLine($"Ollama endpoint : {config.OllamaEndpoint}");
+        Console.WriteLine($"Configured model: {config.GetEffectiveModelName()}");
+
+        var cli = OllamaSetupHelper.IsOllamaCliInstalled();
+        Console.WriteLine($"Ollama CLI      : {(cli ? "found" : "NOT FOUND on PATH")}");
+        if (!cli) problems++;
+
+        var probe = await OllamaSetupHelper.ProbeAsync(config.OllamaEndpoint);
+        if (probe.Ok)
+        {
+            Console.WriteLine($"Daemon          : reachable{(probe.WasHealed ? " (URL had trailing slash; auto-healed)" : "")}");
+        }
+        else
+        {
+            Console.WriteLine($"Daemon          : UNREACHABLE — {probe.Error ?? "(no detail)"}");
+            problems++;
+        }
+
+        if (probe.Ok)
+        {
+            var models = await OllamaSetupHelper.ListModelsAsync(probe.NormalizedUrl);
+            Console.WriteLine($"Models pulled   : {models.Count}");
+            if (models.Count > 0)
+            {
+                foreach (var m in models.Take(10))
+                    Console.WriteLine($"  • {m}");
+                if (models.Count > 10)
+                    Console.WriteLine($"  …and {models.Count - 10} more");
+            }
+            var auth = await OllamaSetupHelper.CheckCloudSignInAsync(probe.NormalizedUrl);
+            Console.WriteLine($"Cloud sign-in   : {auth}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(problems == 0
+            ? "All checks passed."
+            : $"{problems} problem(s) found. Run mandocode and use /setup to fix interactively.");
+        return problems == 0 ? 0 : 1;
+    }
+
     static void HandleConfigCommand(string[] args)
     {
         if (args.Length == 0 || args[0] == "--help" || args[0] == "-h")
@@ -243,7 +307,7 @@ class Program
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode --config show");
         Console.WriteLine("  mandocode --config set endpoint http://localhost:11434");
-        Console.WriteLine("  mandocode --config set model minimax-m2.5:cloud");
+        Console.WriteLine("  mandocode --config set model minimax-m2.7:cloud");
         Console.WriteLine("  mandocode --config set temperature 0.5");
     }
 

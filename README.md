@@ -26,14 +26,27 @@ Run locally or connect to Ollama cloud — no API keys required for anything, in
 
 ---
 
+## Prerequisites
+
+- **.NET 8 SDK** — [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) *(SDK includes the runtime — install only the SDK)*
+- **Ollama** — [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
+
 ## Install
 
 ```bash
-# Prerequisites: .NET 8.0 SDK + Ollama installed and running
-
 dotnet tool install -g MandoCode
 mandocode
 ```
+
+First run launches a guided wizard: it detects Ollama, offers to start it, walks you through cloud sign-in if you'd like more powerful models, and auto-pulls a sensible default. You can re-run it any time with `/setup`.
+
+## Troubleshooting
+
+```bash
+mandocode --doctor
+```
+
+Prints your runtime version, Ollama status, models pulled, and cloud sign-in state.
 
 ### Or build from source
 
@@ -42,13 +55,6 @@ git clone https://github.com/DevMando/MandoCode.git
 cd MandoCode
 dotnet build src/MandoCode/MandoCode.csproj
 dotnet run --project src/MandoCode/MandoCode.csproj -- /path/to/your/project
-```
-
-On first run, MandoCode uses `minimax-m2.5:cloud` by default. Run `/config` inside the app or configure from the command line:
-
-```bash
-mandocode config set model qwen2.5-coder:14b
-mandocode config set endpoint http://localhost:11434
 ```
 
 ---
@@ -155,7 +161,9 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | Command | What it does |
 |---------|--------------|
 | `/help` | Show commands and usage examples |
-| `/config` | Open configuration (wizard or view settings) |
+| `/setup` | Guided wizard — reconnect to Ollama, install/sign in, or pick a different model |
+| `/model` | Quick switch — pick a different model + context size |
+| `/config` | Adjust settings — model, temperature, max tokens, timeout, ignore dirs |
 | `/retry` | Retry Ollama connection |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
@@ -178,6 +186,24 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/exit` | Exit MandoCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
 | `!cd <path>` | Change project root directory |
+
+### Setup vs config vs model
+
+- **`/setup`** — first-run wizard, guided. Detects Ollama, offers to install it, walks you through cloud sign-in, picks a model with hardware-aware tiers, auto-pulls a sensible default. Use when something's broken or you're a newcomer.
+- **`/model`** — quick switch. Pick a model from your pulled list + context size. Use when you just want to swap models.
+- **`/config`** — adjust settings. Full configuration form covering temperature, timeouts, ignore dirs, etc. Use when you know exactly what knob you want to turn.
+
+### CLI flags (outside the chat loop)
+
+```bash
+mandocode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
+mandocode --config show     # print current config
+mandocode --config init     # create a default config file
+mandocode --config set <key> <value>   # set a single value (e.g. set model qwen3.5:9b)
+mandocode --config path     # show config file location
+```
+
+Run `mandocode --doctor` any time chat is misbehaving — exits 0 if everything's green, 1 if anything's missing, with a clear summary of what's wrong.
 
 ---
 
@@ -204,27 +230,24 @@ The AI has sandboxed access to your project through a **FileSystemPlugin** (9 fu
 
 ## Recommended Models
 
-Models with **tool/function calling** support work best with MandoCode.
+Models with **tool/function calling** support work best with MandoCode. The first-run wizard offers exactly the models below — auto-pulls the cloud default, or lets you pick a local tier matched to your hardware.
 
-**Cloud models** (no GPU required — run remotely via Ollama):
+**Cloud** (no GPU required — runs on Ollama's servers, free with `ollama signin`):
 
 | Model | Notes |
 |-------|-------|
-| `minimax-m2.5:cloud` | Default — excellent tool support |
-| `kimi-k2.5:cloud` | Strong general-purpose |
-| `qwen3-coder:480b-cloud` | Code-focused |
+| `minimax-m2.7:cloud` | Default — auto-pulled by `/setup` when you pick Cloud |
 
-**Local models** (fully offline, runs on your hardware):
+**Local** (fully offline, runs on your hardware):
 
-| Model | VRAM | Notes |
-|-------|------|-------|
-| `qwen3:8b` | ~5-6 GB | Recommended — good speed/quality balance |
-| `qwen2.5-coder:7b` | ~5-6 GB | Code-focused |
-| `qwen2.5-coder:14b` | ~10-12 GB | Stronger coding model |
-| `mistral` | ~5 GB | General purpose |
-| `llama3.1` | ~5-6 GB | Meta's model |
+| Model | Size | Hardware |
+|-------|------|----------|
+| `qwen3.5:0.8b` | ~1.0 GB | CPU-only / integrated GPU — fast on any laptop, light reasoning |
+| `qwen3.5:2b` | ~2.7 GB | Modern CPU or 4 GB+ GPU — quick Q&A, simple code edits |
+| `qwen3.5:4b` | ~3.4 GB | Mid-range GPU (4-6 GB VRAM) or 16 GB RAM — balanced day-to-day use |
+| `qwen3.5:9b` | ~6.6 GB | Dedicated GPU (8+ GB VRAM) — best local quality, multi-file refactors |
 
-MandoCode validates model compatibility on startup. Run `/learn` for a detailed guide on model sizes and hardware requirements.
+MandoCode validates model compatibility on startup. Run `/learn` for a detailed guide on model sizes and hardware requirements, or `/setup` to switch between tiers any time.
 
 ---
 
@@ -238,7 +261,7 @@ Located at `~/.mandocode/config.json`
 ```json
 {
   "ollamaEndpoint": "http://localhost:11434",
-  "modelName": "minimax-m2.5:cloud",
+  "modelName": "minimax-m2.7:cloud",
   "modelPath": null,
   "temperature": 0.7,
   "maxTokens": 4096,
@@ -263,7 +286,7 @@ Located at `~/.mandocode/config.json`
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ollamaEndpoint` | `http://localhost:11434` | Ollama server URL |
-| `modelName` | `minimax-m2.5:cloud` | Model to use |
+| `modelName` | `minimax-m2.7:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `4096` | Maximum response token length |

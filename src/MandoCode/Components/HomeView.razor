@@ -1,0 +1,57 @@
+@using Spectre.Console
+
+@*
+    Static-info + connection-state + ready-state block extracted out of App.razor.
+    Exists primarily so App.razor can hide the entire dynamic section with a single
+    @if conditional during /setup — without component extraction, suppressing the
+    block inline interacts awkwardly with the way RazorConsole's render anchor
+    works, and the help table redraws stomp on the wizard's imperative output.
+*@
+
+<Rows>
+    <Markup Content="@($"Project Root: {ProjectRoot}")" Background="Color.Black" />
+    <Markup Content="@($"Runtime: .NET {RuntimeVersion}")" />
+    <Markup Content="@($"Ollama Endpoint: {OllamaEndpoint}")" />
+    <Markup Content="@($"Model: {ModelName}")" />
+
+    @if (!ConnectionChecked)
+    {
+        <Markup Content="🔄 Connecting to Ollama..." />
+    }
+    else if (!IsConnected)
+    {
+        <Rows>
+            <Markup Content="@($"Couldn't reach Ollama at {OllamaEndpoint}")" Foreground="Color.Yellow" />
+            <Markup Content="Type /setup to retry onboarding, or /retry to reconnect." Foreground="Color.Grey" />
+        </Rows>
+    }
+    else if (!string.IsNullOrEmpty(OnboardingStatus))
+    {
+        <Markup Content="@($"⏳ {OnboardingStatus}")" Foreground="Color.Cyan" />
+    }
+    else if (!string.IsNullOrEmpty(ModelWarning))
+    {
+        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Yellow">
+            <Rows>
+                <Markup Content="@ModelWarning" />
+            </Rows>
+        </Panel>
+    }
+    else
+    {
+        <Markup Content="✅ MandoCode is ready!" />
+        <HelpDisplay />
+        <Markup Content="@("Tip: reference files inline, e.g. What does @Program.cs do?")" />
+    }
+</Rows>
+
+@code {
+    [Parameter] public string ProjectRoot { get; set; } = "";
+    [Parameter] public string RuntimeVersion { get; set; } = "";
+    [Parameter] public string OllamaEndpoint { get; set; } = "";
+    [Parameter] public string ModelName { get; set; } = "";
+    [Parameter] public bool ConnectionChecked { get; set; }
+    [Parameter] public bool IsConnected { get; set; }
+    [Parameter] public string OnboardingStatus { get; set; } = "";
+    [Parameter] public string? ModelWarning { get; set; }
+}
