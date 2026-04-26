@@ -14,7 +14,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.9.8</Version>
+    <Version>0.9.9</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -25,32 +25,43 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.9.8 — MCP support, agentic robustness, and live shell streaming
+v0.9.9 — Onboarding overhaul
+
+First-run is now a guided wizard instead of a static "install Ollama, run serve, pull a model, then come back" panel. The path from `dotnet tool install -g MandoCode` to first chat is auto-detected, auto-recovered, or auto-installed at every step where it's possible.
 
 Added:
-- MCP (Model Context Protocol) support — connect to any MCP server (stdio or remote HTTP/SSE), tools auto-registered alongside built-in plugins. Interactive `/mcp add` wizard, per-tool first-use approval, `/mcp`, `/mcp tools`, `/mcp remove`, `/mcp-reload`.
-- Skills — user-defined skill packs (a folder containing a SKILL.md file) that the model can auto-invoke based on name/description via the new `load_skill(name)` function. Loaded from `~/.mandocode/skills/` and project-local `./.mandocode/skills/`. New `/skills` slash command lists installed skills.
-- propose_plan tool — models self-classify multi-step requests via a Semantic Kernel function instead of a separate planning round-trip; ~300 lines of fragile text-parsing removed.
-- Per-turn circuit breakers, auto-continuation, and synthetic-summary recovery on context-window overflow — long agentic loops no longer silently hang or crash.
-- Streaming execute_command — shell tool now streams stdout/stderr line-by-line; the spinner shows live `$ &lt;cmd&gt; → &lt;latest line&gt;` activity.
-- Idle-based shell timeout — replaces the old 30s wall-clock kill with a 30s idle timeout (kills only after 30s of no output) plus a 10-minute hard ceiling. Long legitimate builds now run to completion as long as they're emitting output.
-- Configurable per-request timeout (`requestTimeoutMinutes`, default 15), tool-result char budget (`toolResultCharBudget`, default 100k), and markdown render timeout (`markdownRenderTimeoutSeconds`, default 60).
-- Shell-aware system prompt — detects cmd.exe vs bash and stops the model from emitting `head`/`grep`/`cat` on Windows.
+- Guided wizard auto-fires on first run and via `/setup`. Walks users through Ollama install → daemon start → cloud sign-in → model pick → context size, all from inside the terminal.
+- Auto-install Ollama via `winget` / `brew` / `curl install.sh` with inherited stdio so users see the installer's progress. Falls back to opening ollama.com/download if the install fails.
+- Auto-launch `ollama signin` as a child process — browser opens to confirm, CLI writes the local token automatically. No more "browser sign-in alone isn't enough" trap.
+- Auto-launch `ollama serve` when the daemon isn't running, with a Spectre Status spinner showing live progress.
+- 401 auto-recovery on chat — if the daemon returns 401 mid-session, the cloud sign-in walkthrough fires immediately so users don't have to type `/setup`.
+- Trailing-slash heal on the Ollama URL: `http://localhost:11434/` is detected and silently corrected.
+- Wrong-port auto-fallback: when the configured URL fails after `ollama serve` succeeds, the wizard auto-probes `http://localhost:11434` and switches if the daemon is reachable there.
+- PATH-refresh detection on Windows — checks canonical install paths (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`) when `where ollama` fails, so post-install detection works without relaunching.
+- Tiered local-model picker with hardware guidance (qwen3.5 0.8b / 2b / 4b / 9b with VRAM expectations).
+- Cloud upsell: after a local pull, surfaces `minimax-m2.7:cloud` as the more capable option (free with `ollama signin`).
+- Combined cloud/local model picker with `(cloud)` / `(local)` badges. Replaces the old two-step "Cloud or Local? → list" flow.
+- New `/model` slash command — quick switch model + context size, skips the rest of `/config`.
+- New `--doctor` CLI flag — non-interactive preflight that prints .NET version, OS, Ollama CLI/daemon status, models pulled, cloud sign-in state.
+- New `&lt;red&gt;` / `&lt;green&gt;` / `&lt;yellow&gt;` / `&lt;cyan&gt;` HTML tag handlers in MarkdownHtmlRenderer for inline color in chat error responses.
 
 UI:
-- Spinner shows elapsed time and rotates its random message every 15s during long waits.
-- Live activity row above the spinner (used by streamed shell output, plan steps, MCP tools); persists in scrollback after the spinner stops if it was ever updated.
-- Inline auto-continuation and overflow-recovery markers so automatic restarts are visible instead of silent.
-- New plan approval UI (Execute / Reject / Cancel) replaces the old "Analyzing..." spinner phase.
-- Tighter markdown / HTML rendering — reworked renderer produces noticeably more compact output for headings, bullets, and tables, plus a refreshed color palette.
+- k-notation labels in the max-tokens picker (`32k`, `128k`, `200k`) instead of raw token numbers, with current value highlighted at top via `← current` marker.
+- Educational intro on temperature and max-tokens steps — explains what tokens are, the relationship to the model's context window, and per-tier usage examples.
+- VDOM-aware text input for URL entry in `/setup` and `/config` — RazorConsole's `TextInput` instead of Spectre's `TextPrompt` (which dropped keystrokes alongside the live render loop). Pre-filled with current URL ("press Enter to keep current").
+- 401 chat errors render the `Error:` header in red and the recommended action in green; backticked `ollama signin` keeps the existing purple inline-code styling.
 
 Changed:
-- Default per-request timeout raised from 5 min to 15 min.
-- AIService constructor signature gained PlanHandoff and SpinnerService; FileSystemPlugin constructor gained an optional SpinnerService.
+- Default cloud model bumped from `minimax-m2.5:cloud` → `minimax-m2.7:cloud` (config defaults, README, `/learn`, system prompt).
+- Default `MaxTokens` bumped from 4k → 32k for new installs (existing configs preserved).
+- `MaxMaxTokens` lowered from 256k → 200k after testing showed many cloud models hit a practical limit closer to 200k once system prompts and tool definitions are accounted for. Existing configs with 256k saved get clamped on next load.
+- `/help` table reorganized with `/setup` and `/model` next to `/config` and disambiguated descriptions.
+- 16+ failure messages across the app now consistently point users at `/setup` and/or `/retry`.
 
 Fixed:
-- Paste with newlines no longer auto-submits the prompt before the user finishes editing.
-- Keystrokes typed during diff-approval "additional instructions" prompts are no longer dropped by the parent input loop.
+- Status-aware model-list fetch with auto-retry — transient `/api/tags` failures no longer misroute users (with pulled models) into the "no models yet" flow.
+- Post-pick auth check — pulled cloud models that show in `/api/tags` after sign-out no longer cause the wizard to falsely report "Setup complete" before the chat fails with 401.
+- Picked-model validation via `/api/show` before the wizard declares success, surfacing models that listed in `/api/tags` but aren't actually loadable.
     </PackageReleaseNotes>
   </PropertyGroup>
 
