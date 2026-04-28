@@ -25,7 +25,10 @@
       "Bash(gh api *)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if 'markdown' in x['path'].lower\\(\\) or 'markdig' in x['path'].lower\\(\\) or 'link' in x['path'].lower\\(\\)]\")",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if 'Translator' in x['path'] and x['path'].endswith\\('.cs'\\)]\")",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if x['path'].endswith\\('.cs'\\) and \\('Render' in x['path'] or 'Vdom' in x['path']\\)]\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if x['path'].endswith\\('.cs'\\) and \\('Render' in x['path'] or 'Vdom' in x['path']\\)]\")",
+      "Bash(tasklist)",
+      "Bash(awk 'NR==1410,/^    private async Task ProcessDirectRequestAsync\\\\\\(string input\\\\\\)/{exit} /^    private async Task ProcessDirectRequestAsync\\\\\\(string input\\\\\\)/{found=1} found{count++} END{print \"ProcessDirectRequestAsync starts at 1410\"}' src/MandoCode/Components/App.razor)",
+      "Bash(echo \"---ls-tree exit $?\")"
     ]
   }
 }

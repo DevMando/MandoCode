@@ -2,7 +2,18 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [Unreleased]
+## [0.10.0] - 2026-04-27
+
+### Fixed
+- **Nested same-name folder reads** — `read_file_contents`, `write_file`, and `edit_file` no longer mangle paths when a project's folder layout repeats the project root's last segment (e.g. the `MyApp/MyApp/MyApp.csproj` pattern from `dotnet new`). `GetFullPath` now resolves the literal path first and only falls back to `StripRedundantRootPrefix` when nothing exists at the un-stripped target. Previously the heuristic always stripped a matching trailing segment, so legitimate nested files appeared as "File not found" with the suggested "elsewhere" path identical to the requested one.
+- **`ollama signin` not launching after fresh install** — `RunOllamaSigninAsync`, `TryStartOllamaProcess`, and `AutoPullAsync` now resolve `ollama` via the new `ResolveOllamaExecutable()` helper, which falls back to canonical install paths (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`, `/opt/homebrew/bin/ollama`, `/usr/local/bin/ollama`, etc.) when bare `ollama` isn't on the running process's PATH. Fixes the silent "browser never opens" failure when MandoCode is launched in the same shell that just installed Ollama (installer PATH updates only apply to new processes).
+- **First-run wizard imperative output getting repainted** — `InitializeConnectionAsync` now wraps `RunOnboardingFlowAsync` in `_setupActive = true` / `false`, suppressing `HomeView` for the entire wizard run instead of just the 401 auto-recovery path. Closes the latent VDOM redraw race that could clobber `ollama signin` URLs, error messages, or progress lines during first-run setup.
+
+### Added
+- **Auto-open browser on `ollama signin`** — `RunOllamaSigninAsync` now captures stdout/stderr, scans for the first `https://` URL Ollama prints, and calls `OpenInBrowser` directly so the sign-in page opens reliably regardless of Ollama's own browser-launch behavior. The URL is also re-emitted via `AnsiConsole.MarkupLine` as a clickable link with a "If your browser didn't open, copy the URL above" follow-up — survives any subsequent VDOM redraw and gives users a copy/paste fallback.
+
+### UI
+- **Green selection highlight in setup wizard** — `OnboardingFlow.Select` now applies `HighlightStyle(new Style(foreground: Color.Green))` to every `SelectionPrompt`, replacing Spectre's default blue. Affects the model picker, "What would you like to do?", "Sign me in now" branch, "Pick a starter model to install", and every other arrow-key choice in the wizard.
 
 ## [0.9.9] - 2026-04-26
 

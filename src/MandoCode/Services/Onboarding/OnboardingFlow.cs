@@ -265,7 +265,11 @@ public sealed class OnboardingFlow
     // ── Spectre prompt helpers ────────────────────────────────────────────────────
 
     private static string Select(string title, params string[] options)
-        => AnsiConsole.Prompt(new SelectionPrompt<string>().Title($"[cyan]{title}[/]").AddChoices(options));
+        => AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title($"[cyan]{title}[/]")
+                .HighlightStyle(new Style(foreground: Color.Green))
+                .AddChoices(options));
 
     private static bool Confirm(string title, bool defaultYes)
         => AnsiConsole.Prompt(new ConfirmationPrompt($"[cyan]{title}[/]") { DefaultValue = defaultYes });
@@ -715,7 +719,13 @@ public sealed class OnboardingFlow
             AnsiConsole.MarkupLine("[dim]Your browser will open to confirm your account. Come back here when it finishes.[/]");
             AnsiConsole.WriteLine();
 
-            var exitCode = await OllamaSetupHelper.RunOllamaSigninAsync(ct);
+            // Echo Ollama's stdout/stderr lines as they arrive so the user sees
+            // progress. RunOllamaSigninAsync already auto-launches the browser and
+            // re-prints the URL via AnsiConsole when it spots one in the output —
+            // this callback is just for everything else (waiting messages, errors).
+            var progress = new Progress<string>(line =>
+                AnsiConsole.WriteLine(line));
+            var exitCode = await OllamaSetupHelper.RunOllamaSigninAsync(progress, ct);
             AnsiConsole.WriteLine();
 
             if (exitCode == -1)

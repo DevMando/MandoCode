@@ -352,8 +352,22 @@
         var shouldOnboard = MandoCodeConfig.IsFirstRun() || (!probe.Ok && !Config.HasCompletedOnboarding);
         if (shouldOnboard)
         {
-            await RunOnboardingFlowAsync();
-            probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            // Suppress HomeView while the wizard runs — otherwise the VDOM render
+            // loop repaints over imperative AnsiConsole output (most importantly
+            // the `ollama signin` URL, which the user needs to be able to read
+            // and copy as a fallback if the browser auto-launch fails).
+            _setupActive = true;
+            await InvokeAsync(StateHasChanged);
+            try
+            {
+                await RunOnboardingFlowAsync();
+                probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            }
+            finally
+            {
+                _setupActive = false;
+                await InvokeAsync(StateHasChanged);
+            }
         }
 
         _isConnected = probe.Ok;

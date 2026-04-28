@@ -14,7 +14,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.9.9</Version>
+    <Version>0.10.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -25,43 +25,18 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.9.9 — Onboarding overhaul
-
-First-run is now a guided wizard instead of a static "install Ollama, run serve, pull a model, then come back" panel. The path from `dotnet tool install -g MandoCode` to first chat is auto-detected, auto-recovered, or auto-installed at every step where it's possible.
-
-Added:
-- Guided wizard auto-fires on first run and via `/setup`. Walks users through Ollama install → daemon start → cloud sign-in → model pick → context size, all from inside the terminal.
-- Auto-install Ollama via `winget` / `brew` / `curl install.sh` with inherited stdio so users see the installer's progress. Falls back to opening ollama.com/download if the install fails.
-- Auto-launch `ollama signin` as a child process — browser opens to confirm, CLI writes the local token automatically. No more "browser sign-in alone isn't enough" trap.
-- Auto-launch `ollama serve` when the daemon isn't running, with a Spectre Status spinner showing live progress.
-- 401 auto-recovery on chat — if the daemon returns 401 mid-session, the cloud sign-in walkthrough fires immediately so users don't have to type `/setup`.
-- Trailing-slash heal on the Ollama URL: `http://localhost:11434/` is detected and silently corrected.
-- Wrong-port auto-fallback: when the configured URL fails after `ollama serve` succeeds, the wizard auto-probes `http://localhost:11434` and switches if the daemon is reachable there.
-- PATH-refresh detection on Windows — checks canonical install paths (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`) when `where ollama` fails, so post-install detection works without relaunching.
-- Tiered local-model picker with hardware guidance (qwen3.5 0.8b / 2b / 4b / 9b with VRAM expectations).
-- Cloud upsell: after a local pull, surfaces `minimax-m2.7:cloud` as the more capable option (free with `ollama signin`).
-- Combined cloud/local model picker with `(cloud)` / `(local)` badges. Replaces the old two-step "Cloud or Local? → list" flow.
-- New `/model` slash command — quick switch model + context size, skips the rest of `/config`.
-- New `--doctor` CLI flag — non-interactive preflight that prints .NET version, OS, Ollama CLI/daemon status, models pulled, cloud sign-in state.
-- New `&lt;red&gt;` / `&lt;green&gt;` / `&lt;yellow&gt;` / `&lt;cyan&gt;` HTML tag handlers in MarkdownHtmlRenderer for inline color in chat error responses.
-
-UI:
-- k-notation labels in the max-tokens picker (`32k`, `128k`, `200k`) instead of raw token numbers, with current value highlighted at top via `← current` marker.
-- Educational intro on temperature and max-tokens steps — explains what tokens are, the relationship to the model's context window, and per-tier usage examples.
-- VDOM-aware text input for URL entry in `/setup` and `/config` — RazorConsole's `TextInput` instead of Spectre's `TextPrompt` (which dropped keystrokes alongside the live render loop). Pre-filled with current URL ("press Enter to keep current").
-- 401 chat errors render the `Error:` header in red and the recommended action in green; backticked `ollama signin` keeps the existing purple inline-code styling.
-
-Changed:
-- Default cloud model bumped from `minimax-m2.5:cloud` → `minimax-m2.7:cloud` (config defaults, README, `/learn`, system prompt).
-- Default `MaxTokens` bumped from 4k → 32k for new installs (existing configs preserved).
-- `MaxMaxTokens` lowered from 256k → 200k after testing showed many cloud models hit a practical limit closer to 200k once system prompts and tool definitions are accounted for. Existing configs with 256k saved get clamped on next load.
-- `/help` table reorganized with `/setup` and `/model` next to `/config` and disambiguated descriptions.
-- 16+ failure messages across the app now consistently point users at `/setup` and/or `/retry`.
+v0.10.0 — File-read and cloud-signin reliability
 
 Fixed:
-- Status-aware model-list fetch with auto-retry — transient `/api/tags` failures no longer misroute users (with pulled models) into the "no models yet" flow.
-- Post-pick auth check — pulled cloud models that show in `/api/tags` after sign-out no longer cause the wizard to falsely report "Setup complete" before the chat fails with 401.
-- Picked-model validation via `/api/show` before the wizard declares success, surfacing models that listed in `/api/tags` but aren't actually loadable.
+- Nested same-name folder reads — `read_file_contents`, `write_file`, and `edit_file` no longer mangle paths in projects whose folder layout repeats the project root's last segment (e.g. the `MyApp/MyApp/MyApp.csproj` pattern from `dotnet new`). The literal path is resolved first, with the redundant-prefix heuristic only firing when the un-stripped target doesn't exist.
+- `ollama signin` not launching after fresh install — `RunOllamaSigninAsync`, `TryStartOllamaProcess`, and `AutoPullAsync` now resolve `ollama` via canonical install paths when the bare command isn't on the running process's PATH. Fixes the silent "browser never opens" failure when MandoCode is launched in the same shell that just installed Ollama.
+- First-run wizard imperative output getting repainted — the wizard now suppresses `HomeView` for the entire run, not just the 401 auto-recovery path. Closes the latent VDOM redraw race that could clobber `ollama signin` URLs and other progress lines.
+
+Added:
+- Auto-open browser on `ollama signin` — MandoCode now captures Ollama's stdout, scans for the sign-in URL, and opens the browser itself instead of relying on Ollama's own launch behavior. URL also re-emitted via `AnsiConsole.MarkupLine` as a copy/paste fallback.
+
+UI:
+- Green selection highlight in the setup wizard — every wizard `SelectionPrompt` (model picker, "What would you like to do?", "Sign me in now", starter-model picker) now uses green instead of Spectre's default blue.
     </PackageReleaseNotes>
   </PropertyGroup>
 

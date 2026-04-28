@@ -823,13 +823,16 @@ public class FileSystemPlugin
 
     private string GetFullPath(string relativePath)
     {
-        // Strip redundant project root prefix from the relative path.
-        // Some models include the project root in the path (e.g. "src/App/bin/Debug/net8.0/Games/file.js"
-        // when ProjectRoot is already ".../src/App/bin/Debug/net8.0"), causing Path.Combine to double up.
-        relativePath = StripRedundantRootPrefix(relativePath);
+        // Resolve the literal path first. Only fall back to StripRedundantRootPrefix
+        // if nothing exists at the un-stripped target — otherwise legitimate nested
+        // folders that share a name with the project root's last segment (e.g. the
+        // "MyApp/MyApp/MyApp.csproj" pattern from `dotnet new`) get mangled.
+        var literalFull = Path.GetFullPath(Path.Combine(ProjectRoot, relativePath));
+        var resolvedRelative = LiteralPathLooksReal(literalFull, relativePath)
+            ? relativePath
+            : StripRedundantRootPrefix(relativePath);
 
-        var fullPath = Path.Combine(ProjectRoot, relativePath);
-        fullPath = Path.GetFullPath(fullPath);
+        var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, resolvedRelative));
 
         // Security check: ensure the path is within project root with separator boundary
         // Without the separator, "C:\projects\myapp" would match "C:\projects\myappevil"
@@ -843,6 +846,19 @@ public class FileSystemPlugin
         }
 
         return fullPath;
+    }
+
+    // The literal path "looks real" if the file/dir exists, OR (for create operations)
+    // its parent directory exists. The parent check handles write_file/create_folder
+    // where the target itself doesn't exist yet but the user clearly meant the
+    // un-stripped location.
+    private static bool LiteralPathLooksReal(string fullPath, string relativePath)
+    {
+        if (File.Exists(fullPath) || Directory.Exists(fullPath))
+            return true;
+
+        var parent = Path.GetDirectoryName(fullPath);
+        return !string.IsNullOrEmpty(parent) && Directory.Exists(parent);
     }
 
     /// <summary>
