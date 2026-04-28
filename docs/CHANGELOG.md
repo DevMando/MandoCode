@@ -2,8 +2,6 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [Unreleased]
-
 ## [0.10.0] - 2026-04-27
 
 ### Fixed
