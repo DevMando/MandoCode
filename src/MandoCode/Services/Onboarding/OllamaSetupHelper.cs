@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Spectre.Console;
 
 namespace MandoCode.Services;
 
@@ -131,6 +132,42 @@ public static class OllamaSetupHelper
         return false;
     }
 
+    /// <summary>
+    /// Returns "ollama" if the bare command is on PATH, otherwise a full path to
+    /// the binary at one of the known install locations. Used wherever we spawn
+    /// `ollama` as a child process — `Process.Start("ollama", ...)` with
+    /// UseShellExecute=false fails when the running process inherited a stale
+    /// PATH (extremely common right after the user installs Ollama via the
+    /// wizard, since installer PATH updates only apply to NEW processes).
+    /// </summary>
+    public static string ResolveOllamaExecutable()
+    {
+        try
+        {
+            var which = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "where" : "which";
+            using var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo(which, "ollama")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            proc.Start();
+            proc.WaitForExit(2000);
+            if (proc.ExitCode == 0) return "ollama";
+        }
+        catch { /* fall through to direct path check */ }
+
+        foreach (var path in CandidateOllamaPaths())
+        {
+            if (File.Exists(path)) return path;
+        }
+        return "ollama"; // last-ditch: let Process.Start fail with a clear OS error
+    }
+
     private static IEnumerable<string> CandidateOllamaPaths()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -246,7 +283,7 @@ public static class OllamaSetupHelper
     {
         try
         {
-            var psi = new ProcessStartInfo("ollama", "serve")
+            var psi = new ProcessStartInfo(ResolveOllamaExecutable(), "serve")
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -314,30 +351,58 @@ public static class OllamaSetupHelper
     }
 
     /// <summary>
-    /// Run `ollama signin` as a child process with inherited stdio so the user can
-    /// see the URL Ollama prints, interact with prompts, and watch the browser flow.
-    /// Waits for the process to exit (cancellable via CancellationToken). Returns:
+    /// Run `ollama signin` as a child process. Captures stdout/stderr so we can:
+    /// (1) auto-launch the browser ourselves the moment Ollama prints its sign-in
+    ///     URL — Ollama's own browser-opening is unreliable across terminals
+    ///     (especially when MandoCode's VDOM render loop is repainting the screen),
+    /// (2) re-emit the URL via AnsiConsole so it survives any subsequent VDOM redraw
+    ///     and the user can copy it as a fallback if no browser pops open.
+    /// Each captured line is also forwarded through onLine so the caller can echo
+    /// it. Returns:
     /// 0  — success (auth completed)
     /// >0 — signin failed or was cancelled
     /// -1 — process couldn't be launched (CLI missing, version too old, etc.)
     /// </summary>
-    public static async Task<int> RunOllamaSigninAsync(CancellationToken ct = default)
+    public static async Task<int> RunOllamaSigninAsync(IProgress<string>? onLine = null, CancellationToken ct = default)
     {
         try
         {
-            var psi = new ProcessStartInfo("ollama", "signin")
+            var psi = new ProcessStartInfo(ResolveOllamaExecutable(), "signin")
             {
                 UseShellExecute = false,
-                // Don't redirect any stdio — the child process inherits the parent's
-                // terminal so it can print its URL, accept input if needed, and the
-                // user sees its full output without us having to forward streams.
                 RedirectStandardInput = false,
-                RedirectStandardOutput = false,
-                RedirectStandardError = false,
-                CreateNoWindow = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
             };
-            using var proc = Process.Start(psi);
-            if (proc == null) return -1;
+
+            using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+
+            var browserLaunched = false;
+            void HandleLine(string? line)
+            {
+                if (line == null) return;
+                onLine?.Report(line);
+
+                if (browserLaunched) return;
+                var url = ExtractFirstUrl(line);
+                if (url == null) return;
+
+                browserLaunched = true;
+                OpenInBrowser(url);
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine($"[cyan]→ Opening sign-in page in your browser:[/] [link]{Spectre.Console.Markup.Escape(url)}[/]");
+                AnsiConsole.MarkupLine("[dim]If your browser didn't open, copy the URL above and paste it manually.[/]");
+                AnsiConsole.WriteLine();
+            }
+
+            proc.OutputDataReceived += (_, e) => HandleLine(e.Data);
+            proc.ErrorDataReceived  += (_, e) => HandleLine(e.Data);
+
+            if (!proc.Start()) return -1;
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+
             await proc.WaitForExitAsync(ct);
             return proc.ExitCode;
         }
@@ -345,6 +410,15 @@ public static class OllamaSetupHelper
         {
             return -1;
         }
+    }
+
+    // Pulls the first http(s) URL out of a line. Trims trailing punctuation that
+    // commonly clings to URLs in CLI output ("...visit https://x.com/abc.").
+    private static string? ExtractFirstUrl(string line)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(line, @"https?://\S+");
+        if (!match.Success) return null;
+        return match.Value.TrimEnd('.', ',', ')', ']', '>', '"', '\'');
     }
 
     /// <summary>
@@ -493,7 +567,7 @@ public static class OllamaSetupHelper
         {
             using var proc = new Process
             {
-                StartInfo = new ProcessStartInfo("ollama", $"pull {modelTag}")
+                StartInfo = new ProcessStartInfo(ResolveOllamaExecutable(), $"pull {modelTag}")
                 {
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
