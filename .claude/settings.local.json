@@ -28,7 +28,15 @@
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in d['tree'] if x['path'].endswith\\('.cs'\\) and \\('Render' in x['path'] or 'Vdom' in x['path']\\)]\")",
       "Bash(tasklist)",
       "Bash(awk 'NR==1410,/^    private async Task ProcessDirectRequestAsync\\\\\\(string input\\\\\\)/{exit} /^    private async Task ProcessDirectRequestAsync\\\\\\(string input\\\\\\)/{found=1} found{count++} END{print \"ProcessDirectRequestAsync starts at 1410\"}' src/MandoCode/Components/App.razor)",
-      "Bash(echo \"---ls-tree exit $?\")"
+      "Bash(echo \"---ls-tree exit $?\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-gz-semver2/microsoft.agents.ai/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-gz-semver2/modelcontextprotocol/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/microsoft.agents.ai/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/modelcontextprotocol/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/modelcontextprotocol.core/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/microsoft.extensions.ai.abstractions/index.json\")",
+      "Read(//home/devmando/.mandocode/**)",
+      "Read(//mnt/c/Users/DevMando/.mandocode/**)"
     ]
   }
 }
