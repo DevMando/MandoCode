@@ -1762,6 +1762,7 @@
                     failChoice = AnsiConsole.Prompt(
                         new SelectionPrompt<string>()
                             .Title("How would you like to proceed?")
+                            .HighlightStyle(new Style(foreground: Color.Green))
                             .AddChoices(new[] { "Skip this step and continue", "Cancel the plan" })
                     );
                 }

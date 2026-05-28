@@ -74,14 +74,37 @@ public class FileSystemPluginTests : IDisposable
     public async Task EditFile_NoMatch_ReturnsDiagnosticGuidance()
     {
         var path = "foo.txt";
-        await File.WriteAllTextAsync(Path.Combine(_tempRoot, path), "some content");
+        var fileContent = "some content";
+        await File.WriteAllTextAsync(Path.Combine(_tempRoot, path), fileContent);
 
         var result = await _plugin.EditFile(path, "this string does not exist", "x");
 
         Assert.Contains("Could not find", result);
-        // Should surface the "common causes" guidance, not just "match exactly".
-        Assert.Contains("re-read", result, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("write_file", result);
+        // The current file content is appended so the model can fix old_text in place
+        // without firing a separate read_file_contents trip (that re-read cascade was
+        // the bloat that filled chat history in past failures).
+        Assert.Contains("Current file content", result);
+        Assert.Contains(fileContent, result);
+    }
+
+    [Fact]
+    public async Task EditFile_NoMatch_LargeFile_TruncatesContentHint()
+    {
+        // For files larger than the 5K content-hint cap, the error response must truncate
+        // — otherwise the hint itself becomes a bloat source we were trying to prevent.
+        var path = "big.txt";
+        var bigContent = new string('a', 8000);
+        await File.WriteAllTextAsync(Path.Combine(_tempRoot, path), bigContent);
+
+        var result = await _plugin.EditFile(path, "missing fragment", "x");
+
+        Assert.Contains("Could not find", result);
+        Assert.Contains("Current file content", result);
+        Assert.Contains("truncated", result);
+        // The full 8000-char content must not appear verbatim — the truncation marker
+        // proves the cap kicked in.
+        Assert.DoesNotContain(bigContent, result);
     }
 
     // ──────────────────────────────────────────────
