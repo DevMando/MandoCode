@@ -36,7 +36,10 @@
       "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/modelcontextprotocol.core/index.json\")",
       "Bash(curl -s \"https://api.nuget.org/v3/registration5-semver1/microsoft.extensions.ai.abstractions/index.json\")",
       "Read(//home/devmando/.mandocode/**)",
-      "Read(//mnt/c/Users/DevMando/.mandocode/**)"
+      "Read(//mnt/c/Users/DevMando/.mandocode/**)",
+      "Bash(python -c ' *)",
+      "Bash(python -X utf8 -c ' *)",
+      "PowerShell(dotnet build *)"
     ]
   }
 }

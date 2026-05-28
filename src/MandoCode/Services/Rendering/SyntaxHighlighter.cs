@@ -134,8 +134,12 @@ public static class SyntaxHighlighter
     private static readonly Regex SingleQuoteString = new(@"\G'(?:[^'\\]|\\.)*'", RegexOptions.Compiled);
     private static readonly Regex BacktickString = new(@"\G`(?:[^`\\]|\\.)*`", RegexOptions.Compiled);
 
-    // Numbers
-    private static readonly Regex NumberLiteral = new(@"\G\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G\b0[bB][01_]+[lLuU]*\b|\G\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled);
+    // Numbers. The (?<!\w\.) lookbehind keeps the tokenizer from re-matching
+    // the tail of a version-style fragment (e.g. the `0` in `net8.0`) as a
+    // standalone numeric literal after the leading identifier got consumed by
+    // the Word rule. Real numbers like `0.5`, `3.14`, `1e10` are untouched
+    // because they're not preceded by `word-char + dot`.
+    private static readonly Regex NumberLiteral = new(@"\G(?<!\w\.)\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G(?<!\w\.)\b0[bB][01_]+[lLuU]*\b|\G(?<!\w\.)\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled);
 
     // Identifier (word)
     private static readonly Regex Word = new(@"\G[a-zA-Z_]\w*", RegexOptions.Compiled);

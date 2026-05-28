@@ -1,5 +1,6 @@
 using MandoCode.Models;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace MandoCode.Services;
 
@@ -157,20 +158,27 @@ public class DiffApprovalHandler
         // Stop the spinner so we have clean console output
         _spinner.Stop();
 
-        // Render command panel — size to fit the command text
-        var contentWidth = command.Length + 5; // "│  $ " prefix
-        var boxWidth = Math.Max(50, contentWidth + 2); // +2 for padding before ┐/┘
-        var headerText = "\u250c\u2500 Command ";
-        var topPad = Math.Max(0, boxWidth - headerText.Length - 1); // -1 for ┐
-        var bottomPad = Math.Max(0, boxWidth - 1); // -1 for ┘
+        // Render command panel — matches the rounded/dim border style used
+        // for fenced code blocks (see MarkdownHtmlRenderer.TranslateCodeBlock).
+        string highlighted;
+        try
+        {
+            highlighted = SyntaxHighlighter.Highlight($"$ {command}", "bash");
+        }
+        catch
+        {
+            highlighted = Markup.Escape($"$ {command}");
+        }
 
-        Console.WriteLine();
-        Console.WriteLine($"\u001b[33m{headerText}{new string('\u2500', topPad)}\u2510\u001b[0m");
-        Console.WriteLine("\u001b[33m\u2502\u001b[0m");
-        Console.WriteLine($"\u001b[33m\u2502\u001b[0m  $ {command}");
-        Console.WriteLine("\u001b[33m\u2502\u001b[0m");
-        Console.WriteLine($"\u001b[33m\u2514{new string('\u2500', bottomPad)}\u2518\u001b[0m");
-        Console.WriteLine();
+        var commandPanel = new Panel(new Markup(highlighted))
+            .Border(BoxBorder.Rounded)
+            .BorderStyle(Style.Parse("dim"))
+            .Padding(1, 0);
+        commandPanel.Header = new PanelHeader("[cyan] Command [/]", Justify.Left);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(commandPanel);
+        AnsiConsole.WriteLine();
 
         // If globally bypassed, auto-approve
         if (_globalWriteBypass)
@@ -252,17 +260,23 @@ public class DiffApprovalHandler
 
         if (isFolder)
         {
-            // Folder deletion — show folder listing instead of diff
-            Console.WriteLine();
-            Console.WriteLine($"\u001b[31m\u250c\u2500 Delete Folder: {relativePath}/ \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\u001b[0m");
-            Console.WriteLine("\u001b[31m\u2502\u001b[0m");
+            // Folder deletion — render with rounded panel matching the Command
+            // and code-snippet styling, but with a red border.
+            var folderRows = new List<Spectre.Console.Rendering.IRenderable>();
             foreach (var line in existingContent!.Split('\n'))
             {
-                Console.WriteLine($"\u001b[31m\u2502 {line}\u001b[0m");
+                folderRows.Add(new Markup(Markup.Escape(line.TrimEnd('\r'))));
             }
-            Console.WriteLine("\u001b[31m\u2502\u001b[0m");
-            Console.WriteLine($"\u001b[31m\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\u001b[0m");
-            Console.WriteLine();
+
+            var folderPanel = new Panel(new Rows(folderRows))
+                .Border(BoxBorder.Rounded)
+                .BorderStyle(Style.Parse("red"))
+                .Padding(1, 0);
+            folderPanel.Header = new PanelHeader($"[red] Delete Folder: {Markup.Escape(relativePath)}/ [/]", Justify.Left);
+
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(folderPanel);
+            AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine($"[red]This will DELETE the folder and ALL its contents: {Spectre.Console.Markup.Escape(relativePath)}/[/]");
             Console.WriteLine();
         }
@@ -364,65 +378,47 @@ public class DiffApprovalHandler
 
     private void RenderDiffPanel(string relativePath, List<DiffLine> displayLines, int additions, int deletions, bool isNewFile)
     {
-        Console.WriteLine();
-
-        var fileLink = FileLink(relativePath);
-        var visibleLabel = $"Diff: {relativePath}";
-
-        // Measure content widths to size box dynamically
+        var fullPath = Path.GetFullPath(Path.Combine(_projectRoot.ProjectRoot, relativePath));
+        var fileUri = new Uri(fullPath).AbsoluteUri;
+        var escapedPath = Markup.Escape(relativePath);
         var summaryLabel = isNewFile ? " (new file)" : "";
-        var summaryLine = $"  {deletions} deletion(s), {additions} addition(s){summaryLabel}";
-        var maxContentWidth = Math.Max(visibleLabel.Length + 4, summaryLine.Length + 1);
+        var summaryLine = $"{deletions} deletion(s), {additions} addition(s){summaryLabel}";
+
+        var rows = new List<IRenderable>();
         foreach (var line in displayLines)
         {
-            var num = (line.NewLineNumber ?? line.OldLineNumber)?.ToString("0000") ?? "    ";
-            var prefix = line.LineType == DiffLineType.Unchanged ? "   " : " - ";
-            if (line.LineType == DiffLineType.Added) prefix = " + ";
-            var lineWidth = 2 + num.Length + prefix.Length + line.Content.Length;
-            maxContentWidth = Math.Max(maxContentWidth, lineWidth);
-        }
-        var innerWidth = Math.Max(48, maxContentWidth + 2);
-
-        // Top border with rounded corner
-        var topLabel = $"\u256d\u2500 Diff: {fileLink} ";
-        var visibleTopLabel = $"\u256d\u2500 Diff: {relativePath} ";
-        var topPad = Math.Max(0, innerWidth - visibleTopLabel.Length);
-        Console.WriteLine(topLabel + new string('\u2500', topPad) + "\u256e");
-        Console.WriteLine("\u2502");
-
-        foreach (var line in displayLines)
-        {
-            var lineNum = "";
-
+            string num;
+            string markup;
             switch (line.LineType)
             {
                 case DiffLineType.Removed:
-                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[31m{lineNum} - {line.Content}\u001b[0m");
-                    Console.WriteLine();
+                    num = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
+                    markup = $"[red]{num} - {Markup.Escape(line.Content)}[/]";
                     break;
-
                 case DiffLineType.Added:
-                    lineNum = line.NewLineNumber.HasValue ? $"{line.NewLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[38;2;135;206;250m{lineNum} + {line.Content}\u001b[0m");
-                    Console.WriteLine();
+                    num = line.NewLineNumber.HasValue ? $"{line.NewLineNumber,4}" : "    ";
+                    markup = $"[rgb(135,206,250)]{num} + {Markup.Escape(line.Content)}[/]";
                     break;
-
-                case DiffLineType.Unchanged:
-                    lineNum = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
-                    Console.Write("\u2502 ");
-                    Console.Write($"\u001b[2m{lineNum}   {line.Content}\u001b[0m");
-                    Console.WriteLine();
+                default:
+                    num = line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ";
+                    markup = $"[dim]{num}   {Markup.Escape(line.Content)}[/]";
                     break;
             }
+            rows.Add(new Markup(markup));
         }
 
-        Console.WriteLine("\u2502");
-        Console.WriteLine($"\u2502{summaryLine}");
-        Console.WriteLine("\u2570" + new string('\u2500', innerWidth) + "\u256f");
-        Console.WriteLine();
+        rows.Add(new Markup(string.Empty));
+        rows.Add(new Markup($"[dim]{Markup.Escape(summaryLine)}[/]"));
+
+        var diffPanel = new Panel(new Rows(rows))
+            .Border(BoxBorder.Rounded)
+            .BorderStyle(Style.Parse("dim"))
+            .Padding(1, 0);
+        diffPanel.Header = new PanelHeader($"[cyan] Diff: [link={fileUri}]{escapedPath}[/] [/]", Justify.Left);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(diffPanel);
+        AnsiConsole.WriteLine();
     }
 
     /// <summary>

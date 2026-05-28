@@ -1740,12 +1740,11 @@
                 SpinnerService.SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 if (!string.IsNullOrEmpty(progressEvent.Message))
                 {
-                    // Truncate long results for display
-                    var displayMessage = progressEvent.Message.Length > 500
-                        ? progressEvent.Message[..500] + "..."
-                        : progressEvent.Message;
-                    AnsiConsole.Markup(Spectre.Console.Markup.Escape(displayMessage));
-                    AnsiConsole.WriteLine();
+                    // Render through the markdown pipeline so **bold**, lists,
+                    // inline code, and file-path linkification work the same as
+                    // they do for non-plan AI responses (see line ~1512).
+                    var stepRenderable = MarkdownHtmlRenderer.BuildRenderable(progressEvent.Message, ProjectRoot.ProjectRoot);
+                    AnsiConsole.Write(stepRenderable);
                 }
                 AnsiConsole.MarkupLine($"[green]Step {progressEvent.CurrentStep} completed.[/]");
                 AnsiConsole.WriteLine();
