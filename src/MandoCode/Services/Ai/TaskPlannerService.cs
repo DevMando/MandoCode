@@ -97,7 +97,12 @@ public class TaskPlannerService
 
         foreach (var step in plan.Steps)
         {
-            if (cancellationToken.IsCancellationRequested)
+            // Two cancellation signals to watch:
+            //   1. CancellationToken — set by Ctrl+C or external abort.
+            //   2. plan.Status == Cancelled — set by the StepFailed handler in App.razor
+            //      after the user picks "Cancel the plan." This one happens *between*
+            //      iterations of this loop and was previously ignored entirely.
+            if (cancellationToken.IsCancellationRequested || plan.Status == TaskPlanStatus.Cancelled)
             {
                 CancelPlan(plan);
                 yield return TaskProgressEvent.PlanCancelled(plan);
@@ -112,6 +117,7 @@ public class TaskPlannerService
 
             TaskProgressEvent? stepEvent = null;
             bool shouldCancel = false;
+            bool wasGenericFailure = false;
 
             try
             {
@@ -144,28 +150,42 @@ public class TaskPlannerService
             }
             catch (Exception ex)
             {
+                // Defer the skip-vs-cancel decision: the user hasn't chosen yet. The
+                // StepFailed handler in App.razor will yield the prompt, mutate plan.Status
+                // if they pick "Cancel the plan," and only THEN should we decide. Earlier
+                // versions of this catch pre-decided `shouldCancel` here, before the yield,
+                // so a "Cancel the plan" pick was silently downgraded to "skip."
                 step.Status = TaskStepStatus.Failed;
                 step.ErrorMessage = ex.Message;
+                wasGenericFailure = true;
                 stepEvent = TaskProgressEvent.StepFailed(plan, step, ex.Message);
-
-                lock (_planStatusLock)
-                {
-                    if (plan.Status == TaskPlanStatus.Cancelled)
-                    {
-                        shouldCancel = true;
-                    }
-                    else
-                    {
-                        step.Status = TaskStepStatus.Skipped;
-                    }
-                }
             }
 
             await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
             if (stepEvent != null)
             {
+                // Hand control to the consumer (App.razor). Their StepFailed handler may
+                // show the "Skip / Cancel the plan" prompt and mutate plan.Status before
+                // returning here. Any decision based on plan.Status MUST happen after this.
                 yield return stepEvent;
+            }
+
+            // Post-yield reconciliation for the generic-failure path:
+            //   • If the user picked "Cancel the plan" → CancelPlan(plan) ran, plan.Status
+            //     is now Cancelled, and we should bail.
+            //   • Otherwise → SkipStep ran (sets step.Status = Skipped) OR neither handler
+            //     ran (programmatic caller). In both cases, mark the step Skipped so the
+            //     loop continues past it without re-running.
+            if (wasGenericFailure)
+            {
+                lock (_planStatusLock)
+                {
+                    if (plan.Status == TaskPlanStatus.Cancelled)
+                        shouldCancel = true;
+                    else if (step.Status == TaskStepStatus.Failed)
+                        step.Status = TaskStepStatus.Skipped;
+                }
             }
 
             if (shouldCancel)

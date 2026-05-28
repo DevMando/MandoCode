@@ -353,12 +353,38 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 return;
             }
 
+            // Edit-failure circuit: if the model has already failed N edit attempts on this
+            // exact path this turn (without an intervening write), it's in an exploratory
+            // loop — every further attempt would just thrash. Refuse with a steer toward
+            // tools that can actually unstick it (targeted re-read or full rewrite).
+            var editScope = _currentScope.Value;
+            if (editScope != null && editScope.GetEditFailureCount(editPath) >= InvocationScope.EditFailureCircuitThreshold)
+            {
+                var circuitMsg =
+                    $"Edit-failure circuit tripped: {InvocationScope.EditFailureCircuitThreshold} consecutive edit_file " +
+                    $"attempts on '{editPath}' have failed this turn. Stop calling edit_file on this file. " +
+                    "Either (a) call read_file_contents to refresh your view of the file, or " +
+                    "(b) use write_file to replace the whole region you want to change.";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, circuitMsg);
+                OnFunctionCompleted?.Invoke(new FunctionExecutionResult
+                {
+                    FunctionName = functionName,
+                    Result = circuitMsg,
+                    Success = false
+                });
+                lock (_pendingLock) _pendingFunctionCount--;
+                OnFunctionFinished?.Invoke();
+                return;
+            }
+
             var preview = BuildEditPreview(capturedOldContent, oldText, newText);
             if (preview.Error != null)
             {
-                // Can't preview → refuse deterministically with the same message the
-                // plugin would return, so the model retries correctly without a confused approval.
-                var msg = $"Error: {preview.Error} (from '{editPath}')";
+                // Record the failure for this path. The composer attaches the content hint
+                // on the FIRST failure per path and a short pointer on subsequent ones —
+                // prevents the same 5K blob being shipped on every loop iteration.
+                editScope?.RecordEditFailure(editPath);
+                var msg = ComposeEditFailureMessage(preview.Error, editPath, capturedOldContent, editScope);
                 context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                 OnFunctionCompleted?.Invoke(new FunctionExecutionResult
                 {
@@ -795,10 +821,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// Mirrors <c>FileSystemPlugin.EditFile</c>'s replacement semantics for the approval
     /// preview: exact single-occurrence first, then a CRLF-normalized fallback, preserving
     /// the file's original line-ending style. Returns either the computed new content or
-    /// a human-readable error explaining why a preview can't be shown.
-    /// On a "not found" error, the file's current content (capped) is appended so the
-    /// model can retry with a corrected old_text without firing a separate re-read trip —
-    /// the re-read fallback was the cascade that filled chat history in past failures.
+    /// a bare human-readable error reason. The error is INTENTIONALLY bare (no content
+    /// hint) — attaching the current file content is the call site's job, so it can
+    /// dedupe by scope/path. Otherwise an exploratory loop dumps the same 5K content
+    /// blob on every failure and amplifies the bloat the hint was meant to prevent.
     /// </summary>
     private static (string? NewContent, string? Error) BuildEditPreview(string fileContent, string oldText, string newText)
     {
@@ -818,8 +844,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         var nOld = oldText.Replace("\r\n", "\n").Replace("\r", "\n");
         var nIndex = nContent.IndexOf(nOld, StringComparison.Ordinal);
         if (nIndex < 0)
-            return (null, "Could not find old_text in the file. It may have been modified since the last read, or the whitespace differs.\n" +
-                          BuildCurrentContentHint(fileContent));
+            return (null, "Could not find old_text in the file. It may have been modified since the last read, or the whitespace differs.");
 
         var nSecond = nContent.IndexOf(nOld, nIndex + nOld.Length, StringComparison.Ordinal);
         if (nSecond >= 0)
@@ -834,8 +859,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
-    /// Builds a "here's what's currently in the file" hint to attach to edit failures,
-    /// so the model can fix its old_text without firing a separate read_file_contents trip.
+    /// Builds a "here's what's currently in the file" hint to attach to the FIRST
+    /// edit failure per (scope, path). Subsequent failures should emit a short
+    /// pointer instead — see the dedup gate in the edit_file branch of
+    /// OnFunctionInvocationAsync.
     /// Capped at 5000 chars — large enough for most files, small enough to bound bloat.
     /// </summary>
     private static string BuildCurrentContentHint(string fileContent)
@@ -848,6 +875,35 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         return $"Current file content ({lineCount} lines, showing first {cap} chars):\n" +
                fileContent[..cap] +
                "\n... [truncated — use read_file_contents to see the rest]";
+    }
+
+    /// <summary>
+    /// Composes the full edit_file failure message: the bare reason from
+    /// <see cref="BuildEditPreview"/> plus a per-scope-deduped content hint. The first
+    /// failure for a path emits the full 5K hint; later failures for the same path get
+    /// a one-line pointer back to the original. Cleared when the path is written.
+    /// </summary>
+    private static string ComposeEditFailureMessage(string bareReason, string editPath, string currentContent, InvocationScope? scope)
+    {
+        var prefix = $"Error: {bareReason} (from '{editPath}')";
+
+        // "Multiple occurrences" failures don't need the content hint — the model already
+        // saw the relevant region (its own old_text matched too liberally). Only attach
+        // the hint when the failure was "could not find," and only the first time per path.
+        if (!bareReason.StartsWith("Could not find", StringComparison.OrdinalIgnoreCase))
+            return prefix;
+
+        if (scope == null)
+            return prefix + "\n" + BuildCurrentContentHint(currentContent);
+
+        if (scope.HasEmittedEditHint(editPath))
+            return prefix +
+                   $"\nThe current content of '{editPath}' was attached to an earlier failure this turn — " +
+                   "re-examine it instead of asking for it again. If you need to see it again, " +
+                   "call read_file_contents.";
+
+        scope.MarkEditHintEmitted(editPath);
+        return prefix + "\n" + BuildCurrentContentHint(currentContent);
     }
 
     /// <summary>

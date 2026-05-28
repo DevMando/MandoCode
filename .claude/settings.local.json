@@ -39,7 +39,9 @@
       "Read(//mnt/c/Users/DevMando/.mandocode/**)",
       "Bash(python -c ' *)",
       "Bash(python -X utf8 -c ' *)",
-      "PowerShell(dotnet build *)"
+      "PowerShell(dotnet build *)",
+      "Bash(awk 'NR==717,/^    \\\\}/' src/MandoCode/Components/App.razor)",
+      "Bash(awk 'NR>=820 && NR<=900' src/MandoCode/Components/App.razor)"
     ]
   }
 }

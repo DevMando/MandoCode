@@ -21,8 +21,21 @@ public class InvocationScope : IDisposable
     // are treated as the same file — matches OS semantics and keeps the two maps aligned.
     private readonly HashSet<string> _readKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pathsModifiedSinceRead = new(StringComparer.OrdinalIgnoreCase);
+    // Edit-failure bookkeeping per path — used by the filter to dedupe the content-hint
+    // that's attached to "Could not find old_text" errors, and to trip a circuit breaker
+    // when the model keeps failing against the same path in an exploratory loop.
+    private readonly HashSet<string> _editHintEmitted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _editFailureCount = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
     private Action? _onDispose;
+
+    /// <summary>
+    /// After how many failed edit_file attempts on the same path (without an intervening
+    /// successful write) should the filter refuse further edits and steer the model to
+    /// a different tool. Three is small enough to short-circuit a thrash loop quickly,
+    /// but generous enough to let normal "retry with corrected old_text" patterns through.
+    /// </summary>
+    public const int EditFailureCircuitThreshold = 3;
 
     public long ResultCharBudget { get; }
     public long TotalResultChars { get; private set; }
@@ -65,14 +78,56 @@ public class InvocationScope : IDisposable
 
     /// <summary>
     /// Flag a path as written/edited. The next read of that path is allowed
-    /// through because the content has legitimately changed.
+    /// through because the content has legitimately changed. Also clears the
+    /// edit-hint / edit-failure bookkeeping: the file just changed, so any
+    /// previously-shown content is stale and the failure streak doesn't apply
+    /// to the new state.
     /// </summary>
     public void RecordWrite(string path)
     {
         lock (_lock)
         {
             _pathsModifiedSinceRead.Add(path);
+            _editHintEmitted.Remove(path);
+            _editFailureCount.Remove(path);
         }
+    }
+
+    /// <summary>
+    /// True once an edit_file failure on this path has already returned the full
+    /// content-hint to the model this scope. Subsequent failures for the same path
+    /// should emit a short pointer instead — see FunctionInvocationFilter.BuildEditPreview.
+    /// Cleared by <see cref="RecordWrite"/>.
+    /// </summary>
+    public bool HasEmittedEditHint(string path)
+    {
+        lock (_lock) return _editHintEmitted.Contains(path);
+    }
+
+    public void MarkEditHintEmitted(string path)
+    {
+        lock (_lock) _editHintEmitted.Add(path);
+    }
+
+    /// <summary>
+    /// Increment the failed-edit counter for <paramref name="path"/> and return the
+    /// post-increment value. Callers use the return to decide whether to trip the
+    /// edit-failure circuit (see <see cref="EditFailureCircuitThreshold"/>).
+    /// </summary>
+    public int RecordEditFailure(string path)
+    {
+        lock (_lock)
+        {
+            _editFailureCount.TryGetValue(path, out var current);
+            current++;
+            _editFailureCount[path] = current;
+            return current;
+        }
+    }
+
+    public int GetEditFailureCount(string path)
+    {
+        lock (_lock) return _editFailureCount.TryGetValue(path, out var c) ? c : 0;
     }
 
     public void RecordResultChars(int chars)
