@@ -1,4 +1,5 @@
 using Spectre.Console;
+using Spectre.Console.Rendering;
 using MandoCode.Models;
 
 namespace MandoCode.Services;
@@ -308,6 +309,12 @@ public static class CommandAutocomplete
         }
     }
 
+    // Panel geometry shared by both autocomplete dropdowns. Outer width matches
+    // the legacy 48-col bordered look; inner content area is 44 cols after the
+    // 2-col border and 2-col default horizontal padding.
+    private const int AutocompletePanelWidth = 48;
+    private const int AutocompleteContentWidth = AutocompletePanelWidth - 4;
+
     /// <summary>
     /// Displays the command autocomplete dropdown.
     /// </summary>
@@ -320,31 +327,35 @@ public static class CommandAutocomplete
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        Console.SetCursorPosition(0, cursorTop + 1);
-        AnsiConsole.MarkupLine("[dim]┌─ Commands ─────────────────────────────────────[/]");
+        // Commands take 14 cols (column width), description fills the rest.
+        const int cmdCol = 14;
+        var descCol = AutocompleteContentWidth - cmdCol - 1;
 
+        var rows = new List<IRenderable>();
         for (int i = 0; i < commands.Count; i++)
         {
             var cmd = commands[i];
-            // Descriptions may contain literal brackets (e.g. "/mcp tools [server]") which
-            // Spectre would otherwise parse as color/style markup and throw. Escape defensively
-            // so no future description can crash the autocomplete dropdown.
             var rawDescription = Commands.ContainsKey(cmd) ? Commands[cmd] : "";
-            var description = Markup.Escape(rawDescription);
-            var paddedDescription = description + new string(' ', Math.Max(0, 30 - rawDescription.Length));
-            var paddedCmd = Markup.Escape(cmd) + new string(' ', Math.Max(0, 15 - cmd.Length));
+
+            var cmdField = FitVisible(cmd, cmdCol);
+            var descField = FitVisible(rawDescription, descCol);
 
             if (i == selectedIndex)
             {
-                AnsiConsole.MarkupLine($"[black on cyan]│ {paddedCmd} {paddedDescription}[/]");
+                // Single black-on-cyan span covers the full inner width so the
+                // highlight reaches both panel padding edges.
+                var combined = $"{cmdField} {descField}";
+                rows.Add(new Markup($"[black on cyan]{Markup.Escape(combined)}[/]"));
             }
             else
             {
-                AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{paddedCmd}[/] [dim]{paddedDescription}[/]");
+                rows.Add(new Markup($"[cyan]{Markup.Escape(cmdField)}[/] [dim]{Markup.Escape(descField)}[/]"));
             }
         }
 
-        AnsiConsole.MarkupLine("[dim]└────────────────────────────────────────────────[/]");
+        WriteAutocompletePanel(cursorTop, "[cyan] Commands [/]", rows);
+
+        Console.SetCursorPosition(0, cursorTop + commands.Count + 3);
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
@@ -362,9 +373,7 @@ public static class CommandAutocomplete
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        Console.SetCursorPosition(0, cursorTop + 1);
-        AnsiConsole.MarkupLine("[dim]┌─ Files ────────────────────────────────────────[/]");
-
+        var rows = new List<IRenderable>();
         for (int i = 0; i < files.Count; i++)
         {
             var entryPath = files[i];
@@ -374,65 +383,125 @@ public static class CommandAutocomplete
                 ? entryPath.Substring(browsePrefix.Length)
                 : entryPath;
 
+            string primary;
+            string secondary;
+            string accent;
+
             if (isDirectory)
             {
                 var trimmed = displayEntry.TrimEnd('/');
-                var dirName = trimmed.Contains('/')
-                    ? trimmed.Substring(trimmed.LastIndexOf('/') + 1)
-                    : trimmed;
-                var parentPath = trimmed.Contains('/')
-                    ? trimmed.Substring(0, trimmed.LastIndexOf('/'))
-                    : "";
+                var slashIdx = trimmed.LastIndexOf('/');
+                var dirName = slashIdx >= 0 ? trimmed.Substring(slashIdx + 1) : trimmed;
+                var parentPath = slashIdx >= 0 ? trimmed.Substring(0, slashIdx) : "";
 
-                if (i == selectedIndex)
-                {
-                    var display = string.IsNullOrEmpty(parentPath)
-                        ? $"{dirName}/"
-                        : $"{dirName}/  {parentPath}/";
-                    AnsiConsole.MarkupLine($"[black on cyan]│ {display,-46}[/]");
-                }
-                else
-                {
-                    if (string.IsNullOrEmpty(parentPath))
-                    {
-                        AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{Markup.Escape(dirName)}/[/]");
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[dim]│[/] [cyan]{Markup.Escape(dirName)}/[/]  [dim]{Markup.Escape(parentPath)}/[/]");
-                    }
-                }
+                primary = $"{dirName}/";
+                secondary = string.IsNullOrEmpty(parentPath) ? "" : $"{parentPath}/";
+                accent = "cyan";
             }
             else
             {
                 var fileName = Path.GetFileName(displayEntry);
                 var dirPath = Path.GetDirectoryName(displayEntry)?.Replace('\\', '/') ?? "";
 
-                if (i == selectedIndex)
-                {
-                    var display = string.IsNullOrEmpty(dirPath)
-                        ? fileName
-                        : $"{fileName}  {dirPath}/";
-                    AnsiConsole.MarkupLine($"[black on yellow]│ {display,-46}[/]");
-                }
-                else
-                {
-                    if (string.IsNullOrEmpty(dirPath))
-                    {
-                        AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName),-46}[/]");
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[dim]│[/] [yellow]{Markup.Escape(fileName)}[/]  [dim]{Markup.Escape(dirPath)}/[/]");
-                    }
-                }
+                primary = fileName;
+                secondary = string.IsNullOrEmpty(dirPath) ? "" : $"{dirPath}/";
+                accent = "yellow";
             }
+
+            rows.Add(BuildFileRow(primary, secondary, accent, i == selectedIndex));
         }
 
-        AnsiConsole.MarkupLine("[dim]└────────────────────────────────────────────────[/]");
+        WriteAutocompletePanel(cursorTop, "[cyan] Files [/]", rows);
+
+        Console.SetCursorPosition(0, cursorTop + files.Count + 3);
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
 
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
+    }
+
+    /// <summary>
+    /// Builds a two-part file/dir row that truncates the secondary path with
+    /// an ellipsis when the combined visible length would exceed the panel.
+    /// </summary>
+    private static Markup BuildFileRow(string primary, string secondary, string accent, bool selected)
+    {
+        var width = AutocompleteContentWidth;
+
+        if (string.IsNullOrEmpty(secondary))
+        {
+            var fitted = FitVisible(primary, width);
+            return selected
+                ? new Markup($"[black on {accent}]{Markup.Escape(fitted)}[/]")
+                : new Markup($"[{accent}]{Markup.Escape(fitted)}[/]" + new string(' ', width - fitted.Length));
+        }
+
+        // Reserve space for "  " separator between primary and secondary.
+        const string sep = "  ";
+        var primaryFit = primary.Length > width - sep.Length - 1
+            ? primary.Substring(0, Math.Max(0, width - sep.Length - 2)) + "…"
+            : primary;
+        var available = width - primaryFit.Length - sep.Length;
+        var secondaryFit = secondary.Length > available
+            ? (available > 0 ? secondary.Substring(0, available - 1) + "…" : "")
+            : secondary;
+
+        if (selected)
+        {
+            var combined = $"{primaryFit}{sep}{secondaryFit}";
+            var padded = combined + new string(' ', Math.Max(0, width - combined.Length));
+            return new Markup($"[black on {accent}]{Markup.Escape(padded)}[/]");
+        }
+
+        var primaryMarkup = $"[{accent}]{Markup.Escape(primaryFit)}[/]";
+        var secondaryMarkup = secondaryFit.Length > 0
+            ? $"[dim]{Markup.Escape(secondaryFit)}[/]"
+            : "";
+        return new Markup($"{primaryMarkup}{sep}{secondaryMarkup}");
+    }
+
+    /// <summary>
+    /// Truncates with an ellipsis or right-pads to exactly <paramref name="width"/> visible columns.
+    /// </summary>
+    private static string FitVisible(string text, int width)
+    {
+        if (width <= 0) return string.Empty;
+        if (text.Length > width) return text.Substring(0, width - 1) + "…";
+        return text + new string(' ', width - text.Length);
+    }
+
+    /// <summary>
+    /// Renders a Spectre Panel with the same rounded/dim styling as fenced code
+    /// blocks, then writes each line at the cursor row below the input. Using
+    /// SetCursorPosition per line preserves the in-place redraw behavior the
+    /// autocomplete loop relies on.
+    /// </summary>
+    private static void WriteAutocompletePanel(int cursorTop, string headerMarkup, IReadOnlyList<IRenderable> rows)
+    {
+        var content = rows.Count == 1 ? rows[0] : new Rows(rows);
+        var panel = new Panel(content)
+            .Border(BoxBorder.Rounded)
+            .BorderStyle(Style.Parse("dim"))
+            .Padding(1, 0);
+        panel.Header = new PanelHeader(headerMarkup, Justify.Left);
+        panel.Width = AutocompletePanelWidth;
+
+        var sw = new StringWriter();
+        var captureConsole = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            ColorSystem = ColorSystemSupport.TrueColor,
+            Interactive = InteractionSupport.No,
+            Out = new AnsiConsoleOutput(sw),
+        });
+        captureConsole.Profile.Width = AutocompletePanelWidth + 4;
+        captureConsole.Write(panel);
+
+        var lines = sw.ToString().Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Console.SetCursorPosition(0, cursorTop + 1 + i);
+            Console.Write(lines[i]);
+        }
     }
 
     /// <summary>

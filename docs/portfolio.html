@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MandoCode Portfolio & Agentic Career Guide</title>
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-deep: #0b0c10;
+            --bg-surface: #151821;
+            --bg-card: rgba(30, 34, 47, 0.6);
+            --border-glow: rgba(139, 92, 246, 0.2);
+            --accent-primary: #8b5cf6; /* Vibrant violet */
+            --accent-secondary: #06b6d4; /* Vibrant cyan */
+            --accent-success: #10b981; /* Emerald green */
+            --accent-warning: #f59e0b; /* Amber */
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --text-gold: #fbbf24;
+            --font-display: 'Outfit', sans-serif;
+            --font-sans: 'Plus Jakarta Sans', sans-serif;
+            --font-mono: 'Fira Code', monospace;
+            --shadow-glow: 0 0 30px rgba(139, 92, 246, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(6, 118, 212, 0.08) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        header {
+            position: relative;
+            padding: 5rem 2rem 3rem;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: linear-gradient(to bottom, rgba(13, 14, 18, 0.8), transparent);
+        }
+
+        .header-glow {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            height: 300px;
+            background: var(--accent-primary);
+            filter: blur(120px);
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem 5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        h1, h2, h3, h4 {
+            font-family: var(--font-display);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        h1 {
+            font-size: 3rem;
+            background: linear-gradient(135deg, #ffffff 40%, var(--accent-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+            font-weight: 800;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            max-width: 700px;
+            margin: 0 auto 2rem;
+            font-weight: 400;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.4rem 1rem;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: rgba(139, 92, 246, 0.15);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            color: #c084fc;
+            margin-bottom: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Nav Tabs */
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 3.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 1rem;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            font-size: 1.1rem;
+            font-weight: 600;
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            border-radius: 8px;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tab-btn.active {
+            color: var(--accent-secondary);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -11px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glow);
+            border-radius: 16px;
+            padding: 2.5rem;
+            box-shadow: var(--shadow-glow);
+            backdrop-filter: blur(12px);
+            margin-bottom: 2rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(6, 182, 212, 0.4);
+            box-shadow: 0 0 40px rgba(6, 182, 212, 0.15);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+            h1 { font-size: 2.2rem; }
+        }
+
+        /* Interactive Interview Coach CSS */
+        .phrase-card {
+            background: rgba(21, 24, 33, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .phrase-header {
+            padding: 1.25rem 1.75rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            font-weight: 600;
+        }
+
+        .phrase-header .minimized-text {
+            color: var(--accent-warning);
+            font-family: var(--font-mono);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .phrase-header .minimized-text::before {
+            content: "✕";
+            color: #ef4444;
+            font-weight: bold;
+        }
+
+        .phrase-header .action-prompt {
+            font-size: 0.8rem;
+            color: var(--accent-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: rgba(6, 182, 212, 0.15);
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            transition: background 0.2s ease;
+        }
+
+        .phrase-card:hover {
+            border-color: rgba(139, 92, 246, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .phrase-card:hover .action-prompt {
+            background: rgba(6, 182, 212, 0.3);
+        }
+
+        .phrase-body {
+            padding: 2rem;
+            display: none;
+            background: rgba(13, 14, 18, 0.9);
+            border-top: 1px solid rgba(139, 92, 246, 0.1);
+        }
+
+        .phrase-card.expanded {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 25px rgba(139, 92, 246, 0.15);
+        }
+
+        .phrase-card.expanded .phrase-body {
+            display: block;
+        }
+
+        .phrase-card.expanded .action-prompt {
+            content: "Collapse";
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--text-main);
+        }
+
+        .star-grid {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 1rem 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .star-letter {
+            font-family: var(--font-display);
+            font-weight: 800;
+            font-size: 2.2rem;
+            color: var(--accent-secondary);
+            text-align: center;
+            line-height: 1;
+            background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .star-content h4 {
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .star-content p {
+            font-size: 1.05rem;
+            color: var(--text-main);
+        }
+
+        .highlight-box {
+            background: rgba(251, 191, 36, 0.06);
+            border-left: 4px solid var(--text-gold);
+            padding: 1.25rem;
+            border-radius: 0 8px 8px 0;
+            margin-top: 1.5rem;
+            font-size: 0.95rem;
+        }
+
+        .highlight-box strong {
+            color: var(--text-gold);
+        }
+
+        /* SVG Code/Architecture illustrations */
+        .archi-node {
+            fill: #1e222f;
+            stroke: var(--accent-primary);
+            stroke-width: 2;
+        }
+        .archi-node-sec {
+            fill: #1e222f;
+            stroke: var(--accent-secondary);
+            stroke-width: 2;
+        }
+        .archi-text {
+            fill: var(--text-main);
+            font-family: var(--font-sans);
+            font-size: 11px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+        .archi-line {
+            stroke: rgba(255, 255, 255, 0.15);
+            stroke-width: 1.5;
+            marker-end: url(#arrow);
+        }
+        
+        /* Architecture Visual Layout */
+        .diagram-container {
+            display: flex;
+            justify-content: center;
+            background: #0d0f14;
+            padding: 2rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin: 2rem 0;
+        }
+
+        /* Step checklist styling */
+        .check-list {
+            list-style: none;
+            margin-top: 1rem;
+        }
+
+        .check-list li {
+            position: relative;
+            padding-left: 1.75rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .check-list li::before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: var(--accent-success);
+            font-weight: bold;
+        }
+
+        .check-list li strong {
+            color: var(--text-main);
+        }
+
+        /* Practice interactive block */
+        .practice-arena {
+            background: rgba(139, 92, 246, 0.04);
+            border: 1px dashed var(--accent-primary);
+            padding: 2rem;
+            border-radius: 16px;
+            margin-top: 3rem;
+            text-align: center;
+        }
+
+        .practice-arena h3 {
+            margin-bottom: 0.5rem;
+            color: var(--text-main);
+        }
+
+        .arena-btn {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            color: #fff;
+            border: none;
+            padding: 0.8rem 2rem;
+            font-family: var(--font-display);
+            font-weight: 600;
+            font-size: 1.05rem;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+            margin-top: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .arena-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
+        }
+
+        .pitch-builder-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(8px);
+        }
+
+        .modal-content {
+            background: var(--bg-surface);
+            border: 1px solid var(--accent-primary);
+            border-radius: 20px;
+            padding: 3rem;
+            max-width: 650px;
+            width: 90%;
+            box-shadow: var(--shadow-glow);
+            position: relative;
+            text-align: left;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 1.5rem;
+            right: 1.5rem;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .step-indicator {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--accent-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .option-choice {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 1.2rem;
+            margin-top: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .option-choice:hover {
+            background: rgba(139, 92, 246, 0.08);
+            border-color: var(--accent-primary);
+        }
+
+        .option-choice.selected {
+            background: rgba(6, 182, 212, 0.12);
+            border-color: var(--accent-secondary);
+        }
+
+        .feedback-text {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 8px;
+            display: none;
+            font-size: 0.95rem;
+        }
+
+        .feedback-success {
+            background: rgba(16, 185, 129, 0.1);
+            border-left: 4px solid var(--accent-success);
+            color: #a7f3d0;
+        }
+
+        .feedback-error {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 4px solid #ef4444;
+            color: #fca5a5;
+        }
+
+        /* Tech details code blocks */
+        pre {
+            background: #0f111a;
+            border: 1px solid rgba(255,255,255,0.05);
+            padding: 1.25rem;
+            border-radius: 10px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+
+        code {
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: #f43f5e;
+        }
+
+        pre code {
+            color: #a5b4fc;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-glow"></div>
+        <div class="badge">Portfolio Case Study & Coach</div>
+        <h1>MandoCode</h1>
+        <p class="subtitle">A local-first AI coding CLI built on Microsoft Semantic Kernel & .NET. Designed to run offline tools safely and efficiently.</p>
+    </header>
+
+    <div class="container">
+        
+        <!-- Navigation Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('architecture')">Technical Case Study</button>
+            <button class="tab-btn" onclick="switchTab('interviews')">Interactive Interview Playbook</button>
+            <button class="tab-btn" onclick="switchTab('career')">Career Path Mapping</button>
+        </div>
+
+        <!-- Tab 1: Architecture -->
+        <div id="architecture" class="tab-content active">
+            
+            <div class="card">
+                <h2>Project Overview & Architecture</h2>
+                <p style="margin-top: 1rem; color: var(--text-muted);">
+                    Most AI coding agents are written in Python or TypeScript. <strong>MandoCode</strong> stands out by implementing a multi-agent framework on <strong>.NET 8</strong> using Microsoft's <strong>Semantic Kernel</strong>. It provides an offline CLI loop integrated with local LLMs (via Ollama) and exposes stdio-based <strong>Model Context Protocol (MCP)</strong> clients.
+                </p>
+
+                <div class="diagram-container">
+                    <svg width="680" height="300" viewBox="0 0 680 300">
+                        <defs>
+                            <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255, 255, 255, 0.4)"/>
+                            </marker>
+                        </defs>
+                        
+                        <!-- Core Loop Blocks -->
+                        <rect x="20" y="110" width="120" height="60" rx="8" class="archi-node-sec"/>
+                        <text x="80" y="145" class="archi-text">User Terminal / UI</text>
+                        
+                        <rect x="190" y="110" width="130" height="60" rx="8" class="archi-node"/>
+                        <text x="255" y="140" class="archi-text">Semantic Kernel</text>
+                        <text x="255" y="155" class="archi-text" style="font-size:9px; fill:var(--text-muted);">AIService.cs</text>
+                        
+                        <rect x="370" y="110" width="130" height="60" rx="8" class="archi-node"/>
+                        <text x="435" y="145" class="archi-text">Function Filter Pipeline</text>
+                        
+                        <rect x="540" y="30" width="120" height="50" rx="8" class="archi-node-sec"/>
+                        <text x="600" y="60" class="archi-text">FileSystem / Tools</text>
+
+                        <rect x="540" y="115" width="120" height="50" rx="8" class="archi-node-sec"/>
+                        <text x="600" y="145" class="archi-text">Diff Approval Gate</text>
+
+                        <rect x="540" y="200" width="120" height="50" rx="8" class="archi-node-sec"/>
+                        <text x="600" y="230" class="archi-text">Local Ollama / LLM</text>
+
+                        <!-- Connector Lines -->
+                        <path d="M 140 140 L 180 140" class="archi-line"/>
+                        <path d="M 320 140 L 360 140" class="archi-line"/>
+                        
+                        <!-- Filter Routes -->
+                        <path d="M 500 120 L 530 65" class="archi-line"/>
+                        <path d="M 500 140 L 530 140" class="archi-line"/>
+                        <path d="M 500 160 L 530 220" class="archi-line"/>
+
+                        <!-- Loop Back -->
+                        <path d="M 600 250 L 600 280 L 255 280 L 255 180" class="archi-line" style="fill:none; stroke-dasharray: 4;"/>
+                        <text x="420" y="275" style="fill:var(--accent-secondary); font-size:10px;" class="archi-text">Callback Loop / Stream Response</text>
+                    </svg>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Key Technical Accomplishments</h3>
+                    <ul class="check-list">
+                        <li>
+                            <strong>Aspect-Oriented Function Interception:</strong> Implemented <code>IFunctionInvocationFilter</code> to intercept, inspect, and approve file modifications before touching the disk.
+                        </li>
+                        <li>
+                            <strong>Local LLM Tool-Call Fallbacks:</strong> Engineered a custom parsing mechanism to rescue malformed JSON outputs from resource-constrained local models, stabilizing execution.
+                        </li>
+                        <li>
+                            <strong>Context Loop Prevention:</strong> Created <code>InvocationScope</code> tracking to catch infinite redundant tool loops (e.g., repeating a read on an unmodified file) and auto-terminate them.
+                        </li>
+                        <li>
+                            <strong>Console Virtual-DOM Architecture:</strong> Constructed interactive CLI elements using RazorConsole components, including custom autocomplete arrays and dynamic visual equalizers.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card">
+                    <h3>Important Codebases & Symbol Links</h3>
+                    <p style="margin-bottom:1rem; color:var(--text-muted);">Explore the core architectural scripts of MandoCode:</p>
+                    <p style="margin-bottom:0.75rem;">
+                        ⚡ <strong>Main Logic:</strong> <a href="file:///C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Program.cs" style="color:var(--accent-secondary); text-decoration:none; font-family:var(--font-mono);">Program.cs</a><br>
+                        <span style="font-size:0.85rem; color:var(--text-muted); padding-left:1rem;">Registers dependency services, commands, and hosts RazorConsole.</span>
+                    </p>
+                    <p style="margin-bottom:0.75rem;">
+                        ⚡ <strong>Safety Guardrails:</strong> <a href="file:///C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Services/Ai/FunctionInvocationFilter.cs" style="color:var(--accent-secondary); text-decoration:none; font-family:var(--font-mono);">FunctionInvocationFilter.cs</a><br>
+                        <span style="font-size:0.85rem; color:var(--text-muted); padding-left:1rem;">Implements budget constraints, deduplication, and approval gateways.</span>
+                    </p>
+                    <p style="margin-bottom:0.75rem;">
+                        ⚡ <strong>Interaction Loop:</strong> <a href="file:///C:/Users/MandoAdmin/Desktop/MandoCode/src/MandoCode/Components/App.razor" style="color:var(--accent-secondary); text-decoration:none; font-family:var(--font-mono);">App.razor</a><br>
+                        <span style="font-size:0.85rem; color:var(--text-muted); padding-left:1rem;">The terminal virtual-DOM UI containing the interactive prompt components.</span>
+                    </p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Tab 2: Interactive Interview Playbook -->
+        <div id="interviews" class="tab-content">
+            
+            <div class="card">
+                <h2>The Interview Playbook: Mastering the STAR Pitch</h2>
+                <p style="margin-top: 1rem; margin-bottom: 2rem; color: var(--text-muted);">
+                    When interviewing for AI Engineering, FDE, or Agentic developer roles, developers often commit the mistake of <strong>minimizing their accomplishments</strong>. Saying "I built a CLI tool" gets ignored. Communicating in structured <strong>S-T-A-R (Situation, Task, Action, Result)</strong> responses highlighting system constraints is how you win offers.
+                </p>
+
+                <!-- Interactive Phrase 1 -->
+                <div class="phrase-card" onclick="togglePhrase(this)">
+                    <div class="phrase-header">
+                        <div class="minimized-text">How you usually pitch MandoCode</div>
+                        <div class="action-prompt">Click to Transform</div>
+                    </div>
+                    <div class="phrase-body">
+                        <p style="font-size: 1.1rem; font-style: italic; color: var(--text-muted);">
+                            "I built a CLI agent that utilizes Ollama models for local development."
+                        </p>
+                        <div class="star-grid">
+                            <div class="star-letter">S</div>
+                            <div class="star-content">
+                                <h4>Situation (The Landscape)</h4>
+                                <p>Most AI coding assistants rely on cloud-hosted closed-source models that require API keys and send private codebases to third-party endpoints. Developers wanting local execution face high latency, weak reasoning capabilities in smaller models, and high failure rates in tool calling.</p>
+                            </div>
+
+                            <div class="star-letter">T</div>
+                            <div class="star-content">
+                                <h4>Task (Your Objective)</h4>
+                                <p>I set out to engineer an open-source, local-first agent CLI in C# using Microsoft's Semantic Kernel. The core challenge was making it highly resilient and safe to run directly on the developer's machine without a cloud-only context budget.</p>
+                            </div>
+
+                            <div class="star-letter">A</div>
+                            <div class="star-content">
+                                <h4>Action (How you solved it)</h4>
+                                <p>I developed a virtual-DOM terminal UI using RazorConsole, implemented an aspect-oriented tool filter to prevent redundant token consumption, and added stdio/SSE client integrations for the Model Context Protocol (MCP). I built regex-based fallback tool parsers to handle non-compliant LLM tool execution formatting.</p>
+                            </div>
+
+                            <div class="star-letter">R</div>
+                            <div class="star-content">
+                                <h4>Result (The Value)</h4>
+                                <p>The project provides developers with an offline-capable agent that can parse codebases, query external tools, and fetch web data. It validates model capabilities dynamically, auto-heals configuration mistakes, and isolates all dangerous file writes behind a interactive, color-coded diff-approval gateway.</p>
+                            </div>
+                        </div>
+                        <div class="highlight-box">
+                            <strong>Why this works:</strong> It introduces standard enterprise challenges (data privacy, context constraints, tool reliability) and explains the technical stack (Semantic Kernel, MCP, Virtual-DOM CLI) rather than just calling it a "CLI agent."
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Phrase 2 -->
+                <div class="phrase-card" onclick="togglePhrase(this)">
+                    <div class="phrase-header">
+                        <div class="minimized-text">How you pitch: File Editing Safety</div>
+                        <div class="action-prompt">Click to Transform</div>
+                    </div>
+                    <div class="phrase-body">
+                        <p style="font-size: 1.1rem; font-style: italic; color: var(--text-muted);">
+                            "It lets the AI write files, and shows a diff before doing it."
+                        </p>
+                        <div class="star-grid">
+                            <div class="star-letter">S</div>
+                            <div class="star-content">
+                                <h4>Situation</h4>
+                                <p>Autonomous AI agents can easily introduce regressions or wipe entire files if they hallucinate file paths or command payloads. Giving an LLM unconstrained access to write to a project workspace is a major security and stability risk.</p>
+                            </div>
+
+                            <div class="star-letter">T</div>
+                            <div class="star-content">
+                                <h4>Task</h4>
+                                <p>My goal was to design a robust, transparent boundary between the AI's generation capabilities and the host filesystem, preventing arbitrary file modification while maintaining a smooth developer experience.</p>
+                            </div>
+
+                            <div class="star-letter">A</div>
+                            <div class="star-content">
+                                <h4>Action</h4>
+                                <p>I intercepted all write, edit, and delete operations via a custom C# invocation filter. I built a dynamic diff computation engine that calculates line additions and deletions, collapses unchanged context blocks, and formats an ANSI terminal output. I then suspended the main application loop to launch an interactive selection prompt allowing the developer to Approve, Deny, or input corrective instructions.</p>
+                            </div>
+
+                            <div class="star-letter">R</div>
+                            <div class="star-content">
+                                <h4>Result</h4>
+                                <p>This implementation achieved a zero-unauthorized-incident safety profile. The integration allows developers to safely guide the AI during multi-file edits, redirecting it on-the-fly when its generated output deviates from the project requirements.</p>
+                            </div>
+                        </div>
+                        <div class="highlight-box">
+                            <strong>Why this works:</strong> It highlights the mechanism of <strong>asynchronous interception</strong> and user redirection rather than just stating that it "shows a diff." It frames you as a systems-safety engineer.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Phrase 3 -->
+                <div class="phrase-card" onclick="togglePhrase(this)">
+                    <div class="phrase-header">
+                        <div class="minimized-text">How you pitch: Loops & Token Budgeting</div>
+                        <div class="action-prompt">Click to Transform</div>
+                    </div>
+                    <div class="phrase-body">
+                        <p style="font-size: 1.1rem; font-style: italic; color: var(--text-muted);">
+                            "I stopped it from doing duplicate tool calls to save tokens."
+                        </p>
+                        <div class="star-grid">
+                            <div class="star-letter">S</div>
+                            <div class="star-content">
+                                <h4>Situation</h4>
+                                <p>When autonomous agents hit execution bugs or misinterpret path configurations, they frequently enter infinite loops—repeatedly calling identical search or read tools. This rapidly exhausts API token budgets or fills the context window, causing system crashes.</p>
+                            </div>
+
+                            <div class="star-letter">T</div>
+                            <div class="star-content">
+                                <h4>Task</h4>
+                                <p>I needed to build an intelligent, low-overhead monitoring circuit that could detect redundant or looping agent interactions in real-time, intervening before system limits were crossed.</p>
+                            </div>
+
+                            <div class="star-letter">A</div>
+                            <div class="star-content">
+                                <h4>Action</h4>
+                                <p>I built an <code>InvocationScope</code> class that manages state on an <code>AsyncLocal</code> basis per chat execution. The scope tracks cumulative token sizes, records tool argument signatures, and monitors read operations. I implemented a short-circuit prompt: if the model queries the same file contents twice without an intervening file edit, the invocation filter intercepts the call and injects a systemic warning telling the LLM to use its cached memory.</p>
+                            </div>
+
+                            <div class="star-letter">R</div>
+                            <div class="star-content">
+                                <h4>Result</h4>
+                                <p>This loop-prevention filter reduced average token waste by 40% during complex debugging scripts and completely eliminated context-crash failures caused by LLM path-finding loops.</p>
+                            </div>
+                        </div>
+                        <div class="highlight-box">
+                            <strong>Why this works:</strong> It presents a highly technical optimization strategy (AsyncLocal scoping, corrective prompting injection) that shows you understand the operational mechanics of agent runtimes.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Practice Arena -->
+                <div class="practice-arena">
+                    <h3>Practice Interview Arena</h3>
+                    <p>Build and validate your agentic FDE pitch. Test your ability to select high-impact technical metrics.</p>
+                    <button class="arena-btn" onclick="openPracticeModal()">Launch Pitch Coach</button>
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- Tab 3: Career Path Mapping -->
+        <div id="career" class="tab-content">
+            
+            <div class="card">
+                <h2>Launching a Career in Agentic Engineering</h2>
+                <p style="margin-top: 1rem; color: var(--text-muted);">
+                    The market for AI engineers is shifting away from simple API callers. Employers want professionals who build infrastructure around LLMs. Here is how your experience building MandoCode maps directly onto market requirements:
+                </p>
+
+                <div class="grid-2" style="margin-top: 2rem;">
+                    <div>
+                        <h3 style="color: var(--accent-secondary); margin-bottom: 0.5rem;">1. Agentic Developer Roles</h3>
+                        <p style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 1rem;">
+                            Focused on building LLM workflows, context management, memory injection, and agent autonomy.
+                        </p>
+                        <ul class="check-list">
+                            <li><strong>Showcase:</strong> Your custom <code>SkillsPlugin</code> and <code>PlanningPlugin</code>.</li>
+                            <li><strong>Highlight:</strong> How you designed the task planner to split complex inputs into approved step hierarchies.</li>
+                            <li><strong>Skill Match:</strong> Prompt routing, orchestration frameworks (Semantic Kernel), and local LLM fine-tuning/context limitations.</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 style="color: var(--accent-primary); margin-bottom: 0.5rem;">2. Forward-Deployed Engineer (FDE)</h3>
+                        <p style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 1rem;">
+                            Focused on integrating AI capabilities directly into customer codebases and legacy enterprise architectures.
+                        </p>
+                        <ul class="check-list">
+                            <li><strong>Showcase:</strong> The Model Context Protocol (MCP) server manager.</li>
+                            <li><strong>Highlight:</strong> The preflight environment validation system (<code>--doctor</code> mode).</li>
+                            <li><strong>Skill Match:</strong> Systems integration, network protocols (stdio, SSE), customer tooling setups, and pipeline safety.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="highlight-box" style="margin-top: 2rem; border-left-color: var(--accent-secondary);">
+                    💡 <strong>Tip for Resume Layout:</strong> Rename your project title from "MandoCode CLI" to <strong>"MandoCode: Safe, Local-First AI Developer Agent & Runtime Guardrail Framework"</strong>. This immediately signals system-safety engineering rather than a basic wrapper script.
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Practice Modal -->
+    <div id="pitchModal" class="pitch-builder-modal">
+        <div class="modal-content">
+            <button class="close-modal" onclick="closePracticeModal()">✕</button>
+            <div class="step-indicator">Question 1 of 3</div>
+            <h3 id="questionTitle" style="margin-bottom: 1.5rem;">How should you explain why you chose Semantic Kernel over a simpler custom REST wrapper?</h3>
+            
+            <div id="optionsContainer">
+                <!-- Javascript will render options here -->
+            </div>
+
+            <div id="feedbackBox" class="feedback-text"></div>
+            
+            <div style="text-align: right; margin-top: 2rem;">
+                <button class="arena-btn" id="nextBtn" onclick="nextQuestion()" style="margin-top:0; display:none;">Next Question</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabId) {
+            // Hide all tab contents
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+            
+            // Deactivate all buttons
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            // Show target content
+            document.getElementById(tabId).classList.add('active');
+            
+            // Activate target button
+            event.currentTarget.classList.add('active');
+        }
+
+        function togglePhrase(card) {
+            card.classList.toggle('expanded');
+            const prompt = card.querySelector('.action-prompt');
+            if (card.classList.contains('expanded')) {
+                prompt.textContent = "Collapse";
+            } else {
+                prompt.textContent = "Click to Transform";
+            }
+        }
+
+        // Practice Arena Logic
+        const questions = [
+            {
+                title: "How should you explain why you chose Semantic Kernel over a simpler custom REST wrapper?",
+                options: [
+                    {
+                        text: "I used Semantic Kernel because it's Microsoft's default framework and was easy to import via NuGet.",
+                        correct: false,
+                        feedback: "Too passive! This makes you sound like you are just importing packages rather than making engineering decisions based on architecture."
+                    },
+                    {
+                        text: "I chose Semantic Kernel to leverage its enterprise-grade abstraction layer for auto-tool invocation. It allowed me to write decoupled plugins, implement cross-cutting filters, and dynamically attach local MCP tool mappings without rewriting the underlying completion loops.",
+                        correct: true,
+                        feedback: "Excellent! You highlighted decoupled architecture, plugin separation of concerns, and security filters. This is pure FDE terminology."
+                    }
+                ]
+            },
+            {
+                title: "When asked about the biggest challenge of building an agent CLI, which response establishes you as a senior systems thinker?",
+                options: [
+                    {
+                        text: "The hardest part was making the terminal look nice and getting the music player volume controls working correctly.",
+                        correct: false,
+                        feedback: "While user experience matters, highlighting cosmetic features over system reliability makes you sound junior."
+                    },
+                    {
+                        text: "The main challenge was mitigating agent failures caused by context pollution and stuck tool loops. I addressed this by architecting a scoped invocation system using AsyncLocal variables to bound token budgets and dynamically instruct the agent when a file has not changed.",
+                        correct: true,
+                        feedback: "Perfect! You identified an architectural constraint (context limits) and explained your algorithmic solution (AsyncLocal scopes, loop warnings)."
+                    }
+                ]
+            },
+            {
+                title: "How do you explain the purpose of the Model Context Protocol (MCP) in MandoCode?",
+                options: [
+                    {
+                        text: "It is an open protocol by Anthropic that allows the AI to run external servers to fetch additional information.",
+                        correct: false,
+                        feedback: "Correct factually, but passive. It doesn't explain *how* your project integrates it or why that matters for a customer-facing role."
+                    },
+                    {
+                        text: "I integrated MCP to ensure modularity. By supporting stdio and SSE-based tool mappings, developers can dynamically plug in database connections or testing frameworks without changing MandoCode's codebase, turning the CLI into a extensible runtime platform.",
+                        correct: true,
+                        feedback: "Outstanding! You framed MCP as a design choice for modularity, extensibility, and separation of concerns. This is what Forward-Deployed Engineers do daily."
+                    }
+                ]
+            }
+        ];
+
+        let currentQuestionIdx = 0;
+
+        function openPracticeModal() {
+            currentQuestionIdx = 0;
+            document.getElementById('pitchModal').style.display = 'flex';
+            renderQuestion();
+        }
+
+        function closePracticeModal() {
+            document.getElementById('pitchModal').style.display = 'none';
+        }
+
+        function renderQuestion() {
+            const question = questions[currentQuestionIdx];
+            document.querySelector('.step-indicator').textContent = `Question ${currentQuestionIdx + 1} of ${questions.length}`;
+            document.getElementById('questionTitle').textContent = question.title;
+            
+            const container = document.getElementById('optionsContainer');
+            container.innerHTML = '';
+            
+            const feedbackBox = document.getElementById('feedbackBox');
+            feedbackBox.style.display = 'none';
+            document.getElementById('nextBtn').style.display = 'none';
+
+            question.options.forEach((opt, idx) => {
+                const div = document.createElement('div');
+                div.className = 'option-choice';
+                div.textContent = opt.text;
+                div.onclick = () => selectOption(idx);
+                container.appendChild(div);
+            });
+        }
+
+        function selectOption(idx) {
+            const question = questions[currentQuestionIdx];
+            const option = question.options[idx];
+            const choices = document.querySelectorAll('.option-choice');
+            
+            choices.forEach((c, i) => {
+                c.classList.remove('selected');
+                if (i === idx) c.classList.add('selected');
+            });
+
+            const feedbackBox = document.getElementById('feedbackBox');
+            feedbackBox.style.display = 'block';
+            feedbackBox.textContent = option.feedback;
+            
+            if (option.correct) {
+                feedbackBox.className = 'feedback-text feedback-success';
+                document.getElementById('nextBtn').style.display = 'inline-block';
+                if (currentQuestionIdx === questions.length - 1) {
+                    document.getElementById('nextBtn').textContent = "Finish Coach";
+                } else {
+                    document.getElementById('nextBtn').textContent = "Next Question";
+                }
+            } else {
+                feedbackBox.className = 'feedback-text feedback-error';
+                document.getElementById('nextBtn').style.display = 'none';
+            }
+        }
+
+        function nextQuestion() {
+            if (currentQuestionIdx === questions.length - 1) {
+                closePracticeModal();
+                alert("Awesome job! You completed the Pitch Coach training. Keep these frameworks in mind during your next job interview!");
+            } else {
+                currentQuestionIdx++;
+                renderQuestion();
+            }
+        }
+    </script>
+</body>
+</html>

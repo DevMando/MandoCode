@@ -46,6 +46,16 @@ public static class MarkdownHtmlRenderer
         RegexOptions.Compiled,
         RegexTimeout);
 
+    // Match inline markdown links the LLM already wrote so the path linkifier
+    // doesn't re-wrap the label or the URL — without this, an LLM message like
+    // `[C:\Users\…\StarFox](file:///C:/Users/…/StarFox)` gets double-bracketed
+    // (path matches inside both [...] and (...) ), Markdig can't parse it as a
+    // link, and the raw markdown leaks through to the user.
+    private static readonly Regex ExistingMarkdownLink = new(
+        @"\[[^\[\]\n]*\]\([^()\n]*\)",
+        RegexOptions.Compiled,
+        RegexTimeout);
+
     private static readonly HashSet<string> BlockTags = new(StringComparer.OrdinalIgnoreCase)
     {
         "h1","h2","h3","h4","h5","h6",
@@ -532,16 +542,35 @@ public static class MarkdownHtmlRenderer
     {
         try
         {
+            // Collect ranges to pass through verbatim: fenced code blocks and
+            // existing inline markdown links. The linkifier only runs on the
+            // gaps between them.
+            var skipRanges = new List<(int Start, int End)>();
+            foreach (Match m in FencedCodeBlock.Matches(markdown))
+                skipRanges.Add((m.Index, m.Index + m.Length));
+            foreach (Match m in ExistingMarkdownLink.Matches(markdown))
+                skipRanges.Add((m.Index, m.Index + m.Length));
+
+            skipRanges.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+            var merged = new List<(int Start, int End)>();
+            foreach (var r in skipRanges)
+            {
+                if (merged.Count > 0 && r.Start <= merged[^1].End)
+                    merged[^1] = (merged[^1].Start, Math.Max(merged[^1].End, r.End));
+                else
+                    merged.Add(r);
+            }
+
             var sb = new StringBuilder();
             var lastIndex = 0;
-
-            foreach (Match fence in FencedCodeBlock.Matches(markdown))
+            foreach (var r in merged)
             {
-                if (fence.Index > lastIndex)
-                    AppendLinkified(markdown, lastIndex, fence.Index - lastIndex, sb, projectRoot);
+                if (r.Start > lastIndex)
+                    AppendLinkified(markdown, lastIndex, r.Start - lastIndex, sb, projectRoot);
 
-                sb.Append(markdown, fence.Index, fence.Length);
-                lastIndex = fence.Index + fence.Length;
+                sb.Append(markdown, r.Start, r.End - r.Start);
+                lastIndex = r.End;
             }
 
             if (lastIndex < markdown.Length)
