@@ -396,16 +396,17 @@ public class AIService
             response = "Error: Request timed out. The model took too long to respond.\n\n" +
                       "Try breaking your request into smaller parts, or use a faster model.";
         }
-        // Provider-side context-window rejection in direct chat — compact the history
-        // and auto-retry. The persistent _chatHistory is replaced with a compacted recap
-        // so the next turn fits under the provider's limit.
+        // Provider-side "request too big" rejection in direct chat — covers both model
+        // context-window overflow AND transport-level 413 / "request body too large"
+        // from Ollama's Go HTTP server. Same recovery for both: compact the persistent
+        // _chatHistory into a recap so the next turn fits under the provider's limit.
         catch (Exception ex) when (IsContextOverflowError(ex)
                                     && _config.EnableAutoContinuation
                                     && continuationIndex < _config.MaxAutoContinuations)
         {
             await CompactChatHistoryAsync();
             needsContinuation = true;
-            response = $"⚠ Provider rejected request (context window full). " +
+            response = $"⚠ Provider rejected request (payload too large). " +
                        $"Compacting conversation history and retrying ({continuationIndex + 1}/{_config.MaxAutoContinuations})...\n";
         }
         catch (HttpRequestException ex)
@@ -467,10 +468,12 @@ public class AIService
                    "You're using a cloud model but the local Ollama daemon isn't authenticated.";
         }
 
-        // Context-window overflow — actionable message, don't blame Ollama setup.
+        // Request-too-big rejection — covers both context-window overflow and
+        // transport-level 413 / "request body too large". Actionable message,
+        // don't blame Ollama setup.
         if (IsContextOverflowError(ex))
         {
-            return $"Error: The model '{_config.GetEffectiveModelName()}' rejected the request because the conversation exceeded its context window.\n\n" +
+            return $"Error: The model '{_config.GetEffectiveModelName()}' rejected the request because the payload was too large for its context window or transport limit.\n\n" +
                    $"Details: {ex.Message}\n\n" +
                    "What to do:\n" +
                    "  • Try /clear to start a fresh conversation, OR\n" +

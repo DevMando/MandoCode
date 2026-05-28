@@ -16,6 +16,12 @@ public class RetryPolicyTests
     [InlineData("context_length_exceeded", true)]
     [InlineData("prompt is too long", true)]
     [InlineData("maximum context reached", true)]
+    // Transport-level rejections — Ollama's Go HTTP server, nginx, common proxies.
+    // Recover the same way (compact + retry), so they're classified as overflow.
+    [InlineData("http: request body too large", true)]
+    [InlineData("Request Entity Too Large", true)]
+    [InlineData("payload too large", true)]
+    [InlineData("server returned 413", true)]
     // Patterns that SHOULD NOT match — previous version caught these by mistake.
     [InlineData("rate limit exceeded", false)]
     [InlineData("token limit reached", false)]
@@ -26,6 +32,24 @@ public class RetryPolicyTests
     {
         var ex = new Exception(message);
         Assert.Equal(expected, RetryPolicy.IsContextOverflowError(ex));
+    }
+
+    [Fact]
+    public void IsContextOverflowError_HttpRequestException_413_Matches()
+    {
+        // Even with an opaque message, the 413 status code alone identifies a payload-too-big
+        // rejection — recovers via the same compact-and-retry path as a model context overflow.
+        var ex = new HttpRequestException("upstream rejected", null, System.Net.HttpStatusCode.RequestEntityTooLarge);
+        Assert.True(RetryPolicy.IsContextOverflowError(ex));
+    }
+
+    [Fact]
+    public void IsContextOverflowError_HttpRequestException_503_DoesNotMatch()
+    {
+        // Regression guard: generic transport failures stay transient (retried by IsTransientError),
+        // they must not be misclassified as overflow.
+        var ex = new HttpRequestException("upstream unavailable", null, System.Net.HttpStatusCode.ServiceUnavailable);
+        Assert.False(RetryPolicy.IsContextOverflowError(ex));
     }
 
     [Fact]

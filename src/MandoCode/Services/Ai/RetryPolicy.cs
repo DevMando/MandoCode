@@ -116,20 +116,35 @@ public static class RetryPolicy
     }
 
     /// <summary>
-    /// Tight match for provider-side context-window rejections. Patterns kept narrow so
-    /// generic "rate limit exceeded" or "token limit" (NumPredict exhaustion) don't trip
-    /// the non-retry path. Walks inner exceptions.
+    /// Tight match for provider-side rejections that mean "the request was too big" —
+    /// covers both model-level context-window overflow and transport-level payload caps
+    /// (Ollama's Go HTTP server returns "http: request body too large" / 413 when the
+    /// serialized chat history exceeds its MaxBytesReader limit). Both recover the same
+    /// way: compact the history and retry. Patterns kept narrow so generic
+    /// "rate limit exceeded" or "token limit" (NumPredict exhaustion) don't trip the
+    /// non-retry path. Also matches HttpRequestException with StatusCode 413.
+    /// Walks inner exceptions.
     /// </summary>
     public static bool IsContextOverflowError(Exception? ex)
     {
         while (ex != null)
         {
+            // Transport-level: HttpRequestException with the 413 status code.
+            if (ex is HttpRequestException hre &&
+                hre.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
+                return true;
+
             var msg = ex.Message?.ToLowerInvariant() ?? "";
             if (msg.Contains("context window") ||
                 msg.Contains("context length") ||
                 msg.Contains("context_length_exceeded") ||
                 msg.Contains("prompt is too long") ||
-                msg.Contains("maximum context"))
+                msg.Contains("maximum context") ||
+                // Transport-level message variants (Go HTTP server, nginx, common proxies).
+                msg.Contains("request body too large") ||
+                msg.Contains("request entity too large") ||
+                msg.Contains("payload too large") ||
+                msg.Contains("413"))
                 return true;
             ex = ex.InnerException;
         }

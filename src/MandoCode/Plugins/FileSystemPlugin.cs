@@ -229,13 +229,17 @@ public class FileSystemPlugin
 
                 if (nIndex < 0)
                 {
+                    // Attach the current file content (capped) so the model can retry with a
+                    // corrected old_text without firing a separate read_file_contents trip.
+                    // The re-read cascade was the bloat that filled chat history in past failures.
                     return $"Error: Could not find the specified text in {relativePath}.\n" +
                            "Common causes:\n" +
-                           "  1. The file was modified since you last read it — re-read before editing.\n" +
+                           "  1. The file was modified since you last read it.\n" +
                            "  2. Whitespace or indentation differs from what's in the file.\n" +
                            "  3. old_text is too large or includes reconstructed-from-memory content.\n" +
                            "Tip: for edits, use a SMALL unique old_text (5-20 lines). " +
-                           "For large rewrites, use write_file instead.";
+                           "For large rewrites, use write_file instead.\n" +
+                           BuildCurrentContentHint(content);
                 }
 
                 // Ensure the normalized match is unique.
@@ -286,6 +290,23 @@ public class FileSystemPlugin
     /// </summary>
     private static string NormalizeLineEndings(string text)
         => text.Replace("\r\n", "\n").Replace("\r", "\n");
+
+    /// <summary>
+    /// Builds a "here's what's currently in the file" hint to attach to edit failures,
+    /// so the model can fix its old_text without firing a separate read_file_contents trip.
+    /// Capped at 5000 chars — large enough for most files, small enough to bound bloat.
+    /// </summary>
+    private static string BuildCurrentContentHint(string fileContent)
+    {
+        const int cap = 5000;
+        var lineCount = fileContent.Count(c => c == '\n') + 1;
+        if (fileContent.Length <= cap)
+            return $"Current file content ({lineCount} lines):\n{fileContent}";
+
+        return $"Current file content ({lineCount} lines, showing first {cap} chars):\n" +
+               fileContent[..cap] +
+               "\n... [truncated — use read_file_contents to see the rest]";
+    }
 
     /// <summary>
     /// Searches file contents using a text pattern (grep-like).

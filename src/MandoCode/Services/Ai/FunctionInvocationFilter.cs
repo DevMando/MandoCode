@@ -172,6 +172,24 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     return;
                 }
             }
+
+            // Shell-read circuit: when a file is too big for read_file_contents' 10K cap,
+            // models tend to fall back to `type`/`cat`/`findstr`/`grep` via execute_command.
+            // That sidesteps both the read-dedup AND the read-result cache, dumping fresh
+            // file content into the history on every call. Steer them back to read_file_contents
+            // before approval is shown, before result-chars are charged.
+            if (context.Function.Name == "execute_command")
+            {
+                var cmd = context.Arguments.TryGetValue("command", out var cObj) ? cObj?.ToString() ?? "" : "";
+                if (LooksLikeShellFileRead(cmd))
+                {
+                    var msg = "Refusing to read file contents via shell. " +
+                              "Use read_file_contents instead — it's cached, dedup'd within a turn, and respects the tool-result budget. " +
+                              "Shell-based reads (type/cat/head/tail/more/less/findstr/grep/sed/awk against a file) bloat the conversation history.";
+                    context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                    return;
+                }
+            }
         }
 
         // MCP approval gate — any tool coming from an "mcp_<server>" plugin must be
@@ -778,6 +796,9 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// preview: exact single-occurrence first, then a CRLF-normalized fallback, preserving
     /// the file's original line-ending style. Returns either the computed new content or
     /// a human-readable error explaining why a preview can't be shown.
+    /// On a "not found" error, the file's current content (capped) is appended so the
+    /// model can retry with a corrected old_text without firing a separate re-read trip —
+    /// the re-read fallback was the cascade that filled chat history in past failures.
     /// </summary>
     private static (string? NewContent, string? Error) BuildEditPreview(string fileContent, string oldText, string newText)
     {
@@ -797,7 +818,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         var nOld = oldText.Replace("\r\n", "\n").Replace("\r", "\n");
         var nIndex = nContent.IndexOf(nOld, StringComparison.Ordinal);
         if (nIndex < 0)
-            return (null, "Could not find old_text in the file. It may have been modified since the last read, or the whitespace differs.");
+            return (null, "Could not find old_text in the file. It may have been modified since the last read, or the whitespace differs.\n" +
+                          BuildCurrentContentHint(fileContent));
 
         var nSecond = nContent.IndexOf(nOld, nIndex + nOld.Length, StringComparison.Ordinal);
         if (nSecond >= 0)
@@ -809,6 +831,23 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         // Re-apply original line-ending style so the preview matches what gets written.
         var useCrlf = fileContent.Contains("\r\n");
         return (useCrlf ? normalizedUpdated.Replace("\n", "\r\n") : normalizedUpdated, null);
+    }
+
+    /// <summary>
+    /// Builds a "here's what's currently in the file" hint to attach to edit failures,
+    /// so the model can fix its old_text without firing a separate read_file_contents trip.
+    /// Capped at 5000 chars — large enough for most files, small enough to bound bloat.
+    /// </summary>
+    private static string BuildCurrentContentHint(string fileContent)
+    {
+        const int cap = 5000;
+        var lineCount = fileContent.Count(c => c == '\n') + 1;
+        if (fileContent.Length <= cap)
+            return $"Current file content ({lineCount} lines):\n{fileContent}";
+
+        return $"Current file content ({lineCount} lines, showing first {cap} chars):\n" +
+               fileContent[..cap] +
+               "\n... [truncated — use read_file_contents to see the rest]";
     }
 
     /// <summary>
@@ -1035,6 +1074,26 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             default:
                 return null;
         }
+    }
+
+    // Verbs that read file content via the shell. Anchored regex with word boundary so
+    // `typescript` doesn't match `type`, and `category` doesn't match `cat`. Covers cmd,
+    // bash, and PowerShell variants. Used to steer execute_command callers back to
+    // read_file_contents — see the shell-read circuit in OnFunctionInvocationAsync.
+    private static readonly System.Text.RegularExpressions.Regex ShellFileReadVerbs =
+        new(@"^\s*(?:type|cat|head|tail|more|less|nl|gc|Get-Content|findstr|grep|sls|Select-String|sed|awk)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// True if the command looks like a shell-based file-read (type/cat/head/findstr/grep/etc.).
+    /// Used to short-circuit execute_command calls that would otherwise dump file content
+    /// into the conversation, defeating read_file_contents' cache and dedup circuit.
+    /// Public so the classification is unit-testable without instantiating the full filter.
+    /// </summary>
+    public static bool LooksLikeShellFileRead(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        return ShellFileReadVerbs.IsMatch(command);
     }
 
     /// <summary>
