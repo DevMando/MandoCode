@@ -153,6 +153,20 @@ public class AIService
     }
 
     /// <summary>
+    /// Rebuilds the kernel with the current config WITHOUT clearing chat history.
+    /// Used by /config set for kernel-baked settings (temperature, maxTokens, toolBudget,
+    /// plugin toggles) so an inline tweak doesn't nuke the conversation. Model/endpoint
+    /// switches via /model and /setup keep using <see cref="ReinitializeAsync"/> —
+    /// a different model mid-history is a different conversation.
+    /// </summary>
+    public async Task RefreshSettingsAsync(MandoCodeConfig config)
+    {
+        _config = config;
+        BuildKernel();
+        await AttachMcpPluginsAsync();
+    }
+
+    /// <summary>
     /// Registers tools from every active MCP client as SK plugins on the current kernel.
     /// Idempotent within a single kernel instance — plugin registration is skipped if a
     /// plugin with the same <c>mcp_&lt;server&gt;</c> name is already present. BuildKernel
@@ -330,11 +344,29 @@ public class AIService
         string response;
         bool needsContinuation = false;
 
+        // Stall watchdog token, declared at method scope so the catch can distinguish a stall
+        // (the model went silent) from the generous per-turn request-timeout ceiling.
+        using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
+
         try
         {
             using var scope = _functionFilter.BeginScope();
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token, responseCts.Token);
+            // pauseDuringPlan: this outer call can run a whole plan (propose_plan). Pause BOTH outer
+            // timers (the stall watchdog and the request-timeout ceiling) for the plan's duration so
+            // neither can cancel a step and surface as a bogus "Cancelled by user." Each step has its
+            // own watchdog + request timeout, so steps stay bounded.
+            using var watchdog = AttachStallWatchdog(
+                responseCts,
+                pauseDuringPlan: true,
+                requestCts: timeoutCts,
+                requestTimeout: TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+
+            // Heartbeat over the model-generation stretch: keep a ticking spinner alive (the
+            // existing one is stopped between tool events) and advertise the escape hatch so a
+            // slow/stalled direct-chat turn never looks dead.
+            _spinner.Start("Thinking… (Esc to cancel)");
 
             var result = await RetryPolicy.ExecuteWithRetryAsync(
                 async () => await _chatService.GetChatMessageContentAsync(
@@ -358,8 +390,12 @@ public class AIService
             if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
                 && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
             {
-                response += "\n\n⚠ Response was cut off (hit the token limit). " +
-                           "You can say \"continue\" to keep going, or increase max tokens with /config.";
+                response += BuildLengthCutoffNotice(
+                    doneStream.EvalCount,
+                    _config.MaxTokens,
+                    _config.ContextLength,
+                    emptyContent: string.IsNullOrEmpty(result.Content),
+                    isCloudModel: MandoCodeConfig.IsCloudModel(_config.GetEffectiveModelName()));
             }
 
             await _historyLock.WaitAsync();
@@ -391,6 +427,14 @@ public class AIService
         {
             response = "Request cancelled.";
         }
+        catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
+        {
+            // Stall watchdog fired — the model went quiet (no tokens, no tool activity) for longer
+            // than the per-call budget. Usually a local model stalling as context grows.
+            response = $"Error: the model went silent for {_config.ModelResponseTimeoutSeconds}s and was stopped by the stall watchdog.\n\n" +
+                       "This usually means a local model stalled as context grew. Try /clear to trim history, a smaller request, " +
+                       $"or raise the watchdog: /config set modelResponseTimeout 300.";
+        }
         catch (OperationCanceledException)
         {
             response = "Error: Request timed out. The model took too long to respond.\n\n" +
@@ -419,6 +463,146 @@ public class AIService
         }
 
         return (response, needsContinuation);
+    }
+
+    /// <summary>
+    /// Composes the warning appended when generation stops with done_reason "length".
+    /// Two distinct causes share that reason and need OPPOSITE advice:
+    ///   • Output reached the response cap (EvalCount ≈ maxTokens) → say "continue" or raise maxTokens.
+    ///   • The CONTEXT WINDOW filled mid-generation (output far below the cap) → num_ctx is the
+    ///     bottleneck and raising maxTokens does nothing — the old one-size-fits-all message sent
+    ///     users to exactly the wrong knob. Common when the daemon was started outside MandoCode
+    ///     (tray app) with Ollama's ~4k default window.
+    /// <paramref name="emptyContent"/> flags the worst case: a thinking model (e.g. qwen3,
+    /// minimax) spent the whole budget on internal reasoning and produced no visible answer.
+    /// <paramref name="isCloudModel"/> swaps the window-filled advice: cloud context lives
+    /// server-side at the model's full window, so the desktop-app slider / daemon-restart
+    /// guidance is meaningless there — trimming history is the only lever.
+    /// Static + public for direct unit testing without standing up the full service.
+    /// </summary>
+    public static string BuildLengthCutoffNotice(long completionTokens, int maxTokens, int configuredContextLength, bool emptyContent, bool isCloudModel = false)
+    {
+        // Formatted as markdown — the response path renders through MarkdownHtmlRenderer,
+        // so a bold headline + bullet list reads far better than the old wall of text.
+
+        // Ollama can stop a handful of tokens shy of the exact cap — treat anything
+        // within 90% of maxTokens (or an unreported count) as a genuine cap hit.
+        if (completionTokens <= 0 || completionTokens >= maxTokens * 9L / 10)
+        {
+            var thinkingCapNote = emptyContent
+                ? "\n- Note: thinking models (qwen3, minimax) spend reasoning tokens from this same budget — " +
+                  "a small max tokens limit can be consumed entirely by internal reasoning before any visible answer."
+                : "";
+            return "\n\n⚠ **Response cut off — hit the max response tokens limit.**\n" +
+                   "- Say \"continue\" to keep going\n" +
+                   "- Or raise max tokens with /config" +
+                   thinkingCapNote;
+        }
+
+        var thinkingNote = emptyContent
+            ? "\nNo visible answer was produced — likely a thinking model (e.g. qwen3, minimax) that spent it all on internal reasoning."
+            : "";
+
+        var header = "\n\n⚠ **Response cut off — the model's CONTEXT WINDOW filled.**\n" +
+                     $"Only {completionTokens:N0} of your {maxTokens / 1024}k response budget was generated, " +
+                     "so raising max tokens won't help." +
+                     thinkingNote + "\n";
+
+        if (isCloudModel)
+        {
+            return header +
+                   "\nThe conversation filled the model's server-side context window. How to fix:\n" +
+                   "- /clear to trim the conversation history\n" +
+                   "- Break the request into smaller pieces";
+        }
+
+        var applyLine = configuredContextLength > 0
+            ? $"- No desktop app? Quit Ollama and run /setup → Start Ollama for me (applies your configured {configuredContextLength / 1024}k window)\n" +
+              "- Want a bigger window? /config set contextLength 32768 — more window uses more VRAM"
+            : "- No desktop app? Set a window first: /config set contextLength 16384 — then restart Ollama via /setup";
+
+        return header +
+               "\nThe Ollama daemon is likely running with a small window (Ollama's default is ~4k). How to fix:\n" +
+               "- Ollama desktop app: Settings → Context length — drag to 16k or higher\n" +
+               applyLine + "\n" +
+               "- /clear frees space right now by trimming history";
+    }
+
+    /// <summary>
+    /// Attaches a stall watchdog to <paramref name="responseCts"/>: it fires after
+    /// <see cref="MandoCodeConfig.ModelResponseTimeoutSeconds"/> of pure model-generation time.
+    /// Tool calls — and the approval prompts that run inside them — PAUSE the watchdog: while any
+    /// function is in flight the timer is disabled, so a long-running tool (e.g. a build) or a user
+    /// deliberating at an approval prompt is never mistaken for a stalled model. The watchdog only
+    /// counts contiguous stretches where the model is generating with no tool activity. Dispose the
+    /// returned handle once the model call completes to detach the hooks.
+    /// </summary>
+    private IDisposable AttachStallWatchdog(
+        CancellationTokenSource responseCts,
+        bool pauseDuringPlan = false,
+        CancellationTokenSource? requestCts = null,
+        TimeSpan requestTimeout = default)
+    {
+        // Capture the filter locally so subscribe/unsubscribe target the same instance even if the
+        // kernel is rebuilt mid-flight. CancelAfter is thread-safe and a no-op once disposed.
+        var filter = _functionFilter;
+        var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
+
+        // When a plan is running inside this call, suppress tool-event resumes — see below.
+        var planActive = false;
+
+        void Pause() { try { responseCts.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
+        void Resume() { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } }
+
+        // A function entering flight pauses the watchdog; the last one leaving flight resumes it.
+        // PendingFunctionCount is already decremented before OnFunctionFinished fires, so a reading
+        // of 0 means no tool is in flight. AllowConcurrentInvocation is handled: the count only hits
+        // 0 when the final concurrent call completes.
+        void OnStarted() => Pause();
+        void OnFinished() { if (!planActive && filter.PendingFunctionCount == 0) Resume(); }
+
+        filter.OnFunctionStarted += OnStarted;
+        filter.OnFunctionFinished += OnFinished;
+
+        // Outer chat turn only: the whole plan executes inside this single model call (the
+        // propose_plan tool). Its steps legitimately generate large files with >timeout gaps
+        // between tool calls, and this call's token is threaded into the plan — so if the watchdog
+        // fired mid-plan it would cancel a step and surface as a bogus "Cancelled by user." Pause
+        // it for the plan's entire duration; the plan's own per-step watchdogs cover stalls there.
+        // (Plan-step watchdogs pass pauseDuringPlan=false: IsExecuting is already true for them, so
+        // honoring it would pin them paused and disable their stall detection.)
+        // The request-timeout ceiling (requestCts) ALSO wraps the whole plan and would
+        // misfire the same way — a long (or thrashing) plan that crosses RequestTimeoutMinutes
+        // got cancelled and mislabeled "Cancelled by user." So pause it for the plan too. Each
+        // plan step still has its OWN request timeout, so steps stay bounded; only the redundant
+        // outer ceiling is suspended. Resumed (fresh) for any post-plan model wrap-up.
+        void PauseRequest() { try { requestCts?.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
+        void ResumeRequest() { try { requestCts?.CancelAfter(requestTimeout); } catch (ObjectDisposedException) { } }
+
+        Action? onPlanStart = null, onPlanEnd = null;
+        if (pauseDuringPlan && _planHandoff != null)
+        {
+            onPlanStart = () => { planActive = true; Pause(); PauseRequest(); };
+            onPlanEnd = () => { planActive = false; Resume(); ResumeRequest(); };
+            _planHandoff.ExecutionStarted += onPlanStart;
+            _planHandoff.ExecutionFinished += onPlanEnd;
+        }
+
+        return new ActionDisposable(() =>
+        {
+            filter.OnFunctionStarted -= OnStarted;
+            filter.OnFunctionFinished -= OnFinished;
+            if (onPlanStart != null) _planHandoff!.ExecutionStarted -= onPlanStart;
+            if (onPlanEnd != null) _planHandoff!.ExecutionFinished -= onPlanEnd;
+        });
+    }
+
+    /// <summary>Runs an action on Dispose. Used to detach stall-watchdog hooks deterministically.</summary>
+    private sealed class ActionDisposable : IDisposable
+    {
+        private Action? _onDispose;
+        public ActionDisposable(Action onDispose) => _onDispose = onDispose;
+        public void Dispose() => Interlocked.Exchange(ref _onDispose, null)?.Invoke();
     }
 
     /// <summary>
@@ -478,7 +662,7 @@ public class AIService
                    "What to do:\n" +
                    "  • Try /clear to start a fresh conversation, OR\n" +
                    $"  • Run /config and lower 'Max response tokens' (currently {_config.MaxTokens / 1024}k) — large limits eat into the context budget, OR\n" +
-                   $"  • Lower the tool-result budget: mandocode --config set toolBudget 50000, OR\n" +
+                   $"  • Lower the tool-result budget: /config set toolBudget 50000, OR\n" +
                    "  • Switch to a model with a larger context window via /config.";
         }
 
@@ -555,10 +739,27 @@ public class AIService
             // Each continuation gets a fresh scope so the budget and dedup-set reset.
             using (var scope = _functionFilter.BeginScope())
             {
+                // Two timeouts, declared outside the try so the catch can tell them apart:
+                //   • requestCts  — the generous per-turn ceiling (RequestTimeoutMinutes).
+                //   • responseCts — the stall watchdog (ModelResponseTimeoutSeconds): a much
+                //     shorter bound on a single model call so a local model that stops
+                //     streaming once context grows recovers in minutes, not the full ceiling.
+                using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+                using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCts.Token, responseCts.Token);
+
+                // Stall watchdog: pauses while any tool/approval is in flight, so a long tool call
+                // or a user deliberating at an approval prompt never trips it — it only fires on a
+                // genuine model-silent stretch. Detached when the model call returns.
+                using var watchdog = AttachStallWatchdog(responseCts);
+
                 try
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
+                    // Heartbeat: keep a live, ticking spinner over the model-generation stretch
+                    // (which has no function events to drive the spinner) so a slow/stalled step
+                    // never looks dead, and advertise the now-working escape hatch. Function-event
+                    // handlers replace this with per-tool messages during tool calls.
+                    _spinner.Start($"Working on {stepLabel} — press Esc to cancel");
 
                     var result = await RetryPolicy.ExecuteWithRetryAsync(
                         async () => await _chatService.GetChatMessageContentAsync(
@@ -585,6 +786,15 @@ public class AIService
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw new OperationCanceledException("Step cancelled.", cancellationToken);
+                }
+                catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
+                {
+                    // Stall watchdog fired — the model went quiet for longer than the per-call
+                    // budget. Almost always a local model stalling as context grows.
+                    throw new Exception(
+                        $"The model stopped responding for {_config.ModelResponseTimeoutSeconds}s and was stopped by the stall watchdog. " +
+                        "This usually means a local model stalled as context grew. Try a smaller step, /clear to trim history, " +
+                        "or raise the watchdog: /config set modelResponseTimeout 300.");
                 }
                 catch (OperationCanceledException)
                 {

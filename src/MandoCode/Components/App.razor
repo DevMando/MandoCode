@@ -22,6 +22,7 @@
 @inject SkillLoader Skills
 @inject McpClientManager McpManager
 @inject McpApprovalGate McpGate
+@inject ApprovalPromptGate PromptGate
 @implements IDisposable
 
 <Banner />
@@ -461,9 +462,9 @@
         AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
         AnsiConsole.WriteLine();
         var labeled = fetched.Models
-            .OrderBy(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
             .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
-            .Select(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase)
+            .Select(m => MandoCodeConfig.IsCloudModel(m)
                 ? $"{m}   (cloud)"
                 : $"{m}   (local)")
             .ToArray();
@@ -477,16 +478,71 @@
         Config.ModelName = modelTag;
         Config.ModelPath = null;
 
-        // Same context-size picker /config uses — k-notation labels, current value
-        // highlighted at top, 200k/256k tiers for capable cloud models.
-        AnsiConsole.WriteLine();
-        Config.MaxTokens = ConfigurationWizard.ConfigureMaxTokens(Config.MaxTokens);
+        // /model is the QUICK switch — no settings quiz. Response length lives in /config.
+        // Local picks get a context window sized to the hardware tier the tag implies;
+        // cloud models manage context server-side (RecommendedContextLength returns 0).
+        var recommendedCtx = MandoCodeConfig.RecommendedContextLength(modelTag);
+        if (recommendedCtx > 0 && recommendedCtx != Config.ContextLength)
+        {
+            Config.ContextLength = recommendedCtx;
+            AnsiConsole.MarkupLine($"[dim]Context window sized to {recommendedCtx / 1024}k tokens for this model tier (takes effect when MandoCode starts Ollama).[/]");
+        }
 
         Config.Save();
         await AI.ReinitializeAsync(Config);
 
-        AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)} with {Config.MaxTokens / 1024}k max tokens.[/]");
-        AnsiConsole.MarkupLine("[dim]Tip: run /config to tweak temperature, timeout, ignore dirs, or other settings.[/]");
+        AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)}.[/]");
+        AnsiConsole.MarkupLine("[dim]Tip: run /config to tweak response length, temperature, timeout, or other settings.[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Inline setting change without leaving the session: "/config set <key> <value>".
+    /// Shares ConfigKeySetter with the CLI's --config set so key names and validation
+    /// can never drift. ApplyScope decides what happens after a successful set: live
+    /// keys just save; kernel-baked keys rebuild the kernel WITHOUT clearing history.
+    /// </summary>
+    private async Task HandleConfigSetCommandAsync(string args)
+    {
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+        {
+            AnsiConsole.MarkupLine("[cyan]Usage:[/] /config set <key> <value>");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]Available keys (current values):[/]");
+            AnsiConsole.WriteLine(ConfigKeySetter.DescribeKeys(Config));
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var result = ConfigKeySetter.TrySet(Config, parts[0], parts[1]);
+        AnsiConsole.WriteLine(result.Message);
+
+        if (!result.Ok)
+        {
+            AnsiConsole.MarkupLine("[dim]Run [cyan]/config set[/] with no arguments to list keys and current values.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        Config.Save();
+
+        switch (result.Scope)
+        {
+            case ConfigKeySetter.ApplyScope.KernelRebuild:
+                await AI.RefreshSettingsAsync(Config);
+                AnsiConsole.MarkupLine("[dim]Applied — conversation history kept.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.Immediate:
+                AnsiConsole.MarkupLine("[dim]Takes effect on your next message.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.AppRestart:
+                AnsiConsole.MarkupLine("[dim]Saved — takes effect the next time MandoCode starts.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.DaemonRestart:
+                // The setter's own message already explains the daemon/slider situation.
+                break;
+        }
         AnsiConsole.WriteLine();
     }
 
@@ -786,8 +842,9 @@
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
                     table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
-                    table.AddRow("/model", "Quick switch — pick a different model + context size");
-                    table.AddRow("/config", "Adjust settings — model, temperature, max tokens, timeout, ignore dirs");
+                    table.AddRow("/model", "Quick switch — pick a different model");
+                    table.AddRow("/config", "Adjust settings — guided wizard");
+                    table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
                     table.AddRow("/retry", "Retry Ollama connection");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
@@ -821,8 +878,29 @@
                     continue;
                 }
 
-                if (command == "config")
+                if (command == "config" || command.StartsWith("config "))
                 {
+                    // "/config set <key> <value>" — inline setter, no wizard round-trip.
+                    // Args are parsed from the RAW input: GetCommandName lowercases the
+                    // command string, which would mangle case-sensitive values.
+                    var rawConfigArgs = input.TrimStart().TrimStart('/').Trim();
+                    rawConfigArgs = rawConfigArgs.Length > "config".Length
+                        ? rawConfigArgs["config".Length..].Trim()
+                        : "";
+
+                    if (rawConfigArgs.StartsWith("set", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await HandleConfigSetCommandAsync(rawConfigArgs[3..].Trim());
+                        continue;
+                    }
+                    if (rawConfigArgs.Length > 0)
+                    {
+                        AnsiConsole.MarkupLine("[yellow]Unknown /config subcommand.[/]");
+                        AnsiConsole.MarkupLine("[dim]Usage: [cyan]/config[/] (guided wizard) or [cyan]/config set <key> <value>[/][/]");
+                        AnsiConsole.WriteLine();
+                        continue;
+                    }
+
                     await HandleConfigCommandAsync();
                     continue;
                 }
@@ -1077,7 +1155,10 @@
             // and the placeholder hint shows in greyed text until the user types.
             _wizardInputValue = initialValue ?? "";
             _wizardInputPlaceholder = placeholder;
-            _wizardInputTcs = new TaskCompletionSource<string>();
+            // Async continuations so the awaiting wizard step resumes off the dispatcher
+            // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
+            // note in WaitForVdomInputAsync.
+            _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             _showWizardInput = true;
             _showPrompt = false;
             await InvokeAsync(StateHasChanged);
@@ -1118,7 +1199,10 @@
 
         _wizardSelectOptions = options;
         _wizardSelectValue = options[0];
-        _wizardSelectTcs = new TaskCompletionSource<string>();
+        // Async continuations so the awaiting wizard step resumes off the dispatcher
+        // thread (HandleWizardSelectSubmit completes this from a Blazor event). See the
+        // note in WaitForVdomInputAsync.
+        _wizardSelectTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _showWizardSelect = true;
         _showPrompt = false;
         await InvokeAsync(StateHasChanged);
@@ -1199,7 +1283,12 @@
     /// </summary>
     private async Task<string> WaitForVdomInputAsync()
     {
-        _inputTcs = new TaskCompletionSource<string>();
+        // RunContinuationsAsynchronously is critical: HandleVdomSubmit completes this TCS
+        // from the Blazor dispatcher thread. Without it, the awaiting continuation (the rest
+        // of the interactive loop — blocking Spectre prompts, guarded renders, Spinner.Stop's
+        // task.Wait) would resume inline ON the dispatcher and freeze the UI. Mirrors
+        // InstructionPromptCoordinator, which already uses this for the same reason.
+        _inputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _promptInitialValue = "";
         _showPrompt = true;
         _isProcessing = false;
@@ -1501,55 +1590,8 @@
                     {
                         _lastAiResponse = responseText;
 
-                        try
-                        {
-                            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
-
-                            // Guard against rendering hangs on malformed/huge responses.
-                            // Large responses with many tables/code blocks can take 10+ seconds to render.
-                            var renderTask = Task.Run(() =>
-                            {
-                                var renderable = MarkdownHtmlRenderer.BuildRenderable(responseText, ProjectRoot.ProjectRoot);
-                                AnsiConsole.Write(renderable);
-                            });
-
-                            // Show a spinner if rendering takes more than 1 second. The remaining
-                            // budget comes from config — big tool-grounded responses (MCP,
-                            // many tables) can legitimately take 30+ seconds to render.
-                            if (!renderTask.Wait(TimeSpan.FromSeconds(1)))
-                            {
-                                Spinner.Start("Rendering...");
-                                var remainingSeconds = Math.Max(1, Config.MarkdownRenderTimeoutSeconds - 1);
-                                if (!renderTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
-                                {
-                                    Spinner.Stop();
-                                    // Rendering exceeded the configured budget — fall back to raw text
-                                    Console.WriteLine();
-                                    Console.Write(responseText);
-                                    Console.WriteLine();
-                                    AnsiConsole.MarkupLine($"[dim](markdown rendering timed out after {Config.MarkdownRenderTimeoutSeconds}s — showing raw text. Raise with /config or mandocode --config set renderTimeout 120)[/]");
-                                }
-                                else if (renderTask.IsFaulted)
-                                {
-                                    Spinner.Stop();
-                                    throw renderTask.Exception!.InnerException ?? renderTask.Exception;
-                                }
-                                else
-                                {
-                                    Spinner.Stop();
-                                }
-                            }
-                            else if (renderTask.IsFaulted)
-                            {
-                                throw renderTask.Exception!.InnerException ?? renderTask.Exception;
-                            }
-                        }
-                        catch (Exception renderEx)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[MandoCode] Render failed: {renderEx.Message}");
-                            // Fallback to raw text if markdown rendering fails
-                            Console.Write(responseText);
-                        }
+                        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+                        RenderMarkdownGuarded(responseText);
 
                         // Add to chat history (ANSI capture deferred to Phase 2)
                         _messages.Add(new ChatMsg
@@ -1622,32 +1664,104 @@
     }
 
     /// <summary>
+    /// Renders <paramref name="text"/> as markdown, guarded against rendering hangs on
+    /// malformed/huge content. The build+write runs on a background task; a 1s grace passes
+    /// before a "Rendering..." spinner shows, with a hard cap of
+    /// <see cref="MandoCodeConfig.MarkdownRenderTimeoutSeconds"/>. On timeout or failure it
+    /// falls back to raw text. Shared by the direct-chat response path and the per-step plan
+    /// path so neither can freeze the interactive loop.
+    /// </summary>
+    private void RenderMarkdownGuarded(string text)
+    {
+        try
+        {
+            // Large responses with many tables/code blocks can take 10+ seconds to render.
+            var renderTask = Task.Run(() =>
+            {
+                var renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot);
+                AnsiConsole.Write(renderable);
+            });
+
+            // Show a spinner if rendering takes more than 1 second. The remaining
+            // budget comes from config — big tool-grounded responses (MCP, many
+            // tables) can legitimately take 30+ seconds to render.
+            if (!renderTask.Wait(TimeSpan.FromSeconds(1)))
+            {
+                Spinner.Start("Rendering...");
+                var remainingSeconds = Math.Max(1, Config.MarkdownRenderTimeoutSeconds - 1);
+                if (!renderTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
+                {
+                    Spinner.Stop();
+                    // Rendering exceeded the configured budget — fall back to raw text
+                    Console.WriteLine();
+                    Console.Write(text);
+                    Console.WriteLine();
+                    AnsiConsole.MarkupLine($"[dim](markdown rendering timed out after {Config.MarkdownRenderTimeoutSeconds}s — showing raw text. Raise with /config or mandocode --config set renderTimeout 120)[/]");
+                }
+                else if (renderTask.IsFaulted)
+                {
+                    Spinner.Stop();
+                    throw renderTask.Exception!.InnerException ?? renderTask.Exception;
+                }
+                else
+                {
+                    Spinner.Stop();
+                }
+            }
+            else if (renderTask.IsFaulted)
+            {
+                throw renderTask.Exception!.InnerException ?? renderTask.Exception;
+            }
+        }
+        catch (Exception renderEx)
+        {
+            System.Diagnostics.Debug.WriteLine($"[MandoCode] Render failed: {renderEx.Message}");
+            // Fallback to raw text if markdown rendering fails
+            Console.Write(text);
+        }
+    }
+
+    /// <summary>
     /// Called by <see cref="PlanHandoff"/> when the model invokes propose_plan.
     /// Shows the approval UI, runs execution if approved, and returns a summary
     /// string that the model will see as the tool result.
     /// </summary>
     private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
     {
-        // Stop the outer "Thinking..." spinner so it doesn't fight the approval prompt.
-        Spinner.Stop();
-
-        AnsiConsole.WriteLine();
-        DisplayPlan(plan);
-
         string choice;
-        using (KeyCoordinator.Suppress())
+        // Serialize the plan-approval prompt against the diff/command/MCP prompts — the
+        // model can emit propose_plan alongside another approval-gated tool call in the
+        // same response. Held ONLY around the prompt, never around plan execution: the
+        // plan's own step approvals acquire this same gate, so holding it across
+        // ExecutePlanAsync would deadlock the first step.
+        using (await PromptGate.AcquireAsync(ct))
         {
-            choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("The assistant proposes this plan. What would you like to do?")
-                    .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
-            );
+            // Stop the outer "Thinking..." spinner so it doesn't fight the approval prompt.
+            Spinner.Stop();
+
+            AnsiConsole.WriteLine();
+            DisplayPlan(plan);
+
+            using (KeyCoordinator.Suppress())
+            {
+                choice = AnsiConsole.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("The assistant proposes this plan. What would you like to do?")
+                        .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
+                );
+            }
         }
 
         if (choice == "Cancel request")
         {
             AnsiConsole.MarkupLine("[dim]Plan cancelled.[/]");
             AnsiConsole.WriteLine();
+            // Returning a "stop here" string is a POLITE REQUEST that small models ignore —
+            // observed live: the model received it and simply executed the cancelled plan's
+            // steps itself via direct tool calls. Cancel the request token so the turn
+            // mechanically unwinds (same path as Esc); the string below only matters in the
+            // narrow window before the cancellation lands.
+            _requestCts?.Cancel();
             return "User cancelled the request. Stop here and do not take further action.";
         }
 
@@ -1695,8 +1809,15 @@
         }
         AnsiConsole.WriteLine();
 
-        return plan.ExecutionSummary
+        // The summary alone is pure information — small models treat an open turn as an
+        // invitation to keep building (observed: a completed 5-step plan was followed by
+        // an uninvited duplicate project AND a third plan proposal). End with an explicit
+        // stop directive; the scope-level one-plan-per-turn circuit backs it up mechanically.
+        var summary = plan.ExecutionSummary
                ?? $"Plan finished with status {plan.Status}.";
+        return summary +
+               "\n\nThe plan has finished. Respond to the user now with a brief summary of the outcome. " +
+               "Do NOT create more files, call more tools, or propose another plan.";
     }
 
     private void DisplayPlan(TaskPlan plan)
@@ -1740,11 +1861,11 @@
                 SpinnerService.SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 if (!string.IsNullOrEmpty(progressEvent.Message))
                 {
-                    // Render through the markdown pipeline so **bold**, lists,
-                    // inline code, and file-path linkification work the same as
-                    // they do for non-plan AI responses (see line ~1512).
-                    var stepRenderable = MarkdownHtmlRenderer.BuildRenderable(progressEvent.Message, ProjectRoot.ProjectRoot);
-                    AnsiConsole.Write(stepRenderable);
+                    // Render through the same guarded markdown pipeline as non-plan AI
+                    // responses so **bold**, lists, inline code, and file-path linkification
+                    // match — AND so a malformed/huge step message can't hang the plan loop.
+                    // Without the guard, one bad step's render froze the whole multi-step run.
+                    RenderMarkdownGuarded(progressEvent.Message);
                 }
                 AnsiConsole.MarkupLine($"[green]Step {progressEvent.CurrentStep} completed.[/]");
                 AnsiConsole.WriteLine();

@@ -244,22 +244,20 @@ public class ConfigurationWizard
         AnsiConsole.MarkupLine("[dim](roughly 4 characters or ¾ of a word each). If a reply hits the limit, it gets[/]");
         AnsiConsole.MarkupLine("[dim]cut off mid-sentence and you'll see a warning.[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Bigger isn't always better:[/]");
-        AnsiConsole.MarkupLine("[dim]  • Local models slow down a lot at very high limits.[/]");
-        AnsiConsole.MarkupLine("[dim]  • The number must fit in your model's [italic]context window[/] (e.g. qwen3.5 = 256k).[/]");
-        AnsiConsole.MarkupLine("[dim]  • Setting it lower than you need is fine — the model only uses what it needs.[/]");
+        AnsiConsole.MarkupLine("[dim]This is NOT the context window — it only caps a single reply. Long tasks[/]");
+        AnsiConsole.MarkupLine("[dim]happen as many tool calls, so most replies never come close to the cap.[/]");
+        AnsiConsole.MarkupLine("[dim]On local models a reply can never exceed the context window anyway.[/]");
         AnsiConsole.WriteLine();
 
         // Spectre's SelectionPrompt always highlights the FIRST item — there's no
         // "default selection" API. To honor the user's existing setting (or the
         // baseline 32k for fresh installs), put the preferred value first and let
         // the rest follow in ascending order.
-        // Capping the picker at 200k. The 256k tier was misleading — many cloud models
-        // advertise 256k but have a practical limit below that once system prompts,
-        // tool definitions, and response budget are accounted for. 200k aligns with
-        // the largest real-world reliable ceiling. Labels are neutral (no specific
-        // model names) so they don't go stale as cloud-model lineups change.
-        var allTokens = new[] { 2048, 4096, 8192, 16384, 32768, 65536, 131072, 204800 };
+        // Tiers top out at 64k: these are RESPONSE-length caps, not context windows.
+        // The old 128k/200k tiers were context-window numbers that made no sense as
+        // single-reply lengths — no agent reply is 200k tokens, and agentic work is
+        // chunked across tool calls by design.
+        var allTokens = new[] { 2048, 4096, 8192, 16384, 32768, 65536 };
         var preferred = allTokens.Contains(currentMaxTokens) ? currentMaxTokens : 32768;
         var ordered = new[] { preferred }.Concat(allTokens.Where(t => t != preferred)).ToArray();
 
@@ -277,9 +275,7 @@ public class ConfigurationWizard
                         8192   => $"8k     Multi-component generation, detailed code{marker}",
                         16384  => $"16k    Full-page scaffolding, large file rewrites{marker}",
                         32768  => $"32k    Large multi-file refactors (default){marker}",
-                        65536  => $"64k    Very long outputs, larger codebases{marker}",
-                        131072 => $"128k   Maximum for many cloud models{marker}",
-                        204800 => $"200k   Very long sessions, top of the reliable range{marker}",
+                        65536  => $"64k    Huge single-file generation on cloud models{marker}",
                         _      => tokens.ToString()
                     };
                 })

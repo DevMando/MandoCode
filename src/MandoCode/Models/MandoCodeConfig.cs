@@ -41,26 +41,74 @@ public class MandoCodeConfig
     /// </summary>
     public const string DefaultCloudModel = "minimax-m2.7:cloud";
 
+    /// <summary>
+    /// True when the tag names an Ollama cloud model. Cloud tags end in "cloud" with a
+    /// ':' or '-' separator — "minimax-m2.7:cloud" but also "qwen3-coder:480b-cloud"
+    /// (size variant + "-cloud"). The old scattered Contains(":cloud") checks missed the
+    /// "-cloud" form and misclassified those models as local. Single source of truth for
+    /// the pickers, onboarding flow, and config display.
+    /// </summary>
+    public static bool IsCloudModel(string? modelTag) =>
+        !string.IsNullOrEmpty(modelTag)
+        && (modelTag.TrimEnd().EndsWith(":cloud", StringComparison.OrdinalIgnoreCase)
+            || modelTag.TrimEnd().EndsWith("-cloud", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Maps a local model tag to a context window sized for the hardware that choice
+    /// implies — the user self-selected the model tier knowing their GPU, so the tag is
+    /// the best hardware signal we have without probing VRAM. Returns 0 for cloud models
+    /// (context is managed server-side at the model's full window; the local KV cache
+    /// setting is irrelevant) so callers know to leave <see cref="ContextLength"/> alone.
+    /// Unparseable local tags (mistral, llama3.1) get the safe floor.
+    /// </summary>
+    public static int RecommendedContextLength(string? modelTag)
+    {
+        if (IsCloudModel(modelTag)) return 0;
+        if (string.IsNullOrEmpty(modelTag)) return 8192;
+
+        // Parse the parameter count from the tag: "qwen3.5:0.8b" → 0.8, "qwen2.5-coder:14b" → 14.
+        var afterColon = modelTag.Contains(':') ? modelTag[(modelTag.IndexOf(':') + 1)..] : modelTag;
+        var match = System.Text.RegularExpressions.Regex.Match(afterColon, @"^(\d+(?:\.\d+)?)b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success || !double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var billions))
+            return 8192;
+
+        // KV-cache VRAM grows with both window size and model size; bigger picks imply
+        // bigger GPUs, which also covers the larger cache.
+        return billions switch
+        {
+            < 3 => 8192,   // CPU / iGPU / 4 GB tier
+            < 7 => 16384,  // 4-6 GB VRAM tier
+            _   => 32768   // 8 GB+ VRAM tier
+        };
+    }
+
     // ── Validation ranges (single source of truth) ──
     public const double MinTemperature = 0.0;
     public const double MaxTemperature = 1.0;
     public const int MinMaxTokens = 256;
-    public const int MaxMaxTokens = 204800; // 200k — top of the reliable cloud-model context range. Cloud models advertised at 256k typically have a practical ceiling closer to 200k once system prompts, tool defs, and response budget are accounted for.
+    public const int MaxMaxTokens = 65536; // 64k — this caps a SINGLE reply (NumPredict), not the context window. Agentic work is chunked across tool calls; no reply legitimately needs more. Old configs saved with larger values are healed by ValidateAndClamp.
     public const int MinRequestTimeoutMinutes = 1;
     public const int MaxRequestTimeoutMinutes = 60;
+    public const int MinModelResponseTimeoutSeconds = 30;
+    public const int MaxModelResponseTimeoutSeconds = 1800;
     public const long MinToolResultCharBudget = 50_000;
     public const long MaxToolResultCharBudget = 4_000_000;
     public const int MinMaxAutoContinuations = 0;
     public const int MaxMaxAutoContinuations = 10;
     public const int MinMarkdownRenderTimeoutSeconds = 5;
     public const int MaxMarkdownRenderTimeoutSeconds = 300;
+    public const int MinContextLength = 2048;
+    public const int MaxContextLength = 262144;
 
     public static bool IsValidTemperature(double value) => value >= MinTemperature && value <= MaxTemperature;
     public static bool IsValidMaxTokens(int value) => value >= MinMaxTokens && value <= MaxMaxTokens;
     public static bool IsValidRequestTimeout(int value) => value >= MinRequestTimeoutMinutes && value <= MaxRequestTimeoutMinutes;
+    public static bool IsValidModelResponseTimeout(int value) => value >= MinModelResponseTimeoutSeconds && value <= MaxModelResponseTimeoutSeconds;
     public static bool IsValidToolResultCharBudget(long value) => value >= MinToolResultCharBudget && value <= MaxToolResultCharBudget;
     public static bool IsValidMaxAutoContinuations(int value) => value >= MinMaxAutoContinuations && value <= MaxMaxAutoContinuations;
     public static bool IsValidMarkdownRenderTimeout(int value) => value >= MinMarkdownRenderTimeoutSeconds && value <= MaxMarkdownRenderTimeoutSeconds;
+    // 0 is valid: "don't set it — leave Ollama's own default in place".
+    public static bool IsValidContextLength(int value) => value == 0 || (value >= MinContextLength && value <= MaxContextLength);
 
     /// <summary>
     /// Ollama endpoint URL.
@@ -97,12 +145,37 @@ public class MandoCodeConfig
     public int MaxTokens { get; set; } = 32768;
 
     /// <summary>
+    /// Context window (num_ctx / KV-cache size, in tokens) requested for LOCAL models via
+    /// the OLLAMA_CONTEXT_LENGTH environment variable when MandoCode starts the Ollama
+    /// daemon itself. Ollama's own default (~4k) silently truncates the oldest prompt
+    /// content — system prompt and earlier file reads — once an agentic conversation
+    /// grows, which looks like the model "forgetting" its instructions. 0 = don't set it.
+    /// Only takes effect when MandoCode launches the daemon; an already-running Ollama
+    /// keeps whatever it was started with. Cloud models manage context server-side and
+    /// ignore this. NOTE: KV-cache VRAM grows with this value — on small GPUs prefer 8k.
+    /// </summary>
+    [JsonPropertyName("contextLength")]
+    public int ContextLength { get; set; } = 8192;
+
+    /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
     /// Agentic work with many tool calls can take longer than a few minutes — raise this
     /// if the model gets cut off mid-task. Cancel anytime with Ctrl+C.
     /// </summary>
     [JsonPropertyName("requestTimeoutMinutes")]
     public int RequestTimeoutMinutes { get; set; } = 15;
+
+    /// <summary>
+    /// Stall watchdog: max seconds a SINGLE model call may run before it's treated as
+    /// stalled and cancelled. Bounds the common "local model stops streaming once context
+    /// grows" failure so a step recovers in a few minutes instead of waiting out the much
+    /// longer <see cref="RequestTimeoutMinutes"/> ceiling. The whole turn (all continuations
+    /// and plan steps) is still capped by RequestTimeoutMinutes. Raise this on slow,
+    /// CPU-only hardware where a legitimate generation can take longer than the default.
+    /// You can also cancel any call manually with Esc / Ctrl+C.
+    /// </summary>
+    [JsonPropertyName("modelResponseTimeoutSeconds")]
+    public int ModelResponseTimeoutSeconds { get; set; } = 180;
 
     /// <summary>
     /// Total character budget for tool-call results within a single chat turn or plan step.
@@ -335,6 +408,10 @@ public class MandoCodeConfig
         FunctionDeduplicationWindowSeconds = Math.Clamp(FunctionDeduplicationWindowSeconds, 0, 60);
         MaxRetryAttempts = Math.Clamp(MaxRetryAttempts, 0, 10);
         MarkdownRenderTimeoutSeconds = Math.Clamp(MarkdownRenderTimeoutSeconds, MinMarkdownRenderTimeoutSeconds, MaxMarkdownRenderTimeoutSeconds);
+        ModelResponseTimeoutSeconds = Math.Clamp(ModelResponseTimeoutSeconds, MinModelResponseTimeoutSeconds, MaxModelResponseTimeoutSeconds);
+        // 0 stays 0 ("leave Ollama's default alone"); anything else clamps to the valid band.
+        if (ContextLength != 0)
+            ContextLength = Math.Clamp(ContextLength, MinContextLength, MaxContextLength);
         Music.Volume = Math.Clamp(Music.Volume, 0f, 1f);
 
         if (string.IsNullOrWhiteSpace(OllamaEndpoint))
@@ -418,7 +495,9 @@ public class MandoCodeConfig
             ModelName = DefaultCloudModel,
             Temperature = 0.7,
             MaxTokens = 32768,
+            ContextLength = 8192,
             RequestTimeoutMinutes = 15,
+            ModelResponseTimeoutSeconds = 180,
             ToolResultCharBudget = 100_000,
             EnableAutoContinuation = true,
             MaxAutoContinuations = 3,
@@ -442,8 +521,12 @@ public class MandoCodeConfig
             Console.WriteLine($"  Model Path: {ModelPath}");
         }
         Console.WriteLine($"  Temperature: {Temperature}");
-        Console.WriteLine($"  Max Tokens: {MaxTokens}");
+        Console.WriteLine($"  Max Tokens: {MaxTokens} (max response length)");
+        Console.WriteLine(IsCloudModel(GetEffectiveModelName())
+            ? "  Context Length: managed by Ollama cloud (model default)"
+            : $"  Context Length: {(ContextLength == 0 ? "Ollama default" : $"{ContextLength:N0} tokens")} (local models, applied when MandoCode starts the daemon)");
         Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
+        Console.WriteLine($"  Model Response Timeout: {ModelResponseTimeoutSeconds}s (per model call — stall watchdog)");
         Console.WriteLine($"  Tool Result Budget: {ToolResultCharBudget:N0} chars (~{ToolResultCharBudget / 4:N0} tokens)");
         Console.WriteLine($"  Auto-Continuation: {(EnableAutoContinuation ? $"Enabled (max {MaxAutoContinuations})" : "Disabled")}");
         Console.WriteLine($"  Markdown Render Timeout: {MarkdownRenderTimeoutSeconds}s");

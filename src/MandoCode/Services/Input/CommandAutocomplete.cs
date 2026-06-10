@@ -309,11 +309,26 @@ public static class CommandAutocomplete
         }
     }
 
-    // Panel geometry shared by both autocomplete dropdowns. Outer width matches
-    // the legacy 48-col bordered look; inner content area is 44 cols after the
-    // 2-col border and 2-col default horizontal padding.
-    private const int AutocompletePanelWidth = 48;
-    private const int AutocompleteContentWidth = AutocompletePanelWidth - 4;
+    // Panel geometry shared by both autocomplete dropdowns. Sized to the terminal:
+    // wide enough that command descriptions don't truncate on a normal window, but
+    // never wider than the console itself, and capped — a 250-col monitor doesn't
+    // need a 250-col dropdown. 100 cols fits the longest current description with
+    // room to spare. Falls back to the legacy 48-col look when the console size is
+    // unavailable (redirected output, some terminal hosts).
+    private const int MinAutocompletePanelWidth = 48;
+    private const int MaxAutocompletePanelWidth = 100;
+
+    private static int AutocompletePanelWidth
+    {
+        get
+        {
+            try { return Math.Clamp(Console.WindowWidth - 2, MinAutocompletePanelWidth, MaxAutocompletePanelWidth); }
+            catch { return MinAutocompletePanelWidth; }
+        }
+    }
+
+    // Inner content area: panel width minus the 2-col border and 2-col padding.
+    private static int AutocompleteContentWidth => AutocompletePanelWidth - 4;
 
     /// <summary>
     /// Displays the command autocomplete dropdown.
@@ -327,8 +342,10 @@ public static class CommandAutocomplete
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        // Commands take 14 cols (column width), description fills the rest.
-        const int cmdCol = 14;
+        // Command column sizes to the longest VISIBLE command (14-col floor keeps the
+        // legacy alignment) so long names like /music-playlist never truncate; the
+        // description gets everything that's left.
+        var cmdCol = Math.Max(14, commands.Count > 0 ? commands.Max(c => c.Length) : 14);
         var descCol = AutocompleteContentWidth - cmdCol - 1;
 
         var rows = new List<IRenderable>();
@@ -477,13 +494,17 @@ public static class CommandAutocomplete
     /// </summary>
     private static void WriteAutocompletePanel(int cursorTop, string headerMarkup, IReadOnlyList<IRenderable> rows)
     {
+        // Capture the width once so the panel and the capture profile agree even if
+        // the terminal is resized mid-render.
+        var panelWidth = AutocompletePanelWidth;
+
         var content = rows.Count == 1 ? rows[0] : new Rows(rows);
         var panel = new Panel(content)
             .Border(BoxBorder.Rounded)
             .BorderStyle(Style.Parse("dim"))
             .Padding(1, 0);
         panel.Header = new PanelHeader(headerMarkup, Justify.Left);
-        panel.Width = AutocompletePanelWidth;
+        panel.Width = panelWidth;
 
         var sw = new StringWriter();
         var captureConsole = AnsiConsole.Create(new AnsiConsoleSettings
@@ -493,7 +514,7 @@ public static class CommandAutocomplete
             Interactive = InteractionSupport.No,
             Out = new AnsiConsoleOutput(sw),
         });
-        captureConsole.Profile.Width = AutocompletePanelWidth + 4;
+        captureConsole.Profile.Width = panelWidth + 4;
         captureConsole.Write(panel);
 
         var lines = sw.ToString().Replace("\r\n", "\n").TrimEnd('\n').Split('\n');

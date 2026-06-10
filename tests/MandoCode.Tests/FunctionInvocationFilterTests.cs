@@ -34,6 +34,13 @@ public class FunctionInvocationFilterTests
     [InlineData("sls foo *.cs")]
     // Leading whitespace tolerated.
     [InlineData("  cat foo.cs")]
+    // Wrapped reads — a stuck model used these to dump whole files past the bare-verb check,
+    // bloating context. The inner command leads with a read verb, so they must be blocked.
+    [InlineData("powershell -Command \"Get-Content game.js\"")]
+    [InlineData("powershell -Command \"Get-Content game.js | Select-Object -Skip 150 | Select-Object -First 300\"")]
+    [InlineData("powershell -NoProfile -Command \"gc game.js\"")]
+    [InlineData("pwsh -c 'cat game.js'")]
+    [InlineData("cmd /c type game.js")]
     public void LooksLikeShellFileRead_BlocksKnownReaders(string command)
     {
         Assert.True(FunctionInvocationFilter.LooksLikeShellFileRead(command));
@@ -57,6 +64,11 @@ public class FunctionInvocationFilterTests
     // legit filter on git's stdout, not a file dump.
     [InlineData("git status | grep modified")]
     [InlineData("dotnet build | findstr error")]
+    // Wrapped NON-reads — the inner command doesn't lead with a read verb, so the wrapper
+    // detection must not block these.
+    [InlineData("powershell -Command \"dotnet build\"")]
+    [InlineData("cmd /c dotnet test")]
+    [InlineData("powershell -Command \"(Get-Content x).Count\"")] // returns a count, not a dump
     // Empty and whitespace inputs.
     [InlineData("")]
     [InlineData("   ")]

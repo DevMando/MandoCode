@@ -165,11 +165,21 @@ public sealed class OnboardingFlow
         config.ModelName = pickedModel;
         config.ModelPath = null;
 
+        // Size the local context window to the hardware tier the model choice implies —
+        // the user just told us what their machine can handle by picking this tag.
+        // Cloud picks return 0 (context is managed server-side) and leave config alone.
+        var recommendedCtx = MandoCodeConfig.RecommendedContextLength(pickedModel);
+        if (recommendedCtx > 0 && recommendedCtx != config.ContextLength)
+        {
+            config.ContextLength = recommendedCtx;
+            AnsiConsole.MarkupLine($"[dim]Context window sized to {recommendedCtx / 1024}k tokens for this model tier (adjust: mandocode --config set contextLength <n>).[/]");
+        }
+
         // Cloud-model auth check — pulled cloud models stick around in /api/tags after
         // sign-out, so a model showing in the picker doesn't prove the daemon can
         // actually USE it. The picker can't catch this; only a real /api/generate call
         // does. If 401, walk the user through `ollama signin` before declaring success.
-        if (pickedModel.Contains(":cloud", StringComparison.OrdinalIgnoreCase))
+        if (MandoCodeConfig.IsCloudModel(pickedModel))
         {
             _setStatus("Verifying cloud authentication...");
             var authTest = await OllamaSetupHelper.TestCloudAuthAsync(probe.NormalizedUrl, pickedModel, ct);
@@ -207,7 +217,7 @@ public sealed class OnboardingFlow
         config.Save();
 
         AnsiConsole.MarkupLine($"[green]✓ Setup complete. Using {Spectre.Console.Markup.Escape(finalModel)}[/]");
-        AnsiConsole.MarkupLine("[dim]Tip: run [cyan]/config[/] any time to switch models, change context size, or tweak settings.[/]");
+        AnsiConsole.MarkupLine("[dim]Tip: run [cyan]/config[/] any time to switch models, change response length, or tweak settings.[/]");
         AnsiConsole.WriteLine();
 
         return new FlowResult(Connected: true, Skipped: false, FinalModel: finalModel);
@@ -398,7 +408,7 @@ public sealed class OnboardingFlow
 
             if (choice.StartsWith("Start"))
             {
-                var probe = await StartDaemonAndProbeAsync(config.OllamaEndpoint, ct);
+                var probe = await StartDaemonAndProbeAsync(config.OllamaEndpoint, config.ContextLength, ct);
                 if (probe.Ok)
                 {
                     AnsiConsole.MarkupLine($"[green]✓ Connected to Ollama at[/] [white]{Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
@@ -450,7 +460,7 @@ public sealed class OnboardingFlow
     /// it" so the failure message tells the truth — important when the user's config
     /// points at a non-default port or a remote host that a local start can't fix.
     /// </summary>
-    private async Task<OllamaSetupHelper.ProbeResult> StartDaemonAndProbeAsync(string url, CancellationToken ct)
+    private async Task<OllamaSetupHelper.ProbeResult> StartDaemonAndProbeAsync(string url, int contextLength, CancellationToken ct)
     {
         var startedProcess = false;
         OllamaSetupHelper.ProbeResult probe = new(false, url, false, "Not yet probed");
@@ -459,7 +469,7 @@ public sealed class OnboardingFlow
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Starting ollama serve...", async ctx =>
             {
-                startedProcess = OllamaSetupHelper.TryStartOllamaProcess();
+                startedProcess = OllamaSetupHelper.TryStartOllamaProcess(contextLength);
                 if (!startedProcess) return;
 
                 ctx.Status($"Waiting for Ollama at {Spectre.Console.Markup.Escape(url)}...");
@@ -473,7 +483,14 @@ public sealed class OnboardingFlow
                 }
             });
 
-        if (probe.Ok) return probe;
+        if (probe.Ok)
+        {
+            if (contextLength > 0)
+            {
+                AnsiConsole.MarkupLine($"[dim]Local context window set to {contextLength / 1024}k tokens (OLLAMA_CONTEXT_LENGTH).[/]");
+            }
+            return probe;
+        }
 
         if (!startedProcess)
         {
@@ -549,9 +566,9 @@ public sealed class OnboardingFlow
         // parses bracket-style markup, so "[local]" would be misinterpreted as a
         // (nonexistent) style tag and throw.
         var labeled = models
-            .OrderBy(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
             .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
-            .Select(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase)
+            .Select(m => MandoCodeConfig.IsCloudModel(m)
                 ? $"{m}   (cloud)"
                 : $"{m}   (local)")
             .ToArray();
