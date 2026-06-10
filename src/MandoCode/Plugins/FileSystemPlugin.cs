@@ -97,12 +97,14 @@ public class FileSystemPlugin
     }
 
     /// <summary>
-    /// Reads the contents of a file.
+    /// Reads the contents of a file, optionally restricted to a line range.
     /// </summary>
     [KernelFunction("read_file_contents")]
-    [Description("Reads the contents of a file. Returns the file content as plain text. Use relative path from project root. Output is capped at 10,000 characters.")]
+    [Description("Reads the contents of a file, optionally a specific line range. Output is capped at ~10,000 characters; when a file is larger, the output names the exact line it stopped at — call again with startLine set to that line + 1 to read the next section. ALWAYS read the section you intend to edit immediately before calling edit_file, so your old_text matches the file and not your memory of it.")]
     public async Task<string> ReadFile(
-        [Description("Relative path to the file from project root")] string relativePath)
+        [Description("Relative path to the file from project root")] string relativePath,
+        [Description("First line to read (1-based). Defaults to 1.")] int startLine = 1,
+        [Description("Last line to read (inclusive). 0 means to the end of the file.")] int endLine = 0)
     {
         try
         {
@@ -114,14 +116,50 @@ public class FileSystemPlugin
             }
 
             var content = await File.ReadAllTextAsync(fullPath);
-            var lineCount = content.Split('\n').Length;
+            // Split on '\n' only: CRLF files keep their '\r' at line ends, so a
+            // join with '\n' reproduces the original bytes — what the model sees
+            // is exactly what edit_file will match against.
+            var lines = content.Split('\n');
+            var totalLines = lines.Length;
 
-            if (content.Length > 10_000)
+            var start = Math.Max(1, startLine);
+            if (start > totalLines)
             {
-                content = content[..10_000] + $"\n... [truncated — file has {lineCount} lines total]";
+                return $"Error: {relativePath} has only {totalLines} lines — startLine={startLine} is past the end. " +
+                       $"Call read_file_contents with startLine between 1 and {totalLines}.";
+            }
+            var end = endLine <= 0 ? totalLines : Math.Min(endLine, totalLines);
+            if (end < start)
+            {
+                return $"Error: endLine ({endLine}) is before startLine ({startLine}). " +
+                       "Provide endLine >= startLine, or 0 to read to the end of the file.";
             }
 
-            return $"File: {relativePath} ({lineCount} lines)\n{content}";
+            var body = string.Join('\n', lines[(start - 1)..end]);
+
+            // Cap the output, cutting at a line boundary so the resume hint can name
+            // the exact line the model should continue from. This is what keeps the
+            // model from editing blind on large files: instead of silently hiding the
+            // bottom of the file, every truncation hands it the next page to request.
+            const int cap = 10_000;
+            var resumeHint = string.Empty;
+            if (body.Length > cap)
+            {
+                var cut = body.LastIndexOf('\n', cap);
+                if (cut <= 0) cut = cap;
+                var shownLines = body[..cut].Count(c => c == '\n') + 1;
+                var lastShownLine = start + shownLines - 1;
+                body = body[..cut];
+                end = lastShownLine;
+                resumeHint = $"\n... [truncated at line {lastShownLine} of {totalLines} — " +
+                             $"call read_file_contents with startLine={lastShownLine + 1} to continue]";
+            }
+
+            var header = start == 1 && end == totalLines
+                ? $"File: {relativePath} ({totalLines} lines)"
+                : $"File: {relativePath} (lines {start}-{end} of {totalLines})";
+
+            return $"{header}\n{body}{resumeHint}";
         }
         catch (Exception ex)
         {
@@ -529,8 +567,14 @@ public class FileSystemPlugin
     public async Task<string> ExecuteCommand(
         [Description("The shell command to execute (e.g., 'git status', 'dotnet build')")] string command)
     {
-        // Intercept cd commands to update the project root
-        if (command == "cd" || command.StartsWith("cd "))
+        // Intercept BARE cd commands to update the project root. Compound commands
+        // (`cd X && build`, `cd X; ls`, `cd X | ...`) must fall through to the real
+        // shell — the interceptor used to swallow the whole string as a directory
+        // path and fail with a confusing "No such directory: "X" && build".
+        // The subshell's cd applies only inside that one invocation, which matches
+        // the model's intent ("run this command from over there").
+        var isCompound = command.Contains("&&") || command.Contains(';') || command.Contains('|');
+        if (!isCompound && (command == "cd" || command.StartsWith("cd ")))
         {
             return HandleCdCommand(command);
         }
@@ -550,9 +594,22 @@ public class FileSystemPlugin
                 UseShellExecute = false,
                 WorkingDirectory = ProjectRoot
             };
-            // Use ArgumentList for proper escaping instead of manual string building
-            psi.ArgumentList.Add(isWindows ? "/c" : "-c");
-            psi.ArgumentList.Add(command);
+            // Hand the command to the shell so the SHELL parses it.
+            // Windows: passing the command via ArgumentList lets .NET apply MSVCRT quote-escaping,
+            // which cmd.exe does NOT follow — embedded quotes get mangled (e.g. `start "" "C:\path"`
+            // collapsed into an attempt to open `\\`, popping a "Windows cannot find" dialog).
+            // `/s /c "<command>"` tells cmd to strip exactly the outer quotes and run the rest
+            // verbatim, preserving the model's own quoting. bash's `-c <command>` via ArgumentList
+            // is already correct (a single argv that bash parses itself).
+            if (isWindows)
+            {
+                psi.Arguments = $"/s /c \"{command}\"";
+            }
+            else
+            {
+                psi.ArgumentList.Add("-c");
+                psi.ArgumentList.Add(command);
+            }
 
             using var proc = Process.Start(psi);
             if (proc == null)
@@ -842,26 +899,37 @@ public class FileSystemPlugin
         return msg.ToString();
     }
 
-    private string GetFullPath(string relativePath)
+    private string GetFullPath(string relativePath) => ResolvePath(ProjectRoot, relativePath);
+
+    /// <summary>
+    /// Resolves a model-supplied relative path to its canonical absolute path within
+    /// <paramref name="projectRoot"/>, handling redundant-root-prefix aliases. Public and
+    /// static so FunctionInvocationFilter can normalize its per-scope bookkeeping keys
+    /// with the SAME resolution the plugin uses — "Games/index.html" and
+    /// "src/MandoCode/bin/Debug/net8.0/Games/index.html" are one file on disk, and keying
+    /// circuit-breaker counts on the raw strings let a model split its edit-failure tally
+    /// across aliases and dodge the trip threshold. Throws when the path escapes the root.
+    /// </summary>
+    public static string ResolvePath(string projectRoot, string relativePath)
     {
         // Resolve the literal path first. Only fall back to StripRedundantRootPrefix
         // if nothing exists at the un-stripped target — otherwise legitimate nested
         // folders that share a name with the project root's last segment (e.g. the
         // "MyApp/MyApp/MyApp.csproj" pattern from `dotnet new`) get mangled.
-        var literalFull = Path.GetFullPath(Path.Combine(ProjectRoot, relativePath));
+        var literalFull = Path.GetFullPath(Path.Combine(projectRoot, relativePath));
         var resolvedRelative = LiteralPathLooksReal(literalFull, relativePath)
             ? relativePath
-            : StripRedundantRootPrefix(relativePath);
+            : StripRedundantRootPrefix(projectRoot, relativePath);
 
-        var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, resolvedRelative));
+        var fullPath = Path.GetFullPath(Path.Combine(projectRoot, resolvedRelative));
 
         // Security check: ensure the path is within project root with separator boundary
         // Without the separator, "C:\projects\myapp" would match "C:\projects\myappevil"
-        var normalizedRoot = ProjectRoot.TrimEnd(Path.DirectorySeparatorChar)
+        var normalizedRoot = projectRoot.TrimEnd(Path.DirectorySeparatorChar)
                            + Path.DirectorySeparatorChar;
 
         if (!fullPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
-            && !fullPath.Equals(ProjectRoot, StringComparison.OrdinalIgnoreCase))
+            && !fullPath.Equals(projectRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Access denied: Path is outside project root: {relativePath}");
         }
@@ -888,10 +956,10 @@ public class FileSystemPlugin
     /// "src/MandoCode/bin/Debug/net8.0" and relativePath is
     /// "src/MandoCode/bin/Debug/net8.0/Games/file.js", returns "Games/file.js".
     /// </summary>
-    private string StripRedundantRootPrefix(string relativePath)
+    private static string StripRedundantRootPrefix(string projectRoot, string relativePath)
     {
         var normalizedRelative = relativePath.Replace('\\', '/').TrimStart('/');
-        var normalizedRoot = ProjectRoot.Replace('\\', '/');
+        var normalizedRoot = projectRoot.Replace('\\', '/');
         var rootParts = normalizedRoot.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
         // Try progressively longer suffixes of the project root path.

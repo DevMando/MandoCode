@@ -79,6 +79,10 @@ class Program
             // "Provide new instructions" path to a VDOM TextInput in App.razor.
             services.AddSingleton<InstructionPromptCoordinator>();
 
+            // Register ApprovalPromptGate — serializes all approval prompts so concurrent
+            // tool invocations can't open two blocking Spectre prompts at once.
+            services.AddSingleton<ApprovalPromptGate>();
+
             // Register DiffApprovalHandler as singleton
             services.AddSingleton<DiffApprovalHandler>();
 
@@ -293,6 +297,8 @@ class Program
         Console.WriteLine("  • modelPath       - Path to local model file");
         Console.WriteLine("  • temperature     - Temperature (0.0-1.0)");
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
+        Console.WriteLine("  • contextLength   - Local model context window in tokens (2048-262144, 0 = Ollama default; applied when MandoCode starts the daemon)");
+        Console.WriteLine("  • modelResponseTimeout - Stall watchdog in seconds per model call (30-1800)");
         Console.WriteLine("  • timeout         - Per-request timeout in minutes (1-60)");
         Console.WriteLine("  • toolBudget      - Tool-result char budget per request (50k-4M)");
         Console.WriteLine("  • autoContinue    - Auto-continue past budget limits (true/false)");
@@ -315,203 +321,16 @@ class Program
     {
         var config = MandoCodeConfig.Load();
 
-        switch (key.ToLower())
+        // Shared with the in-app /config set command — one switch, one set of key
+        // names and validations. ApplyScope is ignored here: nothing is running,
+        // so everything simply applies on next launch.
+        var result = ConfigKeySetter.TrySet(config, key, value);
+        Console.WriteLine(result.Message);
+
+        if (!result.Ok)
         {
-            case "endpoint":
-            case "ollamaendpoint":
-                config.OllamaEndpoint = value;
-                Console.WriteLine($"✓ Set Ollama endpoint to: {value}");
-                break;
-
-            case "model":
-            case "modelname":
-                config.ModelName = value;
-                Console.WriteLine($"✓ Set model to: {value}");
-                break;
-
-            case "modelpath":
-                config.ModelPath = value;
-                Console.WriteLine($"✓ Set model path to: {value}");
-                break;
-
-            case "temperature":
-                if (double.TryParse(value, out var temp) && MandoCodeConfig.IsValidTemperature(temp))
-                {
-                    config.Temperature = temp;
-                    Console.WriteLine($"✓ Set temperature to: {temp}");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Temperature must be a number between {MandoCodeConfig.MinTemperature} and {MandoCodeConfig.MaxTemperature}");
-                    return;
-                }
-                break;
-
-            case "maxtokens":
-                if (int.TryParse(value, out var tokens) && MandoCodeConfig.IsValidMaxTokens(tokens))
-                {
-                    config.MaxTokens = tokens;
-                    Console.WriteLine($"✓ Set max tokens to: {tokens}");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Max tokens must be between {MandoCodeConfig.MinMaxTokens} and {MandoCodeConfig.MaxMaxTokens}");
-                    return;
-                }
-                break;
-
-            case "autocontinue":
-            case "autocontinuation":
-            case "enableautocontinuation":
-                if (bool.TryParse(value, out var enableAutoCont))
-                {
-                    config.EnableAutoContinuation = enableAutoCont;
-                    Console.WriteLine($"✓ Auto-continuation {(enableAutoCont ? "enabled" : "disabled")}");
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            case "maxcontinuations":
-            case "maxautocontinuations":
-                if (int.TryParse(value, out var maxCont) && MandoCodeConfig.IsValidMaxAutoContinuations(maxCont))
-                {
-                    config.MaxAutoContinuations = maxCont;
-                    Console.WriteLine($"✓ Max auto-continuations set to: {maxCont}");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Max continuations must be between {MandoCodeConfig.MinMaxAutoContinuations} and {MandoCodeConfig.MaxMaxAutoContinuations}");
-                    return;
-                }
-                break;
-
-            case "toolbudget":
-            case "toolresultbudget":
-            case "toolresultcharbudget":
-                if (long.TryParse(value, out var budget) && MandoCodeConfig.IsValidToolResultCharBudget(budget))
-                {
-                    config.ToolResultCharBudget = budget;
-                    Console.WriteLine($"✓ Set tool-result budget to: {budget:N0} chars (~{budget / 4:N0} tokens)");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Tool-result budget must be between {MandoCodeConfig.MinToolResultCharBudget:N0} and {MandoCodeConfig.MaxToolResultCharBudget:N0} chars");
-                    return;
-                }
-                break;
-
-            case "timeout":
-            case "requesttimeout":
-            case "requesttimeoutminutes":
-                if (int.TryParse(value, out var timeout) && MandoCodeConfig.IsValidRequestTimeout(timeout))
-                {
-                    config.RequestTimeoutMinutes = timeout;
-                    Console.WriteLine($"✓ Set request timeout to: {timeout} min");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Timeout must be between {MandoCodeConfig.MinRequestTimeoutMinutes} and {MandoCodeConfig.MaxRequestTimeoutMinutes} minutes");
-                    return;
-                }
-                break;
-
-            case "taskplanning":
-            case "enabletaskplanning":
-                if (bool.TryParse(value, out var enablePlanning))
-                {
-                    config.EnableTaskPlanning = enablePlanning;
-                    Console.WriteLine($"✓ Task planning {(enablePlanning ? "enabled" : "disabled")}");
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            case "diffapprovals":
-            case "enablediffapprovals":
-                if (bool.TryParse(value, out var enableDiff))
-                {
-                    config.EnableDiffApprovals = enableDiff;
-                    Console.WriteLine($"✓ Diff approvals {(enableDiff ? "enabled" : "disabled")}");
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            case "themecustomization":
-            case "enablethemecustomization":
-                if (bool.TryParse(value, out var enableTheme))
-                {
-                    config.EnableThemeCustomization = enableTheme;
-                    Console.WriteLine($"✓ Theme customization {(enableTheme ? "enabled" : "disabled")}");
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            case "websearch":
-            case "enablewebsearch":
-                if (bool.TryParse(value, out var enableWebSearch))
-                {
-                    config.EnableWebSearch = enableWebSearch;
-                    Console.WriteLine($"✓ Web search {(enableWebSearch ? "enabled" : "disabled")}");
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            case "rendertimeout":
-            case "markdownrendertimeout":
-            case "markdownrendertimeoutseconds":
-                if (int.TryParse(value, out var renderTimeout) && MandoCodeConfig.IsValidMarkdownRenderTimeout(renderTimeout))
-                {
-                    config.MarkdownRenderTimeoutSeconds = renderTimeout;
-                    Console.WriteLine($"✓ Set markdown render timeout to: {renderTimeout}s");
-                }
-                else
-                {
-                    Console.WriteLine($"Error: Render timeout must be between {MandoCodeConfig.MinMarkdownRenderTimeoutSeconds} and {MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds} seconds");
-                    return;
-                }
-                break;
-
-            case "mcp":
-            case "enablemcp":
-                if (bool.TryParse(value, out var enableMcp))
-                {
-                    config.EnableMcp = enableMcp;
-                    Console.WriteLine($"✓ MCP {(enableMcp ? "enabled" : "disabled")}");
-                    if (enableMcp && config.McpServers.Count == 0)
-                    {
-                        Console.WriteLine($"  Edit {MandoCodeConfig.GetDefaultConfigPath()} to add servers under \"mcpServers\".");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine("Error: Value must be 'true' or 'false'");
-                    return;
-                }
-                break;
-
-            default:
-                Console.WriteLine($"Unknown configuration key: {key}");
-                Console.WriteLine("Run 'mandocode --config --help' for available keys");
-                return;
+            Console.WriteLine("Run 'mandocode --config --help' for available keys");
+            return;
         }
 
         config.Save();

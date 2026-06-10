@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using MandoCode.Models;
 using Spectre.Console;
 
 namespace MandoCode.Services;
@@ -278,8 +279,16 @@ public static class OllamaSetupHelper
     /// succeeded — does NOT probe the URL afterward. Callers should probe themselves so
     /// they can distinguish "process didn't launch" from "process launched but configured
     /// URL is wrong" (e.g. config points at :2323 while ollama binds to default :11434).
+    ///
+    /// <paramref name="contextLength"/> > 0 sets OLLAMA_CONTEXT_LENGTH on the daemon so
+    /// LOCAL models get a real context window instead of Ollama's ~4k default — the
+    /// default silently truncates the oldest prompt content (system prompt, earlier file
+    /// reads) as an agentic conversation grows. The Semantic Kernel Ollama connector
+    /// exposes no num_ctx setting, so the daemon's environment is the only lever we
+    /// control. Older Ollama versions without OLLAMA_CONTEXT_LENGTH ignore it harmlessly.
+    /// Only applies when WE start the daemon; an already-running Ollama is untouched.
     /// </summary>
-    public static bool TryStartOllamaProcess()
+    public static bool TryStartOllamaProcess(int contextLength = 0)
     {
         try
         {
@@ -290,6 +299,10 @@ public static class OllamaSetupHelper
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+            if (contextLength > 0)
+            {
+                psi.Environment["OLLAMA_CONTEXT_LENGTH"] = contextLength.ToString();
+            }
             var proc = Process.Start(psi);
             return proc != null;
         }
@@ -425,9 +438,9 @@ public static class OllamaSetupHelper
     /// Convenience: start the daemon and poll until it answers (or 5 seconds elapse).
     /// Used by --doctor and any caller that wants the start + readiness check fused.
     /// </summary>
-    public static async Task<bool> StartOllamaServeAsync(string url, CancellationToken ct = default)
+    public static async Task<bool> StartOllamaServeAsync(string url, int contextLength = 0, CancellationToken ct = default)
     {
-        if (!TryStartOllamaProcess()) return false;
+        if (!TryStartOllamaProcess(contextLength)) return false;
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline)
@@ -550,7 +563,7 @@ public static class OllamaSetupHelper
         if (!probe.Ok) return CloudAuthState.NotReachable;
 
         var models = await ListModelsAsync(probe.NormalizedUrl, ct);
-        return models.Any(m => m.Contains(":cloud", StringComparison.OrdinalIgnoreCase))
+        return models.Any(MandoCodeConfig.IsCloudModel)
             ? CloudAuthState.SignedIn
             : CloudAuthState.Unknown;
     }

@@ -138,6 +138,21 @@ public class InvocationScope : IDisposable
     }
 
     /// <summary>
+    /// Set once a propose_plan call with real steps has been fully processed this turn
+    /// (executed, rejected, or cancelled). A second proposal in the same turn is always
+    /// a runaway — observed live: a model completed a 5-step plan, immediately started
+    /// building an uninvited duplicate of the project, then proposed a THIRD round of
+    /// work. The filter short-circuits any repeat proposal with a stop directive.
+    /// One plan per user request; the user can always ask for more.
+    /// </summary>
+    public bool PlanAlreadyProcessed { get; private set; }
+
+    public void MarkPlanProcessed()
+    {
+        lock (_lock) PlanAlreadyProcessed = true;
+    }
+
+    /// <summary>
     /// Set when the user chooses "Cancel plan" from a diff-approval prompt mid-step.
     /// Checked by <see cref="AIService.ExecutePlanStepAsync"/> after the step returns,
     /// so the plan terminates instead of continuing to the next step.

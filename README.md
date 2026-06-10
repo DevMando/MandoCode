@@ -48,6 +48,30 @@ mandocode --doctor
 
 Prints your runtime version, Ollama status, models pulled, and cloud sign-in state.
 
+### ⚠️ Local models: check your Ollama context window (the #1 gotcha)
+
+If you use **local models** and see responses cut off, the model "forgetting" earlier conversation, edits failing repeatedly on files it just wrote, or this message:
+
+> ⚠ Response was cut off because the model's CONTEXT WINDOW filled …
+
+…your Ollama **context window** is almost certainly too small. The context window is how much conversation + code the model can see at once — and **Ollama defaults it to ~4k tokens**, which an agentic session fills almost immediately. When it overflows, the oldest content (including the system prompt — the model's instructions!) is silently dropped.
+
+**If you use the Ollama desktop app** (the tray icon), the app's slider controls this — and it overrides everything else:
+
+<p align="center">
+  <img src="docs/images/ollama-context-slider.png" alt="Ollama desktop app — Settings → Context length slider" width="600">
+</p>
+
+Open Ollama **Settings → Context length** and drag it to **16k** (safe for most GPUs) or **32k** (8 GB+ VRAM). Bigger windows use more GPU memory (~0.5–1.5 GB per 8k depending on the model), so don't max it out "just in case" — if your tokens/sec craters after raising it, go down one notch.
+
+**If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
+
+```bash
+mandocode --config set contextLength 16384
+```
+
+Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column) — cloud models are unaffected either way, since their context is managed on Ollama's servers. Run `/learn` inside MandoCode for a friendly explainer.
+
 ### Or build from source
 
 ```bash
@@ -162,8 +186,9 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 |---------|--------------|
 | `/help` | Show commands and usage examples |
 | `/setup` | Guided wizard — reconnect to Ollama, install/sign in, or pick a different model |
-| `/model` | Quick switch — pick a different model + context size |
-| `/config` | Adjust settings — model, temperature, max tokens, timeout, ignore dirs |
+| `/model` | Quick switch — pick a different model (context window auto-sized for local tiers) |
+| `/config` | Adjust settings — guided wizard |
+| `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
@@ -190,7 +215,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 ### Setup vs config vs model
 
 - **`/setup`** — first-run wizard, guided. Detects Ollama, offers to install it, walks you through cloud sign-in, picks a model with hardware-aware tiers, auto-pulls a sensible default. Use when something's broken or you're a newcomer.
-- **`/model`** — quick switch. Pick a model from your pulled list + context size. Use when you just want to swap models.
+- **`/model`** — quick switch. Pick a model from your pulled list and go — local picks get a context window sized to their hardware tier automatically. Use when you just want to swap models.
 - **`/config`** — adjust settings. Full configuration form covering temperature, timeouts, ignore dirs, etc. Use when you know exactly what knob you want to turn.
 
 ### CLI flags (outside the chat loop)
@@ -289,7 +314,8 @@ Located at `~/.mandocode/config.json`
 | `modelName` | `minimax-m2.7:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
-| `maxTokens` | `4096` | Maximum response token length |
+| `maxTokens` | `4096` | Maximum response token length (`NumPredict` — output cap, not the context window) |
+| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when MandoCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
 | `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
 | `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
@@ -537,7 +563,7 @@ The AI has sandboxed access to your project directory through these functions:
 |----------|-------------|
 | `list_all_project_files()` | Recursively lists all project files, excluding ignored directories |
 | `list_files_match_glob_pattern(pattern)` | Lists files matching a glob pattern (`*.cs`, `src/**/*.ts`) |
-| `read_file_contents(relativePath)` | Reads complete file content with line count |
+| `read_file_contents(relativePath, startLine?, endLine?)` | Reads file content with line count — large files page via `startLine`/`endLine`, and truncated output names the exact line to resume from |
 | `write_file(relativePath, content)` | Writes/creates a file (creates directories as needed) |
 | `delete_file(relativePath)` | Deletes a file |
 | `create_folder(relativePath)` | Creates a new directory |

@@ -12,7 +12,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.10.0</Version>
+    <Version>0.11.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -23,18 +23,23 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.10.0 — File-read and cloud-signin reliability
+v0.11.0 — Agentic-loop hardening
+
+Long agentic sessions no longer die mysteriously. Every fix in this release closes a way a session could hang, thrash, or silently lose its mind — each one found and verified live by building real projects with MandoCode.
 
 Fixed:
-- Nested same-name folder reads — `read_file_contents`, `write_file`, and `edit_file` no longer mangle paths in projects whose folder layout repeats the project root's last segment (e.g. the `MyApp/MyApp/MyApp.csproj` pattern from `dotnet new`). The literal path is resolved first, with the redundant-prefix heuristic only firing when the un-stripped target doesn't exist.
-- `ollama signin` not launching after fresh install — `RunOllamaSigninAsync`, `TryStartOllamaProcess`, and `AutoPullAsync` now resolve `ollama` via canonical install paths when the bare command isn't on the running process's PATH. Fixes the silent "browser never opens" failure when MandoCode is launched in the same shell that just installed Ollama.
-- First-run wizard imperative output getting repainted — the wizard now suppresses `HomeView` for the entire run, not just the 401 auto-recovery path. Closes the latent VDOM redraw race that could clobber `ollama signin` URLs and other progress lines.
+- Concurrent approval prompts could deadlock the session forever — two tool calls in one model response opened two blocking prompts that stole each other's keys; the invisible one blocked its function and the input prompt never came back. All approval prompts (diff, delete, command, MCP, plan) now serialize through a single gate, and approval awaits observe cancellation so Esc and timeouts can always unwind a stuck turn.
+- The agent edited large files blind — reads cap at ~10K chars, so on a 900-line file the model only ever saw the top third and composed edits from memory of code it could no longer see, thrash-looping on "Could not find old_text". read_file_contents now takes startLine/endLine, and truncation names the exact line to resume from.
+- Local models ran with Ollama's ~4K default context window, silently truncating the system prompt and earlier reads as conversations grew. New contextLength config sets OLLAMA_CONTEXT_LENGTH when MandoCode starts the daemon, auto-sized to the hardware tier of the model you pick; diagnostics point Ollama desktop app users at the app's Context length slider.
+- "Cancel request" at the plan prompt only *asked* the model to stop — and a frontier cloud model was observed ignoring it and executing the cancelled plan anyway. It now cancels the request token mechanically. A new one-plan-per-turn circuit also stops models from proposing endless follow-up work after a plan completes.
+- Plugin-level edit failures now count toward the N=3 edit-failure circuit (a snapshot race let 9+ consecutive misses through), and circuit/dedup bookkeeping keys are normalized across path aliases of the same file.
+- `cd X &amp;&amp; command` no longer swallowed by the cd interceptor; compound commands reach the real shell.
+- Cloud models with size-variant tags (e.g. qwen3-coder:480b-cloud) were misclassified as local — the "-cloud" suffix form is now recognized everywhere, including cloud sign-in detection.
+- The "hit the token limit" warning no longer misdiagnoses: it now distinguishes the response cap from a filled local context window from a filled server-side (cloud) window, with the right fix for each — and explains when a thinking model spent the whole budget on internal reasoning.
 
-Added:
-- Auto-open browser on `ollama signin` — MandoCode now captures Ollama's stdout, scans for the sign-in URL, and opens the browser itself instead of relying on Ollama's own launch behavior. URL also re-emitted via `AnsiConsole.MarkupLine` as a copy/paste fallback.
-
-UI:
-- Green selection highlight in the setup wizard — every wizard `SelectionPrompt` (model picker, "What would you like to do?", "Sign me in now", starter-model picker) now uses green instead of Spectre's default blue.
+Changed:
+- /model is now a true quick switch: pick a model, done. Response length moved to /config, and its picker tiers are honest response-cap values (2k–64k) instead of context-window-sized numbers.
+- /learn gained a context-window section: what it is, what it costs in VRAM, and why the Ollama desktop app's 4k slider default matters.
     </PackageReleaseNotes>
   </PropertyGroup>
 

@@ -45,6 +45,16 @@ public class PlanHandoff
     public Func<TaskPlan, CancellationToken, Task<string>>? OnPlanRequested { get; set; }
 
     /// <summary>
+    /// Raised immediately before plan approval + execution begins, and again when it ends
+    /// (success, rejection, or throw). The whole plan runs inside a single outer model call
+    /// (the propose_plan tool), so the outer call's stall watchdog would otherwise fire mid-plan
+    /// on a slow step and surface as a bogus "Cancelled by user." AIService subscribes to pause
+    /// that outer watchdog for the plan's duration — the plan's own per-step watchdogs cover stalls.
+    /// </summary>
+    public event Action? ExecutionStarted;
+    public event Action? ExecutionFinished;
+
+    /// <summary>
     /// Called by FunctionInvocationFilter when the model invokes propose_plan.
     /// Guards against recursive planning (the model calling propose_plan while a
     /// previous plan is still running) by returning a short-circuit message.
@@ -77,7 +87,15 @@ public class PlanHandoff
                 Status = TaskPlanStatus.Pending
             };
 
-            return await OnPlanRequested(plan, ct);
+            ExecutionStarted?.Invoke();
+            try
+            {
+                return await OnPlanRequested(plan, ct);
+            }
+            finally
+            {
+                ExecutionFinished?.Invoke();
+            }
         }
         finally
         {

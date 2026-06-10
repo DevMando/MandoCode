@@ -15,6 +15,7 @@ public class DiffApprovalHandler
     private readonly PlanHandoff _planHandoff;
     private readonly CancelKeyCoordinator _keyCoordinator;
     private readonly InstructionPromptCoordinator _instructionPrompt;
+    private readonly ApprovalPromptGate _promptGate;
 
     private bool _globalWriteBypass = false;
     private readonly HashSet<string> _approvedFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -24,13 +25,15 @@ public class DiffApprovalHandler
         ProjectRootAccessor projectRoot,
         PlanHandoff planHandoff,
         CancelKeyCoordinator keyCoordinator,
-        InstructionPromptCoordinator instructionPrompt)
+        InstructionPromptCoordinator instructionPrompt,
+        ApprovalPromptGate promptGate)
     {
         _spinner = spinner;
         _projectRoot = projectRoot;
         _planHandoff = planHandoff;
         _keyCoordinator = keyCoordinator;
         _instructionPrompt = instructionPrompt;
+        _promptGate = promptGate;
     }
 
     // Labels used as both UI text and switch discriminators. Spectre markup is
@@ -50,6 +53,13 @@ public class DiffApprovalHandler
 
     public async Task<DiffApprovalResult> HandleDiffApproval(string relativePath, string? oldContent, string newContent)
     {
+        // Serialize against every other approval prompt — AllowConcurrentInvocation means
+        // two approval-gated tool calls can arrive at once, and two concurrent Spectre
+        // prompts steal each other's keys (the invisible one then blocks its function
+        // forever). Held for the whole method so the diff render, the prompt, and the
+        // spinner restart all happen as one atomic console interaction.
+        using var promptHold = await _promptGate.AcquireAsync();
+
         // Stop the spinner so we have clean console output
         _spinner.Stop();
 
@@ -155,6 +165,9 @@ public class DiffApprovalHandler
 
     public async Task<DiffApprovalResult> HandleCommandApproval(string command)
     {
+        // Serialized — see the note in HandleDiffApproval.
+        using var promptHold = await _promptGate.AcquireAsync();
+
         // Stop the spinner so we have clean console output
         _spinner.Stop();
 
@@ -252,6 +265,9 @@ public class DiffApprovalHandler
 
     public async Task<DiffApprovalResult> HandleDeleteApproval(string relativePath, string? existingContent)
     {
+        // Serialized — see the note in HandleDiffApproval.
+        using var promptHold = await _promptGate.AcquireAsync();
+
         // Stop the spinner so we have clean console output
         _spinner.Stop();
 
@@ -426,8 +442,11 @@ public class DiffApprovalHandler
     /// via App.razor. The gate remembers "approve for session" decisions itself, so this
     /// handler only renders the prompt for genuinely new (server, tool) pairs.
     /// </summary>
-    public Task<DiffApprovalResult> HandleMcpApproval(string serverName, string toolName, string? description)
+    public async Task<DiffApprovalResult> HandleMcpApproval(string serverName, string toolName, string? description)
     {
+        // Serialized — see the note in HandleDiffApproval.
+        using var promptHold = await _promptGate.AcquireAsync();
+
         _spinner.Stop();
 
         var title = $"[cyan]Allow MCP tool \"{Markup.Escape(toolName)}\" from \"{Markup.Escape(serverName)}\"?[/]";
@@ -446,7 +465,7 @@ public class DiffApprovalHandler
             AnsiConsole.MarkupLine("[green]\u2713 Auto-approved MCP tool[/]");
             AnsiConsole.WriteLine();
             _spinner.Start();
-            return Task.FromResult(new DiffApprovalResult { Response = DiffApprovalResponse.Approved });
+            return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
         var noAskMcpLabel = $"[green]Approve - don't ask again for {Spectre.Console.Markup.Escape(toolName)} this session[/]";
@@ -493,6 +512,6 @@ public class DiffApprovalHandler
 
         AnsiConsole.WriteLine();
         _spinner.Start();
-        return Task.FromResult(result);
+        return result;
     }
 }

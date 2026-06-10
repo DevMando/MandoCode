@@ -137,6 +137,17 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         // out-of-band via PlanHandoff instead of being invoked directly.
         if (context.Function.Name == "propose_plan" && _planHandoff != null)
         {
+            // One plan per turn. PlanHandoff's recursion guard only covers a plan that's
+            // STILL RUNNING — once it finishes, the door reopened and small models walked
+            // straight back through it, planning more unrequested work. Hard-stop here.
+            if (_currentScope.Value?.PlanAlreadyProcessed == true)
+            {
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function,
+                    "A plan was already proposed and handled for this request. Do NOT propose another plan " +
+                    "or start new work. Respond to the user now with a brief summary of what was accomplished, then stop.");
+                return;
+            }
+
             var summary = await HandleProposePlanAsync(context);
             context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, summary);
             return;
@@ -159,15 +170,20 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             }
 
             // Duplicate-read circuit: the same read args twice, with no intervening
-            // write to the same path, is almost always a stuck loop.
+            // write to the same path, is almost always a stuck loop. The key includes
+            // the line range, so paging through a large file is never mistaken for a
+            // redundant re-read. Path is normalized so aliases of the same file share
+            // one entry.
             if (context.Function.Name == "read_file_contents")
             {
                 var path = context.Arguments.TryGetValue("relativePath", out var pObj) ? pObj?.ToString() ?? "" : "";
-                var readKey = $"read_file_contents:{path}";
-                if (!string.IsNullOrEmpty(path) && scope.IsRedundantRead(readKey, path))
+                var pathKey = NormalizePathKey(path);
+                var readKey = BuildReadKey(pathKey, context.Arguments);
+                if (!string.IsNullOrEmpty(path) && scope.IsRedundantRead(readKey, pathKey))
                 {
-                    var msg = $"You already read '{path}' this turn and it hasn't changed. " +
-                              "Use the content you already have — do NOT re-read the same file.";
+                    var msg = $"You already read this range of '{path}' this turn and it hasn't changed. " +
+                              "Use the content you already have — do NOT re-read the same range. " +
+                              "To see a different part of the file, pass startLine/endLine.";
                     context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                     return;
                 }
@@ -185,51 +201,11 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 {
                     var msg = "Refusing to read file contents via shell. " +
                               "Use read_file_contents instead — it's cached, dedup'd within a turn, and respects the tool-result budget. " +
+                              "For large files, pass startLine/endLine to read a specific section (the truncation notice names the line to resume from). " +
                               "Shell-based reads (type/cat/head/tail/more/less/findstr/grep/sed/awk against a file) bloat the conversation history.";
                     context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                     return;
                 }
-            }
-        }
-
-        // MCP approval gate — any tool coming from an "mcp_<server>" plugin must be
-        // approved by the user the first time it runs in a session. Kept ahead of the
-        // dedup/UI-event logic so a denied call never hits the event bus.
-        if (McpApprovalGate != null &&
-            !string.IsNullOrEmpty(context.Function.PluginName) &&
-            context.Function.PluginName.StartsWith("mcp_", StringComparison.Ordinal))
-        {
-            var serverName = context.Function.PluginName.Substring("mcp_".Length);
-
-            // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
-            if (_currentScope.Value?.ApprovalsRevoked == true)
-            {
-                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function,
-                    $"User denied a previous tool in this batch — auto-denying MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.");
-                return;
-            }
-
-            var approval = await McpApprovalGate.RequestAsync(serverName, context.Function.Name, context.Function.Description);
-
-            if (approval.Response != DiffApprovalResponse.Approved &&
-                approval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
-            {
-                if (approval.Response == DiffApprovalResponse.CancelPlan)
-                    _currentScope.Value?.RequestPlanCancellation();
-                if (approval.Response == DiffApprovalResponse.Denied)
-                    _currentScope.Value?.RevokeRemainingApprovals();
-
-                var denial = approval.Response switch
-                {
-                    DiffApprovalResponse.Denied =>
-                        $"User denied the MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.",
-                    DiffApprovalResponse.CancelPlan =>
-                        $"User cancelled the plan while reviewing MCP tool '{context.Function.Name}'. Stop all further work.",
-                    _ =>
-                        $"User rejected the MCP tool call and provided new instructions: {approval.UserMessage}"
-                };
-                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, denial);
-                return;
             }
         }
 
@@ -256,9 +232,88 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             return;
         }
 
-        // Track pending function
+        // Track pending function. The matching decrement lives in the finally below —
+        // everything past this point (the MCP gate, approval awaits, UI event handlers,
+        // the invocation itself) runs under it, so an exception on any path still brings
+        // the count back down. The count drives the stall watchdog's pause/resume: a
+        // leaked increment pins the watchdog paused for the rest of the session and turns
+        // any later model stall into a silent hang.
         lock (_pendingLock) _pendingFunctionCount++;
         OnFunctionStarted?.Invoke();
+
+        try
+        {
+            await InvokeCoreAsync(context, next, functionName, description, callKey);
+        }
+        finally
+        {
+            lock (_pendingLock) _pendingFunctionCount--;
+            OnFunctionFinished?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Body of a tracked invocation: MCP gating, UI events, approval interception, and the
+    /// call itself. Runs entirely inside the pending-count try/finally in
+    /// <see cref="OnFunctionInvocationAsync"/> — early returns here must NOT decrement the
+    /// count or raise <see cref="OnFunctionFinished"/> themselves; the caller's finally does.
+    ///
+    /// Approval awaits are wrapped in <c>WaitAsync(context.CancellationToken)</c>: a wedged
+    /// or orphaned prompt otherwise blocks an await that observes no token, which defeats
+    /// Esc, the stall watchdog, AND the request ceiling — the turn can never unwind and the
+    /// input prompt never returns.
+    /// </summary>
+    private async Task InvokeCoreAsync(
+        FunctionInvocationContext context,
+        Func<FunctionInvocationContext, Task> next,
+        string functionName,
+        string description,
+        string callKey)
+    {
+        // MCP approval gate — any tool coming from an "mcp_<server>" plugin must be
+        // approved by the user the first time it runs in a session. Runs inside the
+        // pending-count lifecycle so the stall watchdog pauses while the user deliberates,
+        // like every other approval prompt. Kept ahead of the UI-event emit so a denied
+        // call never hits the event bus.
+        if (McpApprovalGate != null &&
+            !string.IsNullOrEmpty(context.Function.PluginName) &&
+            context.Function.PluginName.StartsWith("mcp_", StringComparison.Ordinal))
+        {
+            var serverName = context.Function.PluginName.Substring("mcp_".Length);
+
+            // Batch-deny: an earlier denial this turn auto-denies subsequent prompts.
+            if (_currentScope.Value?.ApprovalsRevoked == true)
+            {
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function,
+                    $"User denied a previous tool in this batch — auto-denying MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.");
+                return;
+            }
+
+            var approval = await McpApprovalGate
+                .RequestAsync(serverName, context.Function.Name, context.Function.Description)
+                .WaitAsync(context.CancellationToken);
+
+            if (approval.Response != DiffApprovalResponse.Approved &&
+                approval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
+            {
+                if (approval.Response == DiffApprovalResponse.CancelPlan)
+                    _currentScope.Value?.RequestPlanCancellation();
+                if (approval.Response == DiffApprovalResponse.Denied)
+                    _currentScope.Value?.RevokeRemainingApprovals();
+
+                var denial = approval.Response switch
+                {
+                    DiffApprovalResponse.Denied =>
+                        $"User denied the MCP tool '{context.Function.Name}' from server '{serverName}'. Do not retry unless the user asks.",
+                    DiffApprovalResponse.CancelPlan =>
+                        $"User cancelled the plan while reviewing MCP tool '{context.Function.Name}'. Stop all further work.",
+                    _ =>
+                        $"User rejected the MCP tool call and provided new instructions: {approval.UserMessage}"
+                };
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, denial);
+                return;
+            }
+        }
 
         // Emit function call event before invocation
         var functionCall = new FunctionCall
@@ -282,7 +337,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             var path = pObj?.ToString();
             if (!string.IsNullOrEmpty(path))
             {
-                var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, path));
+                var fullPath = ResolveCapturePath(path);
                 capturedIsNewFile = !File.Exists(fullPath);
                 if (!capturedIsNewFile)
                 {
@@ -299,7 +354,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             var path = pObj?.ToString();
             if (!string.IsNullOrEmpty(path))
             {
-                var fullPath = Path.GetFullPath(Path.Combine(ProjectRoot, path));
+                var fullPath = ResolveCapturePath(path);
                 if (File.Exists(fullPath))
                 {
                     try { capturedOldContent = await File.ReadAllTextAsync(fullPath); }
@@ -348,8 +403,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Result = autoDenyMsg,
                     Success = true
                 });
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
 
@@ -357,13 +410,17 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             // exact path this turn (without an intervening write), it's in an exploratory
             // loop — every further attempt would just thrash. Refuse with a steer toward
             // tools that can actually unstick it (targeted re-read or full rewrite).
+            // The key is normalized so failures under different aliases of the same file
+            // ("Games/x.html" vs "src/.../net8.0/Games/x.html") accrue to ONE counter.
+            var editKey = NormalizePathKey(editPath);
             var editScope = _currentScope.Value;
-            if (editScope != null && editScope.GetEditFailureCount(editPath) >= InvocationScope.EditFailureCircuitThreshold)
+            if (editScope != null && editScope.GetEditFailureCount(editKey) >= InvocationScope.EditFailureCircuitThreshold)
             {
                 var circuitMsg =
                     $"Edit-failure circuit tripped: {InvocationScope.EditFailureCircuitThreshold} consecutive edit_file " +
                     $"attempts on '{editPath}' have failed this turn. Stop calling edit_file on this file. " +
-                    "Either (a) call read_file_contents to refresh your view of the file, or " +
+                    "Either (a) call read_file_contents (with startLine/endLine to reach the section you're " +
+                    "editing if the file is large) to refresh your view, or " +
                     "(b) use write_file to replace the whole region you want to change.";
                 context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, circuitMsg);
                 OnFunctionCompleted?.Invoke(new FunctionExecutionResult
@@ -372,8 +429,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Result = circuitMsg,
                     Success = false
                 });
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
 
@@ -383,8 +438,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 // Record the failure for this path. The composer attaches the content hint
                 // on the FIRST failure per path and a short pointer on subsequent ones —
                 // prevents the same 5K blob being shipped on every loop iteration.
-                editScope?.RecordEditFailure(editPath);
-                var msg = ComposeEditFailureMessage(preview.Error, editPath, capturedOldContent, editScope);
+                editScope?.RecordEditFailure(editKey);
+                var msg = ComposeEditFailureMessage(preview.Error, editPath, editKey, capturedOldContent, editScope);
                 context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                 OnFunctionCompleted?.Invoke(new FunctionExecutionResult
                 {
@@ -392,15 +447,14 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Result = msg,
                     Success = false
                 });
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
 
             var newContent = preview.NewContent!;
 
             approvalWasShown = true;
-            var editApproval = await OnWriteApprovalRequested(editPath, capturedOldContent, newContent);
+            var editApproval = await OnWriteApprovalRequested(editPath, capturedOldContent, newContent)
+                .WaitAsync(context.CancellationToken);
 
             if (editApproval.Response != DiffApprovalResponse.Approved &&
                 editApproval.Response != DiffApprovalResponse.ApprovedNoAskAgain)
@@ -424,8 +478,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Result = resultMsg.Length > 200 ? resultMsg[..200] + "..." : resultMsg,
                     Success = true
                 });
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
         }
@@ -450,9 +502,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Success = true
                 };
                 OnFunctionCompleted?.Invoke(skipResult);
-
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
         }
@@ -476,9 +525,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Success = true
                 };
                 OnFunctionCompleted?.Invoke(skipResult);
-
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
         }
@@ -502,9 +548,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     Success = true
                 };
                 OnFunctionCompleted?.Invoke(skipResult);
-
-                lock (_pendingLock) _pendingFunctionCount--;
-                OnFunctionFinished?.Invoke();
                 return;
             }
         }
@@ -569,12 +612,6 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 context.Function,
                 $"Function failed: {ex.Message}"
             );
-        }
-        finally
-        {
-            // Track completion
-            lock (_pendingLock) _pendingFunctionCount--;
-            OnFunctionFinished?.Invoke();
         }
     }
 
@@ -743,6 +780,45 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Canonical key for per-scope path bookkeeping (read dedup, edit-failure counts,
+    /// modified-since-read). Routes through the plugin's own path resolution so aliases
+    /// of one file ("Games/x.html" vs "src/.../net8.0/Games/x.html") share a single
+    /// entry — raw-string keys let a model's alias switch split circuit counts and dodge
+    /// trip thresholds, observed live mid-plan. Falls back to the raw string when there's
+    /// no project root or the path escapes it (the plugin will reject those calls anyway).
+    /// </summary>
+    private string NormalizePathKey(string path)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(ProjectRoot)) return path;
+        try { return FileSystemPlugin.ResolvePath(ProjectRoot!, path); }
+        catch { return path; }
+    }
+
+    /// <summary>
+    /// Full path for pre-execution content capture (diffs, new-file detection). Same
+    /// resolution as the plugin so aliased paths capture the REAL file's content —
+    /// the old naive Combine missed aliased targets entirely, silently skipping the
+    /// preview/approval for them. Falls back to the literal combine on failure.
+    /// </summary>
+    private string ResolveCapturePath(string path)
+    {
+        try { return FileSystemPlugin.ResolvePath(ProjectRoot!, path); }
+        catch { return Path.GetFullPath(Path.Combine(ProjectRoot!, path)); }
+    }
+
+    /// <summary>
+    /// Builds the per-scope dedup key for a read_file_contents call. Includes the line
+    /// range so paging through a large file (startLine=401, then 801, ...) is never
+    /// mistaken for a redundant re-read of the same content.
+    /// </summary>
+    private static string BuildReadKey(string path, IReadOnlyDictionary<string, object?> arguments)
+    {
+        var start = arguments.TryGetValue("startLine", out var s) ? s?.ToString() ?? "1" : "1";
+        var end = arguments.TryGetValue("endLine", out var e) ? e?.ToString() ?? "0" : "0";
+        return $"read_file_contents:{path}:{start}-{end}";
+    }
+
+    /// <summary>
     /// Builds display event for read operations.
     /// </summary>
     private OperationDisplayEvent BuildReadDisplay(IReadOnlyDictionary<string, object?> arguments, string resultStr)
@@ -750,11 +826,20 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         arguments.TryGetValue("relativePath", out var pathObj);
         var filePath = pathObj?.ToString() ?? "";
 
-        // Parse line count from result: "Content of file '...' (42 lines):"
+        // Parse line count from the result header: "File: ... (42 lines)" for whole-file
+        // reads, "File: ... (lines 401-800 of 1051)" for ranged reads.
         var lineCount = 0;
         var match = Regex.Match(resultStr, @"\((\d+) lines?\)");
         if (match.Success)
+        {
             lineCount = int.Parse(match.Groups[1].Value);
+        }
+        else
+        {
+            var range = Regex.Match(resultStr, @"\(lines (\d+)-(\d+) of (\d+)\)");
+            if (range.Success)
+                lineCount = int.Parse(range.Groups[2].Value) - int.Parse(range.Groups[1].Value) + 1;
+        }
 
         return new OperationDisplayEvent
         {
@@ -883,26 +968,28 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     /// failure for a path emits the full 5K hint; later failures for the same path get
     /// a one-line pointer back to the original. Cleared when the path is written.
     /// </summary>
-    private static string ComposeEditFailureMessage(string bareReason, string editPath, string currentContent, InvocationScope? scope)
+    private static string ComposeEditFailureMessage(string bareReason, string editPath, string editKey, string currentContent, InvocationScope? scope)
     {
         var prefix = $"Error: {bareReason} (from '{editPath}')";
 
         // "Multiple occurrences" failures don't need the content hint — the model already
         // saw the relevant region (its own old_text matched too liberally). Only attach
         // the hint when the failure was "could not find," and only the first time per path.
+        // Hint dedup keys on the NORMALIZED path (editKey) so alias switches can't re-earn
+        // the full 5K hint; the display string stays as the model spelled it (editPath).
         if (!bareReason.StartsWith("Could not find", StringComparison.OrdinalIgnoreCase))
             return prefix;
 
         if (scope == null)
             return prefix + "\n" + BuildCurrentContentHint(currentContent);
 
-        if (scope.HasEmittedEditHint(editPath))
+        if (scope.HasEmittedEditHint(editKey))
             return prefix +
                    $"\nThe current content of '{editPath}' was attached to an earlier failure this turn — " +
                    "re-examine it instead of asking for it again. If you need to see it again, " +
                    "call read_file_contents.";
 
-        scope.MarkEditHintEmitted(editPath);
+        scope.MarkEditHintEmitted(editKey);
         return prefix + "\n" + BuildCurrentContentHint(currentContent);
     }
 
@@ -921,7 +1008,22 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (!string.IsNullOrEmpty(resultStr))
             scope.RecordResultChars(resultStr.Length);
 
-        if (isError) return; // Don't mark reads/writes for failed calls.
+        if (isError)
+        {
+            // Plugin-level edit failures must count toward the edit-failure circuit too.
+            // The preview validates against a snapshot captured at interception; when an
+            // earlier edit in the same batch lands in between, the plugin's re-validation
+            // fails AFTER the preview passed. Those failures used to bypass the circuit
+            // entirely — a model could thrash 9+ consecutive misses on one path without
+            // ever tripping it.
+            if (context.Function.Name == "edit_file")
+            {
+                var failPath = context.Arguments.TryGetValue("relativePath", out var fp) ? fp?.ToString() ?? "" : "";
+                if (!string.IsNullOrEmpty(failPath))
+                    scope.RecordEditFailure(NormalizePathKey(failPath));
+            }
+            return; // Don't mark reads/writes for failed calls.
+        }
 
         switch (context.Function.Name)
         {
@@ -929,7 +1031,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
                 if (!string.IsNullOrEmpty(path))
-                    scope.RecordRead($"read_file_contents:{path}", path);
+                {
+                    var pathKey = NormalizePathKey(path);
+                    scope.RecordRead(BuildReadKey(pathKey, context.Arguments), pathKey);
+                }
                 break;
             }
             case "write_file":
@@ -938,7 +1043,7 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
                 if (!string.IsNullOrEmpty(path))
-                    scope.RecordWrite(path);
+                    scope.RecordWrite(NormalizePathKey(path));
                 break;
             }
         }
@@ -961,7 +1066,20 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         context.Arguments.TryGetValue("steps", out var stepsObj);
         var proposals = CoerceProposals(stepsObj);
 
-        return await _planHandoff.ProcessAsync(goal, proposals);
+        // Thread the kernel invocation's token through so a running plan is cancellable.
+        // Without this the entire multi-step plan executed under CancellationToken.None —
+        // Ctrl+C / Esc (which cancel the request token) and the request timeout were all
+        // ignored once a plan started, leaving the user with no way out of a stalled step.
+        var summary = await _planHandoff.ProcessAsync(goal, proposals, context.CancellationToken);
+
+        // Mark only real proposals (≥1 step) as processed: a malformed/empty proposal
+        // stays retryable, but once a genuine plan has been handled — executed, rejected,
+        // or cancelled — any further propose_plan this turn is a runaway and the
+        // interception above short-circuits it.
+        if (proposals.Length > 0)
+            _currentScope.Value?.MarkPlanProcessed();
+
+        return summary;
     }
 
     /// <summary>
@@ -1020,8 +1138,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (_currentScope.Value?.ApprovalsRevoked == true)
             return $"User denied a previous tool in this batch — auto-denying write to '{relativePath}'. Do not retry unless the user asks.";
 
-        // Request approval from the UI (oldContent is pre-captured, null for new files)
-        var approval = await OnWriteApprovalRequested(relativePath, oldContent, newContent);
+        // Request approval from the UI (oldContent is pre-captured, null for new files).
+        // WaitAsync: never let a wedged prompt block the turn beyond cancellation.
+        var approval = await OnWriteApprovalRequested(relativePath, oldContent, newContent)
+            .WaitAsync(context.CancellationToken);
 
         switch (approval.Response)
         {
@@ -1065,7 +1185,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (_currentScope.Value?.ApprovalsRevoked == true)
             return $"User denied a previous tool in this batch — auto-denying deletion of '{relativePath}'. Do not retry unless the user asks.";
 
-        var approval = await OnDeleteApprovalRequested(relativePath, existingContent);
+        var approval = await OnDeleteApprovalRequested(relativePath, existingContent)
+            .WaitAsync(context.CancellationToken);
 
         switch (approval.Response)
         {
@@ -1108,7 +1229,8 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         if (_currentScope.Value?.ApprovalsRevoked == true)
             return $"User denied a previous tool in this batch — auto-denying command '{command}'. Do not retry unless the user asks.";
 
-        var approval = await OnCommandApprovalRequested(command);
+        var approval = await OnCommandApprovalRequested(command)
+            .WaitAsync(context.CancellationToken);
 
         switch (approval.Response)
         {
@@ -1140,16 +1262,42 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         new(@"^\s*(?:type|cat|head|tail|more|less|nl|gc|Get-Content|findstr|grep|sls|Select-String|sed|awk)\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    // Unwraps a `powershell -Command "..."` / `pwsh -c '...'` / `cmd /c ...` invocation and
+    // captures the inner command (group 1/2/3 = double-quoted / single-quoted / unquoted), so a
+    // wrapped file dump is re-tested against ShellFileReadVerbs. Without this the anchored ^ check
+    // only sees the `powershell`/`cmd` token and waves the read through — the exact hole a stuck
+    // model used to dump an 800-line file into context a dozen times via
+    // `powershell -Command "Get-Content x | Select-Object -Skip N"`, defeating read_file_contents'
+    // cache/dedup/budget circuits and bloating context until the local model stalled.
+    private static readonly System.Text.RegularExpressions.Regex ShellReadWrapper =
+        new(@"^\s*(?:powershell(?:\.exe)?|pwsh|cmd(?:\.exe)?)\b[^""']*?(?:-Command|-c|/c)\s+(?:""([^""]*)""|'([^']*)'|(\S.*))$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>
-    /// True if the command looks like a shell-based file-read (type/cat/head/findstr/grep/etc.).
-    /// Used to short-circuit execute_command calls that would otherwise dump file content
-    /// into the conversation, defeating read_file_contents' cache and dedup circuit.
+    /// True if the command looks like a shell-based file-read (type/cat/head/findstr/grep/etc.),
+    /// whether bare or wrapped in a powershell/pwsh/cmd invocation. Used to short-circuit
+    /// execute_command calls that would otherwise dump file content into the conversation,
+    /// defeating read_file_contents' cache and dedup circuit.
     /// Public so the classification is unit-testable without instantiating the full filter.
     /// </summary>
     public static bool LooksLikeShellFileRead(string command)
     {
         if (string.IsNullOrWhiteSpace(command)) return false;
-        return ShellFileReadVerbs.IsMatch(command);
+        if (ShellFileReadVerbs.IsMatch(command)) return true;
+
+        // A wrapped read — `powershell -Command "Get-Content x"`, `cmd /c type x` — only counts
+        // if the INNER command leads with a read verb. This keeps legit filters like
+        // `git status | grep x` (no wrapper) and `powershell -Command "dotnet build"` allowed.
+        var wrapped = ShellReadWrapper.Match(command);
+        if (wrapped.Success)
+        {
+            var inner = wrapped.Groups[1].Success ? wrapped.Groups[1].Value
+                      : wrapped.Groups[2].Success ? wrapped.Groups[2].Value
+                      : wrapped.Groups[3].Value;
+            if (!string.IsNullOrWhiteSpace(inner) && ShellFileReadVerbs.IsMatch(inner))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
