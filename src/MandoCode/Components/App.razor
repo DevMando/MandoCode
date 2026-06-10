@@ -344,7 +344,7 @@
         {
             Config.OllamaEndpoint = probe.NormalizedUrl;
             Config.Save();
-            AnsiConsole.MarkupLine($"[cyan]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
+            AnsiConsole.MarkupLine($"[deepskyblue1]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
         }
 
         // First-run or recovering-from-broken-state: launch the guided wizard. Once a
@@ -471,7 +471,7 @@
 
         var picked = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("[cyan]Select a model:[/]")
+                .Title("[deepskyblue1]Select a model:[/]")
                 .AddChoices(labeled));
         var modelTag = picked.Split(' ')[0];
 
@@ -507,10 +507,10 @@
         var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length < 2)
         {
-            AnsiConsole.MarkupLine("[cyan]Usage:[/] /config set <key> <value>");
+            AnsiConsole.MarkupLine("[deepskyblue1]Usage:[/] /config set <key> <value>");
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[dim]Available keys (current values):[/]");
-            AnsiConsole.WriteLine(ConfigKeySetter.DescribeKeys(Config));
+            WriteConfigKeyListing(ConfigKeySetter.DescribeKeys(Config));
             AnsiConsole.WriteLine();
             return;
         }
@@ -520,7 +520,7 @@
 
         if (!result.Ok)
         {
-            AnsiConsole.MarkupLine("[dim]Run [cyan]/config set[/] with no arguments to list keys and current values.[/]");
+            AnsiConsole.MarkupLine("[dim]Run [deepskyblue1]/config set[/] with no arguments to list keys and current values.[/]");
             AnsiConsole.WriteLine();
             return;
         }
@@ -547,6 +547,33 @@
     }
 
     /// <summary>
+    /// Renders the plain-text key listing from ConfigKeySetter.DescribeKeys with the
+    /// app palette: key deepskyblue, current value gold, range hint green. The string
+    /// itself stays uncolored because the CLI prints it raw and the anti-drift test
+    /// parses it.
+    /// </summary>
+    private static void WriteConfigKeyListing(string listing)
+    {
+        foreach (var line in listing.Split('\n'))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                line, @"^(\S+)(\s+)(.*?)(\s*\(.*)?$");
+            if (!match.Success)
+            {
+                AnsiConsole.WriteLine(line);
+                continue;
+            }
+
+            var key = Spectre.Console.Markup.Escape(match.Groups[1].Value);
+            var gap = match.Groups[2].Value;
+            var value = Spectre.Console.Markup.Escape(match.Groups[3].Value);
+            var hint = Spectre.Console.Markup.Escape(match.Groups[4].Value);
+            AnsiConsole.MarkupLine(
+                $"[deepskyblue1]{key}[/]{gap}[rgb(255,200,80)]{value}[/][green]{hint}[/]");
+        }
+    }
+
+    /// <summary>
     /// Auto-launch the cloud sign-in walkthrough after a chat response surfaced a 401.
     /// Same flow as the menu inside /setup, but invoked inline so the user doesn't have
     /// to type /setup → re-pick the model → wait for the auth check just to reach the
@@ -556,7 +583,7 @@
     private async Task TryAutoSigninAfter401Async()
     {
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[cyan]Launching sign-in walkthrough so you can fix this now...[/]");
+        AnsiConsole.MarkupLine("[deepskyblue1]Launching sign-in walkthrough so you can fix this now...[/]");
         AnsiConsole.WriteLine();
 
         _setupActive = true;
@@ -674,7 +701,7 @@
         // as rich operation displays when OnFunctionCompleted fires
         if (!IsFileSystemOperation(call.FunctionName))
         {
-            AnsiConsole.MarkupLine($"[dim][[Function]][/] [cyan]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+            AnsiConsole.MarkupLine($"[dim][[Function]][/] [deepskyblue1]{Spectre.Console.Markup.Escape(call.Description)}[/]");
         }
 
         // Show what the model is doing above the spinner in grey
@@ -896,7 +923,7 @@
                     if (rawConfigArgs.Length > 0)
                     {
                         AnsiConsole.MarkupLine("[yellow]Unknown /config subcommand.[/]");
-                        AnsiConsole.MarkupLine("[dim]Usage: [cyan]/config[/] (guided wizard) or [cyan]/config set <key> <value>[/][/]");
+                        AnsiConsole.MarkupLine("[dim]Usage: [deepskyblue1]/config[/] (guided wizard) or [deepskyblue1]/config set <key> <value>[/][/]");
                         AnsiConsole.WriteLine();
                         continue;
                     }
@@ -1059,7 +1086,7 @@
             // Block AI requests when model is not available
             if (_modelError)
             {
-                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [cyan]/config[/] to select a model, or pull one with [cyan]ollama pull <model-name>[/].");
+                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [deepskyblue1]/config[/] to select a model, or pull one with [deepskyblue1]ollama pull <model-name>[/].");
                 AnsiConsole.WriteLine();
                 continue;
             }
@@ -1148,7 +1175,7 @@
         {
             // Render the title as a separate scrollback line above the input box so it
             // persists after the input is dismissed.
-            AnsiConsole.MarkupLine($"[cyan]{Spectre.Console.Markup.Escape(title)}[/]");
+            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
             // Pre-fill with initialValue when provided (e.g., default URL for endpoint
             // entry — user can press Enter to accept or edit in place). Empty otherwise,
@@ -1195,7 +1222,7 @@
     {
         if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
 
-        AnsiConsole.MarkupLine($"[cyan]{Spectre.Console.Markup.Escape(title)}[/]");
+        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
         _wizardSelectOptions = options;
         _wizardSelectValue = options[0];
@@ -1388,7 +1415,7 @@
                     contextBlocks.AppendLine();
                     totalExpansionChars += dirListing.Length;
 
-                    AnsiConsole.MarkupLine($"[dim][[Directory]][/] [cyan]{Spectre.Console.Markup.Escape(filePath)}/[/]");
+                    AnsiConsole.MarkupLine($"[dim][[Directory]][/] [deepskyblue1]{Spectre.Console.Markup.Escape(filePath)}/[/]");
                 }
                 else
                 {
@@ -1830,12 +1857,12 @@
         foreach (var step in plan.Steps)
         {
             table.AddRow(
-                $"[cyan]{step.StepNumber}[/]",
+                $"[deepskyblue1]{step.StepNumber}[/]",
                 Spectre.Console.Markup.Escape(step.Description)
             );
         }
 
-        AnsiConsole.MarkupLine("[cyan]Created plan:[/]");
+        AnsiConsole.MarkupLine("[deepskyblue1]Created plan:[/]");
         AnsiConsole.WriteLine();
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
@@ -1851,7 +1878,7 @@
                 _recentReadFiles.Clear();
                 _lastOperationType = null;
                 SpinnerService.SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
-                AnsiConsole.MarkupLine($"[cyan]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
+                AnsiConsole.MarkupLine($"[deepskyblue1]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
                 Spinner.Start("Working...");
                 break;
@@ -1924,7 +1951,7 @@
         {
             AnsiConsole.MarkupLine("[yellow]No skills installed.[/]");
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("Create a skill by adding a folder with a [cyan]SKILL.md[/] file to:");
+            AnsiConsole.MarkupLine("Create a skill by adding a folder with a [deepskyblue1]SKILL.md[/] file to:");
             AnsiConsole.MarkupLine($"  • User skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedUserSkillsDirectory)}[/]");
             AnsiConsole.MarkupLine($"  • Project skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedProjectSkillsDirectory)}[/]");
             AnsiConsole.WriteLine();
@@ -1934,7 +1961,7 @@
         }
 
         AnsiConsole.MarkupLine("[green]✨ Skills are invoked automatically[/] when the model matches a description to your request.");
-        AnsiConsole.MarkupLine("[dim]Use[/] [cyan]/force-skill[/] [dim]only when you want to override and run a specific one.[/]");
+        AnsiConsole.MarkupLine("[dim]Use[/] [deepskyblue1]/force-skill[/] [dim]only when you want to override and run a specific one.[/]");
         AnsiConsole.WriteLine();
 
         var table = new Spectre.Console.Table() { Border = TableBorder.Rounded };
@@ -1962,7 +1989,7 @@
         var skills = Skills.GetAll();
         if (skills.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No skills installed.[/] Run [cyan]/skills[/] [yellow]for setup instructions.[/]");
+            AnsiConsole.MarkupLine("[yellow]No skills installed.[/] Run [deepskyblue1]/skills[/] [yellow]for setup instructions.[/]");
             AnsiConsole.WriteLine();
             return null;
         }
@@ -2020,8 +2047,8 @@
         var skill = Skills.GetByName(skillName);
         if (skill == null)
         {
-            AnsiConsole.MarkupLine($"[red]No skill named[/] [cyan]{Spectre.Console.Markup.Escape(skillName)}[/] [red]is installed.[/]");
-            AnsiConsole.MarkupLine("[dim]Run[/] [cyan]/skills[/] [dim]to see available skills.[/]");
+            AnsiConsole.MarkupLine($"[red]No skill named[/] [deepskyblue1]{Spectre.Console.Markup.Escape(skillName)}[/] [red]is installed.[/]");
+            AnsiConsole.MarkupLine("[dim]Run[/] [deepskyblue1]/skills[/] [dim]to see available skills.[/]");
             AnsiConsole.WriteLine();
             return;
         }
@@ -2033,7 +2060,7 @@
             return;
         }
 
-        AnsiConsole.MarkupLine($"[green]✓ Forcing skill:[/] [cyan]{Spectre.Console.Markup.Escape(skill.Name)}[/]");
+        AnsiConsole.MarkupLine($"[green]✓ Forcing skill:[/] [deepskyblue1]{Spectre.Console.Markup.Escape(skill.Name)}[/]");
         if (!string.IsNullOrWhiteSpace(skill.Description))
         {
             AnsiConsole.MarkupLine($"  [dim]{Spectre.Console.Markup.Escape(skill.Description)}[/]");
@@ -2055,7 +2082,7 @@
 
         if (!Config.EnableMcp)
         {
-            AnsiConsole.MarkupLine("[yellow]MCP is disabled.[/] Enable with [cyan]mandocode --config set mcp true[/].");
+            AnsiConsole.MarkupLine("[yellow]MCP is disabled.[/] Enable with [deepskyblue1]mandocode --config set mcp true[/].");
             AnsiConsole.WriteLine();
             return;
         }
@@ -2224,7 +2251,7 @@
                 continue;
             }
 
-            var table = new Table().Border(TableBorder.Rounded).Title($"[cyan]{Spectre.Console.Markup.Escape(serverName)}[/] [dim]({tools.Count} tool{(tools.Count == 1 ? "" : "s")})[/]");
+            var table = new Table().Border(TableBorder.Rounded).Title($"[deepskyblue1]{Spectre.Console.Markup.Escape(serverName)}[/] [dim]({tools.Count} tool{(tools.Count == 1 ? "" : "s")})[/]");
             table.AddColumn("Tool");
             table.AddColumn("Description");
             foreach (var t in tools)
@@ -2325,7 +2352,7 @@
         // We hand-build the object graph so empty collections / nulls don't clutter the
         // preview ("command": null, "args": [], "env": {}).
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[cyan]Preview:[/]");
+        AnsiConsole.MarkupLine("[deepskyblue1]Preview:[/]");
         var previewWrapper = new Dictionary<string, object> { [name] = BuildPreviewDict(server) };
         var previewJson = System.Text.Json.JsonSerializer.Serialize(previewWrapper,
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
@@ -2728,7 +2755,7 @@
         if (genres.Count == 0)
         {
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]No genres found.[/] Add mp3 files to [cyan]Audio/<genre>/[/] folders.");
+            AnsiConsole.MarkupLine("[yellow]No genres found.[/] Add mp3 files to [deepskyblue1]Audio/<genre>/[/] folders.");
             AnsiConsole.WriteLine();
             StartMusicVisualizer();
             return;

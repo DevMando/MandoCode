@@ -63,7 +63,7 @@ public sealed class OnboardingFlow
         {
             config.OllamaEndpoint = probe.NormalizedUrl;
             config.Save();
-            AnsiConsole.MarkupLine($"[cyan]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
+            AnsiConsole.MarkupLine($"[deepskyblue1]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
         }
 
         var cliInstalled = OllamaSetupHelper.IsOllamaCliInstalled();
@@ -135,7 +135,7 @@ public sealed class OnboardingFlow
         {
             AnsiConsole.MarkupLine($"[yellow]Couldn't fetch your model list from {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}.[/]");
             AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
-            AnsiConsole.MarkupLine("[dim]Run [cyan]/setup[/] to try again, or [cyan]/retry[/] to re-check the connection. The wizard will run again automatically next launch.[/]");
+            AnsiConsole.MarkupLine("[dim]Run [deepskyblue1]/setup[/] to try again, or [deepskyblue1]/retry[/] to re-check the connection. The wizard will run again automatically next launch.[/]");
             AnsiConsole.WriteLine();
             // Don't set HasCompletedOnboarding — we want auto-rerun on next launch.
             config.Save();
@@ -153,7 +153,7 @@ public sealed class OnboardingFlow
         if (string.IsNullOrEmpty(pickedModel))
         {
             AnsiConsole.MarkupLine("[yellow]Setup paused — no model selected.[/]");
-            AnsiConsole.MarkupLine("[dim]Pull a model (e.g. [cyan]ollama pull qwen3:8b[/]) and run [cyan]/setup[/] when you're ready — or [cyan]/config[/] to pick from existing models.[/]");
+            AnsiConsole.MarkupLine("[dim]Pull a model (e.g. [deepskyblue1]ollama pull qwen3:8b[/]) and run [deepskyblue1]/setup[/] when you're ready — or [deepskyblue1]/config[/] to pick from existing models.[/]");
             AnsiConsole.MarkupLine("[dim]The wizard will run again automatically next launch.[/]");
             AnsiConsole.WriteLine();
             // Save URL changes / heal state, but leave HasCompletedOnboarding=false
@@ -210,14 +210,14 @@ public sealed class OnboardingFlow
         if (!validated)
         {
             AnsiConsole.MarkupLine($"[yellow]Note: model [white]{Spectre.Console.Markup.Escape(finalModel)}[/] didn't validate via /api/show.[/]");
-            AnsiConsole.MarkupLine($"[dim]You may need to run: [cyan]ollama pull {Spectre.Console.Markup.Escape(finalModel)}[/] and then /retry — or /setup to pick a different model.[/]");
+            AnsiConsole.MarkupLine($"[dim]You may need to run: [deepskyblue1]ollama pull {Spectre.Console.Markup.Escape(finalModel)}[/] and then /retry — or /setup to pick a different model.[/]");
         }
 
         config.HasCompletedOnboarding = true;
         config.Save();
 
         AnsiConsole.MarkupLine($"[green]✓ Setup complete. Using {Spectre.Console.Markup.Escape(finalModel)}[/]");
-        AnsiConsole.MarkupLine("[dim]Tip: run [cyan]/config[/] any time to switch models, change response length, or tweak settings.[/]");
+        AnsiConsole.MarkupLine("[dim]Tip: run [deepskyblue1]/config[/] any time to switch models, change response length, or tweak settings.[/]");
         AnsiConsole.WriteLine();
 
         return new FlowResult(Connected: true, Skipped: false, FinalModel: finalModel);
@@ -277,12 +277,12 @@ public sealed class OnboardingFlow
     private static string Select(string title, params string[] options)
         => AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title($"[cyan]{title}[/]")
+                .Title($"[deepskyblue1]{title}[/]")
                 .HighlightStyle(new Style(foreground: Color.Green))
                 .AddChoices(options));
 
     private static bool Confirm(string title, bool defaultYes)
-        => AnsiConsole.Prompt(new ConfirmationPrompt($"[cyan]{title}[/]") { DefaultValue = defaultYes });
+        => AnsiConsole.Prompt(new ConfirmationPrompt($"[deepskyblue1]{title}[/]") { DefaultValue = defaultYes });
 
     /// <summary>
     /// Prompt for a URL. Prefers the VDOM TextInput when the host wired one in,
@@ -312,7 +312,7 @@ public sealed class OnboardingFlow
         }
 
         return AnsiConsole.Prompt(
-            new TextPrompt<string>($"[cyan]{title}[/]")
+            new TextPrompt<string>($"[deepskyblue1]{title}[/]")
                 .DefaultValue(defaultValue)
                 .Validate(v =>
                     Uri.TryCreate(v, UriKind.Absolute, out _)
@@ -332,11 +332,11 @@ public sealed class OnboardingFlow
     {
         var panel = new Panel(
             Align.Center(
-                new Markup("[bold cyan]Welcome to MandoCode[/]\n[dim]Let's get you set up — takes about a minute[/]"),
+                new Markup("[bold deepskyblue1]Welcome to MandoCode[/]\n[dim]Let's get you set up — takes about a minute[/]"),
                 VerticalAlignment.Middle))
         {
             Border = BoxBorder.Double,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         };
         AnsiConsole.Write(panel);
         AnsiConsole.WriteLine();
@@ -361,7 +361,7 @@ public sealed class OnboardingFlow
 
         if (choice.StartsWith("Install"))
         {
-            AnsiConsole.MarkupLine($"[cyan]Running: {Spectre.Console.Markup.Escape(cmd!)}[/]");
+            AnsiConsole.MarkupLine($"[deepskyblue1]Running: {Spectre.Console.Markup.Escape(cmd!)}[/]");
             AnsiConsole.MarkupLine("[dim](inherited stdio — answer any prompts the installer shows)[/]");
             AnsiConsole.WriteLine();
 
@@ -549,7 +549,7 @@ public sealed class OnboardingFlow
         if (models.Count == 0)
             return await PickWhenEmptyAsync(url, ct);
 
-        AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]Pick a model[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         // One combined picker — devs scan their pulled models and pick directly.
@@ -581,7 +581,7 @@ public sealed class OnboardingFlow
 
     private async Task<string?> PickWhenEmptyAsync(string url, CancellationToken ct)
     {
-        AnsiConsole.Write(new Rule("[yellow]No models yet[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]No models yet[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Cloud models are more powerful and run on Ollama's servers — they need a free ollama.com account.[/]");
@@ -598,7 +598,7 @@ public sealed class OnboardingFlow
         // Local — give the user a tiered picker. We can't auto-detect VRAM, so spell
         // out the hardware expectation up front and let them self-select. Each label
         // is "<tag> ..." so the first whitespace-split grabs the tag.
-        AnsiConsole.Write(new Rule("[yellow]How big should it be?[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]How big should it be?[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Bigger models give better answers, but use more memory and run slower without a GPU.[/]");
         AnsiConsole.MarkupLine("[dim]Rough guide for what to expect:[/]");
@@ -608,7 +608,7 @@ public sealed class OnboardingFlow
         AnsiConsole.MarkupLine("[dim]  4b     ~3.4 GB   Mid-range GPU (4-6 GB VRAM) or 16 GB RAM — balanced day-to-day use[/]");
         AnsiConsole.MarkupLine("[dim]  9b     ~6.6 GB   Dedicated GPU (8+ GB VRAM) — best local quality, multi-file refactors[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[dim]Cloud tip: [white]{MandoCodeConfig.DefaultCloudModel}[/] outperforms all of these and needs no GPU (free with [cyan]ollama signin[/]).[/]");
+        AnsiConsole.MarkupLine($"[dim]Cloud tip: [white]{MandoCodeConfig.DefaultCloudModel}[/] outperforms all of these and needs no GPU (free with [deepskyblue1]ollama signin[/]).[/]");
         AnsiConsole.WriteLine();
 
         var localChoice = Select("Pick a starter model to install:",
@@ -633,7 +633,7 @@ public sealed class OnboardingFlow
         var pulled = await PullModelWithProgressAsync(modelTag, ct);
         if (!pulled)
         {
-            AnsiConsole.MarkupLine($"[yellow]Pull didn't finish cleanly. Retry with: [cyan]ollama pull {Spectre.Console.Markup.Escape(modelTag)}[/][/]");
+            AnsiConsole.MarkupLine($"[yellow]Pull didn't finish cleanly. Retry with: [deepskyblue1]ollama pull {Spectre.Console.Markup.Escape(modelTag)}[/][/]");
             return null;
         }
 
@@ -641,8 +641,8 @@ public sealed class OnboardingFlow
         AnsiConsole.WriteLine();
         // Cloud upsell — informational, not pushy. Local works fine; cloud is just
         // genuinely more capable for users willing to sign in.
-        AnsiConsole.MarkupLine($"[dim]Tip: [white]{MandoCodeConfig.DefaultCloudModel}[/] is more powerful and needs no GPU (free with [cyan]ollama signin[/]).[/]");
-        AnsiConsole.MarkupLine("[dim]Run [cyan]/setup[/] any time to switch to a cloud model.[/]");
+        AnsiConsole.MarkupLine($"[dim]Tip: [white]{MandoCodeConfig.DefaultCloudModel}[/] is more powerful and needs no GPU (free with [deepskyblue1]ollama signin[/]).[/]");
+        AnsiConsole.MarkupLine("[dim]Run [deepskyblue1]/setup[/] any time to switch to a cloud model.[/]");
         return modelTag;
     }
 
@@ -653,7 +653,7 @@ public sealed class OnboardingFlow
     /// </summary>
     private static async Task<bool> PullModelWithProgressAsync(string modelTag, CancellationToken ct)
     {
-        AnsiConsole.MarkupLine($"[cyan]Pulling {Spectre.Console.Markup.Escape(modelTag)}...[/]");
+        AnsiConsole.MarkupLine($"[deepskyblue1]Pulling {Spectre.Console.Markup.Escape(modelTag)}...[/]");
         var lastLine = "";
         var progress = new Progress<string>(line => lastLine = line);
 
@@ -686,7 +686,7 @@ public sealed class OnboardingFlow
         var pulled = await PullModelWithProgressAsync(MandoCodeConfig.DefaultCloudModel, ct);
         if (!pulled)
         {
-            AnsiConsole.MarkupLine($"[yellow]Pull didn't finish cleanly. If you're not signed in, run [cyan]ollama signin[/] then retry with: [cyan]ollama pull {MandoCodeConfig.DefaultCloudModel}[/][/]");
+            AnsiConsole.MarkupLine($"[yellow]Pull didn't finish cleanly. If you're not signed in, run [deepskyblue1]ollama signin[/] then retry with: [deepskyblue1]ollama pull {MandoCodeConfig.DefaultCloudModel}[/][/]");
             return null;
         }
 
@@ -707,7 +707,7 @@ public sealed class OnboardingFlow
     {
         AnsiConsole.MarkupLine("[yellow]Cloud models need a free ollama.com account.[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("MandoCode can sign you in by running [cyan]ollama signin[/] for you — your browser will");
+        AnsiConsole.MarkupLine("MandoCode can sign you in by running [deepskyblue1]ollama signin[/] for you — your browser will");
         AnsiConsole.MarkupLine("open to confirm, and the local token gets saved automatically. Or you can run");
         AnsiConsole.MarkupLine("the command yourself in another terminal if you'd rather.");
         AnsiConsole.WriteLine();
@@ -732,7 +732,7 @@ public sealed class OnboardingFlow
             // Spawn `ollama signin` as a child process. Stdio is inherited so the
             // user sees the URL Ollama prints, the browser opens, and any prompts
             // are shown directly. We wait for it to exit, then re-check auth.
-            AnsiConsole.MarkupLine("[cyan]Launching `ollama signin`...[/]");
+            AnsiConsole.MarkupLine("[deepskyblue1]Launching `ollama signin`...[/]");
             AnsiConsole.MarkupLine("[dim]Your browser will open to confirm your account. Come back here when it finishes.[/]");
             AnsiConsole.WriteLine();
 

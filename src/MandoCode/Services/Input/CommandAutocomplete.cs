@@ -216,7 +216,7 @@ public static class CommandAutocomplete
                         Console.Write("\x1b[J");
                         return state.InputText;
                     }
-                    AnsiConsole.Markup($"[cyan]{Markup.Escape(state.InputText)}[/]");
+                    AnsiConsole.Markup($"[deepskyblue1]{Markup.Escape(state.InputText)}[/]");
                     break;
 
                 case InputAction.AcceptFile:
@@ -359,18 +359,18 @@ public static class CommandAutocomplete
 
             if (i == selectedIndex)
             {
-                // Single black-on-cyan span covers the full inner width so the
-                // highlight reaches both panel padding edges.
+                // Single black-on-deepskyblue1 span covers the full inner width so
+                // the highlight reaches both panel padding edges.
                 var combined = $"{cmdField} {descField}";
-                rows.Add(new Markup($"[black on cyan]{Markup.Escape(combined)}[/]"));
+                rows.Add(new Markup($"[black on deepskyblue1]{Markup.Escape(combined)}[/]"));
             }
             else
             {
-                rows.Add(new Markup($"[cyan]{Markup.Escape(cmdField)}[/] [dim]{Markup.Escape(descField)}[/]"));
+                rows.Add(new Markup($"[deepskyblue1]{Markup.Escape(cmdField)}[/] [green]{Markup.Escape(descField)}[/]"));
             }
         }
 
-        WriteAutocompletePanel(cursorTop, "[cyan] Commands [/]", rows);
+        WriteAutocompletePanel(cursorTop, "[deepskyblue1] Commands [/]", rows);
 
         Console.SetCursorPosition(0, cursorTop + commands.Count + 3);
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
@@ -413,7 +413,7 @@ public static class CommandAutocomplete
 
                 primary = $"{dirName}/";
                 secondary = string.IsNullOrEmpty(parentPath) ? "" : $"{parentPath}/";
-                accent = "cyan";
+                accent = "deepskyblue1";
             }
             else
             {
@@ -421,14 +421,16 @@ public static class CommandAutocomplete
                 var dirPath = Path.GetDirectoryName(displayEntry)?.Replace('\\', '/') ?? "";
 
                 primary = fileName;
+                // Same warm gold as the submitted-prompt echo (ChatMessage.razor),
+                // so files share the app's existing second accent color.
                 secondary = string.IsNullOrEmpty(dirPath) ? "" : $"{dirPath}/";
-                accent = "yellow";
+                accent = "rgb(255,200,80)";
             }
 
             rows.Add(BuildFileRow(primary, secondary, accent, i == selectedIndex));
         }
 
-        WriteAutocompletePanel(cursorTop, "[cyan] Files [/]", rows);
+        WriteAutocompletePanel(cursorTop, "[deepskyblue1] Files [/]", rows);
 
         Console.SetCursorPosition(0, cursorTop + files.Count + 3);
         AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
@@ -471,7 +473,7 @@ public static class CommandAutocomplete
 
         var primaryMarkup = $"[{accent}]{Markup.Escape(primaryFit)}[/]";
         var secondaryMarkup = secondaryFit.Length > 0
-            ? $"[dim]{Markup.Escape(secondaryFit)}[/]"
+            ? $"[green]{Markup.Escape(secondaryFit)}[/]"
             : "";
         return new Markup($"{primaryMarkup}{sep}{secondaryMarkup}");
     }

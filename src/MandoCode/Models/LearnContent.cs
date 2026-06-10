@@ -16,7 +16,7 @@ public static class LearnContent
         AnsiConsole.WriteLine();
 
         // Section 1: What are Open-Weight LLMs?
-        AnsiConsole.Write(new Rule("[cyan]What are Open-Weight LLMs?[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]What are Open-Weight LLMs?[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Panel(
             new Rows(
@@ -28,12 +28,12 @@ public static class LearnContent
             ))
         {
             Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         });
         AnsiConsole.WriteLine();
 
         // Section 2: Understanding Model Sizes & Hardware
-        AnsiConsole.Write(new Rule("[cyan]Understanding Model Sizes & Hardware[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]Understanding Model Sizes & Hardware[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Panel(
             new Rows(
@@ -47,12 +47,12 @@ public static class LearnContent
             ))
         {
             Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         });
         AnsiConsole.WriteLine();
 
         // Section 2.5: The Context Window
-        AnsiConsole.Write(new Rule("[cyan]The Context Window (the model's desk)[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]The Context Window (the model's desk)[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Panel(
             new Rows(
@@ -66,20 +66,20 @@ public static class LearnContent
                 new Markup("  • MandoCode sizes it automatically when you pick a model tier in /setup —"),
                 new Markup("    but this only applies when MandoCode starts the Ollama daemon itself."),
                 new Markup("  • [bold]Ollama desktop app users:[/] the app controls this directly — drag"),
-                new Markup("    [cyan]Settings → Context length[/] (it defaults to a small 4k!)."),
-                new Markup("  • Tune MandoCode's value with: [cyan]mandocode --config set contextLength 16384[/]"),
+                new Markup("    [deepskyblue1]Settings → Context length[/] (it defaults to a small 4k!)."),
+                new Markup("  • Tune MandoCode's value with: [deepskyblue1]mandocode --config set contextLength 16384[/]"),
                 new Markup("  • [green]Cloud models[/] manage this on Ollama's servers — nothing to configure."),
                 new Markup("  • Advanced: [dim]OLLAMA_KV_CACHE_TYPE=q8_0[/] compresses the cache, roughly doubling"),
                 new Markup("    the window your VRAM can hold at a tiny quality cost.")
             ))
         {
             Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         });
         AnsiConsole.WriteLine();
 
         // Section 3: Cloud vs Local Models
-        AnsiConsole.Write(new Rule("[cyan]Cloud vs Local Models[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]Cloud vs Local Models[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Panel(
             new Rows(
@@ -93,12 +93,12 @@ public static class LearnContent
             ))
         {
             Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         });
         AnsiConsole.WriteLine();
 
         // Section 4: Recommended Models
-        AnsiConsole.Write(new Rule("[cyan]Recommended Models[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]Recommended Models[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         var table = new Table()
@@ -121,14 +121,14 @@ public static class LearnContent
         AnsiConsole.WriteLine();
 
         // Section 5: Getting Started
-        AnsiConsole.Write(new Rule("[cyan]Getting Started[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[deepskyblue1]Getting Started[/]").LeftJustified());
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Panel(
             new Rows(
                 new Markup("[bold]Step 1:[/] Install Ollama from [link]https://ollama.com[/]"),
-                new Markup("[bold]Step 2:[/] Open a terminal and run [cyan]ollama serve[/]"),
-                new Markup("[bold]Step 3:[/] Pull a model: [cyan]ollama pull qwen3:8b[/]"),
-                new Markup("[bold]Step 4:[/] Come back to MandoCode — run [cyan]/setup[/] for a guided walkthrough or [cyan]/config[/] to pick the model directly")
+                new Markup("[bold]Step 2:[/] Open a terminal and run [deepskyblue1]ollama serve[/]"),
+                new Markup("[bold]Step 3:[/] Pull a model: [deepskyblue1]ollama pull qwen3:8b[/]"),
+                new Markup("[bold]Step 4:[/] Come back to MandoCode — run [deepskyblue1]/setup[/] for a guided walkthrough or [deepskyblue1]/config[/] to pick the model directly")
             ))
         {
             Border = BoxBorder.Rounded,

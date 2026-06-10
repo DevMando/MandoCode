@@ -108,7 +108,7 @@ public class DiffApprovalHandler
         {
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[cyan]Apply these changes?[/]")
+                    .Title("[deepskyblue1]Apply these changes?[/]")
                     .HighlightStyle(new Style(decoration: Decoration.Invert))
                     .AddChoices(choices)
             );
@@ -187,7 +187,7 @@ public class DiffApprovalHandler
             .Border(BoxBorder.Rounded)
             .BorderStyle(Style.Parse("dim"))
             .Padding(1, 0);
-        commandPanel.Header = new PanelHeader("[cyan] Command [/]", Justify.Left);
+        commandPanel.Header = new PanelHeader("[deepskyblue1] Command [/]", Justify.Left);
 
         AnsiConsole.WriteLine();
         AnsiConsole.Write(commandPanel);
@@ -216,7 +216,7 @@ public class DiffApprovalHandler
         {
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[cyan]Run this command?[/]")
+                    .Title("[deepskyblue1]Run this command?[/]")
                     .HighlightStyle(new Style(decoration: Decoration.Invert))
                     .AddChoices(cmdChoices)
             );
@@ -345,7 +345,7 @@ public class DiffApprovalHandler
         {
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[cyan]Delete this file?[/]")
+                    .Title("[deepskyblue1]Delete this file?[/]")
                     .HighlightStyle(new Style(decoration: Decoration.Invert))
                     .AddChoices(delChoices)
             );
@@ -430,7 +430,7 @@ public class DiffApprovalHandler
             .Border(BoxBorder.Rounded)
             .BorderStyle(Style.Parse("dim"))
             .Padding(1, 0);
-        diffPanel.Header = new PanelHeader($"[cyan] Diff: [link={fileUri}]{escapedPath}[/] [/]", Justify.Left);
+        diffPanel.Header = new PanelHeader($"[deepskyblue1] Diff: [link={fileUri}]{escapedPath}[/] [/]", Justify.Left);
 
         AnsiConsole.WriteLine();
         AnsiConsole.Write(diffPanel);
@@ -449,7 +449,7 @@ public class DiffApprovalHandler
 
         _spinner.Stop();
 
-        var title = $"[cyan]Allow MCP tool \"{Markup.Escape(toolName)}\" from \"{Markup.Escape(serverName)}\"?[/]";
+        var title = $"[deepskyblue1]Allow MCP tool \"{Markup.Escape(toolName)}\" from \"{Markup.Escape(serverName)}\"?[/]";
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine(title);
         if (!string.IsNullOrWhiteSpace(description))
@@ -482,7 +482,7 @@ public class DiffApprovalHandler
         {
             choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[cyan]Run this MCP tool?[/]")
+                    .Title("[deepskyblue1]Run this MCP tool?[/]")
                     .HighlightStyle(new Style(decoration: Decoration.Invert))
                     .AddChoices(mcpChoices)
             );

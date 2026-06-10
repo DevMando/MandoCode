@@ -1,18 +1,37 @@
 @using Spectre.Console
 
-<Panel Title="Commands" Border="@BoxBorder.Rounded" BorderColor="Color.Cyan">
+@*
+    RazorConsole's Markup component escapes Content (no inline [color] tags) —
+    styling must come through the Foreground parameter. The two-column Grid keeps
+    command/description colors separate and auto-aligns the columns.
+*@
+
+<Panel Title="Commands" Border="@BoxBorder.Rounded" BorderColor="Color.DeepSkyBlue1">
     <Rows>
-        <Markup Content="/help        - Show this help message" />
-        <Markup Content="/setup       - Reconnect to Ollama or pick a different model (guided)" />
-        <Markup Content="/model       - Quick switch to a different model" />
-        <Markup Content="/config      - Adjust settings — model, temperature, tokens, timeout" />
-        <Markup Content="/retry       - Retry Ollama connection" />
-        <Markup Content="/learn       - Learn about LLMs and local AI models" />
-        <Markup Content="/music       - Play lofi/synthwave coding music" />
-        <Markup Content="  /music-stop, /music-pause, /music-next, /music-vol" />
-        <Markup Content="  /music-lofi, /music-synthwave, /music-list" />
-        <Markup Content="/clear       - Clear conversation history" />
-        <Markup Content="/exit       - Exit MandoCode" />
+        <Grid Columns="2">
+            <Markup Content="/help" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Show this help message" Foreground="Color.Green" />
+            <Markup Content="/setup" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Reconnect to Ollama or pick a different model (guided)" Foreground="Color.Green" />
+            <Markup Content="/model" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Quick switch to a different model" Foreground="Color.Green" />
+            <Markup Content="/config" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Adjust settings — model, temperature, tokens, timeout" Foreground="Color.Green" />
+            <Markup Content="/retry" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Retry Ollama connection" Foreground="Color.Green" />
+            <Markup Content="/learn" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Learn about LLMs and local AI models" Foreground="Color.Green" />
+            <Markup Content="/music" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Play lofi/synthwave coding music" Foreground="Color.Green" />
+            <Markup Content="" />
+            <Markup Content="/music-stop, /music-pause, /music-next, /music-vol" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="" />
+            <Markup Content="/music-lofi, /music-synthwave, /music-list" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="/clear" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Clear conversation history" Foreground="Color.Green" />
+            <Markup Content="/exit" Foreground="Color.DeepSkyBlue1" />
+            <Markup Content="- Exit MandoCode" Foreground="Color.Green" />
+        </Grid>
         <Markup Content="" />
         <Markup Content="💡 Tip: Type / to see available commands with autocomplete" />
     </Rows>

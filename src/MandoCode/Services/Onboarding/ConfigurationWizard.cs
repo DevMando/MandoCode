@@ -70,11 +70,11 @@ public class ConfigurationWizard
     {
         var panel = new Panel(
             Align.Center(
-                new Markup("[bold cyan]MandoCode Configuration Wizard[/]\n[dim]Let's set up your AI coding assistant[/]"),
+                new Markup("[bold deepskyblue1]MandoCode Configuration Wizard[/]\n[dim]Let's set up your AI coding assistant[/]"),
                 VerticalAlignment.Middle))
         {
             Border = BoxBorder.Double,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         };
 
         AnsiConsole.Write(panel);
@@ -85,7 +85,7 @@ public class ConfigurationWizard
         string currentEndpoint,
         Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
     {
-        AnsiConsole.Write(new Rule("[yellow]1. Ollama Connection[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]1. Ollama Connection[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         // Prefer the VDOM TextInput when wired in — Spectre's TextPrompt drops
@@ -105,7 +105,7 @@ public class ConfigurationWizard
         else
         {
             endpoint = AnsiConsole.Prompt(
-                new TextPrompt<string>("[cyan]Ollama endpoint URL:[/]")
+                new TextPrompt<string>("[deepskyblue1]Ollama endpoint URL:[/]")
                     .DefaultValue(currentEndpoint)
                     .ValidationErrorMessage("[red]Please enter a valid URL[/]")
                     .Validate(url =>
@@ -140,12 +140,12 @@ public class ConfigurationWizard
 
     private static async Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
     {
-        AnsiConsole.Write(new Rule("[yellow]2. Model Selection[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]2. Model Selection[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         var modelChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("[cyan]How would you like to configure your model?[/]")
+                .Title("[deepskyblue1]How would you like to configure your model?[/]")
                 .AddChoices(new[]
                 {
                     "Select from available Ollama models",
@@ -163,7 +163,7 @@ public class ConfigurationWizard
                 {
                     var selectedModel = AnsiConsole.Prompt(
                         new SelectionPrompt<string>()
-                            .Title("[cyan]Select a model:[/]")
+                            .Title("[deepskyblue1]Select a model:[/]")
                             .PageSize(10)
                             .AddChoices(availableModels)
                     );
@@ -176,20 +176,20 @@ public class ConfigurationWizard
                     AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.7:cloud[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", "minimax-m2.7:cloud");
+                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", "minimax-m2.7:cloud");
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[cyan]Enter model name:[/]", config.ModelName ?? "minimax-m2.7:cloud");
+                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? "minimax-m2.7:cloud");
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;
 
             case "Specify local model path (GGUF)":
-                config.ModelPath = AnsiConsole.Ask<string>("[cyan]Enter path to model file:[/]");
+                config.ModelPath = AnsiConsole.Ask<string>("[deepskyblue1]Enter path to model file:[/]");
                 var inferredName = Path.GetFileNameWithoutExtension(config.ModelPath);
-                config.ModelName = AnsiConsole.Ask<string>("[cyan]Model name:[/]", inferredName);
+                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Model name:[/]", inferredName);
                 AnsiConsole.MarkupLine($"[green]✓ Model path: {config.ModelPath}[/]");
                 AnsiConsole.MarkupLine($"[green]✓ Model name: {config.ModelName}[/]");
                 break;
@@ -205,7 +205,7 @@ public class ConfigurationWizard
 
     private static double ConfigureTemperature(double currentTemperature)
     {
-        AnsiConsole.Write(new Rule("[yellow]3. Temperature (Creativity)[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]3. Temperature (Creativity)[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Temperature controls how predictable vs. creative the model's replies are.[/]");
@@ -219,7 +219,7 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
 
         var temperature = AnsiConsole.Prompt(
-            new TextPrompt<double>("[cyan]Temperature (0.0-1.0):[/]")
+            new TextPrompt<double>("[deepskyblue1]Temperature (0.0-1.0):[/]")
                 .DefaultValue(currentTemperature)
                 .ValidationErrorMessage("[red]Please enter a number between 0.0 and 1.0[/]")
                 .Validate(temp =>
@@ -237,7 +237,7 @@ public class ConfigurationWizard
 
     public static int ConfigureMaxTokens(int currentMaxTokens)
     {
-        AnsiConsole.Write(new Rule("[yellow]4. Maximum Response Tokens[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]4. Maximum Response Tokens[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]This is the upper bound on how long a single reply can be — counted in tokens[/]");
@@ -263,7 +263,7 @@ public class ConfigurationWizard
 
         var maxTokens = AnsiConsole.Prompt(
             new SelectionPrompt<int>()
-                .Title("[cyan]Max response tokens:[/]")
+                .Title("[deepskyblue1]Max response tokens:[/]")
                 .AddChoices(ordered)
                 .UseConverter(tokens =>
                 {
@@ -290,7 +290,7 @@ public class ConfigurationWizard
 
     private static int ConfigureRequestTimeout(int currentTimeout)
     {
-        AnsiConsole.Write(new Rule("[yellow]5. Per-Request Timeout[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]5. Per-Request Timeout[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]How long a single chat or plan step can run before it's cut off.[/]");
@@ -299,7 +299,7 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
 
         var timeout = AnsiConsole.Prompt(
-            new TextPrompt<int>($"[cyan]Timeout in minutes ({MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes}):[/]")
+            new TextPrompt<int>($"[deepskyblue1]Timeout in minutes ({MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes}):[/]")
                 .DefaultValue(currentTimeout)
                 .Validate(value =>
                 {
@@ -316,7 +316,7 @@ public class ConfigurationWizard
 
     private static List<string> ConfigureIgnoreDirectories(List<string> currentIgnoreDirectories)
     {
-        AnsiConsole.Write(new Rule("[yellow]6. Ignore Directories[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Ignore Directories[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Current ignore list:[/]");
@@ -326,13 +326,13 @@ public class ConfigurationWizard
         }
         AnsiConsole.WriteLine();
 
-        var modify = AnsiConsole.Confirm("[cyan]Modify ignore directories?[/]", false);
+        var modify = AnsiConsole.Confirm("[deepskyblue1]Modify ignore directories?[/]", false);
 
         if (modify)
         {
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[cyan]What would you like to do?[/]")
+                    .Title("[deepskyblue1]What would you like to do?[/]")
                     .AddChoices(new[]
                     {
                         "Add directory to ignore list",
@@ -344,7 +344,7 @@ public class ConfigurationWizard
             switch (choice)
             {
                 case "Add directory to ignore list":
-                    var newDir = AnsiConsole.Ask<string>("[cyan]Directory name to ignore:[/]");
+                    var newDir = AnsiConsole.Ask<string>("[deepskyblue1]Directory name to ignore:[/]");
                     if (!currentIgnoreDirectories.Contains(newDir))
                     {
                         currentIgnoreDirectories.Add(newDir);
@@ -369,10 +369,10 @@ public class ConfigurationWizard
 
     private static bool ConfirmSave()
     {
-        AnsiConsole.Write(new Rule("[yellow]6. Save Configuration[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Save Configuration[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        return AnsiConsole.Confirm("[cyan]Save this configuration?[/]", true);
+        return AnsiConsole.Confirm("[deepskyblue1]Save this configuration?[/]", true);
     }
 
     private static async Task<bool> TestOllamaConnection(string endpoint)
@@ -392,7 +392,7 @@ public class ConfigurationWizard
         var table = new Table()
         {
             Border = TableBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan)
+            BorderStyle = new Style(Color.DeepSkyBlue1)
         };
 
         table.AddColumn("[bold]Setting[/]");
