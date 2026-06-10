@@ -404,7 +404,7 @@ public static class OllamaSetupHelper
                 browserLaunched = true;
                 OpenInBrowser(url);
                 AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine($"[cyan]→ Opening sign-in page in your browser:[/] [link]{Spectre.Console.Markup.Escape(url)}[/]");
+                AnsiConsole.MarkupLine($"[deepskyblue1]→ Opening sign-in page in your browser:[/] [link]{Spectre.Console.Markup.Escape(url)}[/]");
                 AnsiConsole.MarkupLine("[dim]If your browser didn't open, copy the URL above and paste it manually.[/]");
                 AnsiConsole.WriteLine();
             }
