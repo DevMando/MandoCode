@@ -26,6 +26,11 @@ public class AIService
     private IChatCompletionService _chatService;
     private readonly ChatHistory _chatHistory;
     private readonly string _systemPrompt;
+
+    // The verbatim user message that opened the current chat turn (including @file/@folder
+    // expansions). Plan steps execute in isolated chat histories and need it for ground
+    // truth about target paths — see ChatStreamAsync and BuildStepContext.
+    private string? _currentTurnUserMessage;
     private MandoCodeConfig _config;
     private OllamaPromptExecutionSettings _settings;
     private readonly ProjectRootAccessor _projectRootAccessor;
@@ -305,6 +310,14 @@ public class AIService
     /// </summary>
     public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // Capture the verbatim request for plan-step context. If this turn proposes a
+        // plan, each step runs in its own fresh chat history and only sees the model's
+        // distilled `goal` — a lossy summary. Observed live: "@STarfox/ create a game…"
+        // became goal "create a game…", and every step wrote to the project root instead
+        // of STarfox/. The verbatim message (with App.razor's @file/@folder expansions)
+        // is the ground truth for target paths.
+        _currentTurnUserMessage = userMessage;
+
         // Add message under lock, then release before the long AI call
         await _historyLock.WaitAsync(cancellationToken);
         try { _chatHistory.AddUserMessage(userMessage); }
@@ -736,12 +749,38 @@ public class AIService
     /// Executes a single step of a task plan with function calling enabled.
     /// Uses previous step results as context for continuity.
     /// </summary>
-    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Builds the system-prompt context a plan step's fresh chat history is seeded with.
+    /// Includes the verbatim user request that produced the plan: steps otherwise only
+    /// see the model's distilled goal, which drops details like target folders (observed
+    /// live: "@STarfox/ create a game…" → goal "create a game…" → every step wrote to the
+    /// project root). Previous-step results are limited to the last 2 and the original
+    /// request is capped so step context stays small on local models.
+    /// </summary>
+    public static string BuildStepContext(string systemPrompt, string? originalUserRequest, List<string> previousResults)
     {
-        // Build context from previous step results — only include last 2 steps
-        // to keep token count manageable as plans grow
-        var contextBuilder = new System.Text.StringBuilder();
-        contextBuilder.AppendLine(_systemPrompt);
+        // Generous enough for a long message plus @folder listings; small enough that a
+        // pasted @file of several thousand lines can't flood every step's context. Paths
+        // and intent come first in a prompt, so head-truncation keeps what steps need.
+        const int MaxOriginalRequestChars = 4000;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(systemPrompt);
+
+        if (!string.IsNullOrWhiteSpace(originalUserRequest))
+        {
+            var request = originalUserRequest.Trim();
+            if (request.Length > MaxOriginalRequestChars)
+                request = request[..MaxOriginalRequestChars] + "\n…[truncated]";
+
+            sb.AppendLine("\n--- The User's Original Request ---");
+            sb.AppendLine(request);
+            sb.AppendLine("--- End of Original Request ---");
+            sb.AppendLine("This step is part of a plan fulfilling the request above. The request is " +
+                          "authoritative for WHERE work happens: target folders and file paths mentioned " +
+                          "in it (including attached @folder/@file references) override any unqualified " +
+                          "paths in the step instruction.");
+        }
 
         var recentResults = previousResults.Count > 2
             ? previousResults.Skip(previousResults.Count - 2).ToList()
@@ -749,13 +788,21 @@ public class AIService
 
         if (recentResults.Any())
         {
-            contextBuilder.AppendLine("\n--- Results from Previous Steps ---");
+            sb.AppendLine("\n--- Results from Previous Steps ---");
             foreach (var result in recentResults)
             {
-                contextBuilder.AppendLine(result);
+                sb.AppendLine(result);
             }
-            contextBuilder.AppendLine("--- End of Previous Steps ---\n");
+            sb.AppendLine("--- End of Previous Steps ---\n");
         }
+
+        return sb.ToString();
+    }
+
+    public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
+    {
+        var contextBuilder = new System.Text.StringBuilder(
+            BuildStepContext(_systemPrompt, _currentTurnUserMessage, previousResults));
 
         // Create a temporary chat history for this step
         var stepHistory = new ChatHistory(contextBuilder.ToString());
