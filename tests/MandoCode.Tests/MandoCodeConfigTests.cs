@@ -146,10 +146,13 @@ public class MandoCodeConfigTests
     }
 
     [Fact]
-    public void CreateDefault_UsesThreeMinuteStallWatchdog()
+    public void CreateDefault_UsesSevenMinuteStallWatchdog()
     {
+        // 420s, not 180: calls are non-streaming, so the watchdog gets no signal during
+        // generation — a long reply on a slow provider (~10 tok/s observed) legitimately
+        // runs past 3 minutes and was killed mid-generation at the old default.
         var config = MandoCodeConfig.CreateDefault();
-        Assert.Equal(180, config.ModelResponseTimeoutSeconds);
+        Assert.Equal(420, config.ModelResponseTimeoutSeconds);
     }
 
     [Theory]

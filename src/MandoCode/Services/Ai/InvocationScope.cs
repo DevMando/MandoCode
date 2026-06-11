@@ -153,6 +153,24 @@ public class InvocationScope : IDisposable
     }
 
     /// <summary>
+    /// Set when a plan executed at least one step to completion in this scope. The
+    /// filter's post-plan mutation gate then refuses filesystem-mutating calls for the
+    /// rest of the turn: the outer model never sees the steps run (each executes in its
+    /// own chat history), so it tends to treat the returned summary as "not started yet"
+    /// and redo the task — observed live overwriting a finished build under an
+    /// auto-approved session. Reads stay allowed; a fresh scope (next turn) resets this.
+    /// Distinct from <see cref="PlanAlreadyProcessed"/>, which is also set for rejected
+    /// plans — after a rejection the model must do the work directly, so mutations
+    /// must stay allowed there.
+    /// </summary>
+    public bool PlanWorkCompleted { get; private set; }
+
+    public void MarkPlanWorkCompleted()
+    {
+        lock (_lock) PlanWorkCompleted = true;
+    }
+
+    /// <summary>
     /// Set when the user chooses "Cancel plan" from a diff-approval prompt mid-step.
     /// Checked by <see cref="AIService.ExecutePlanStepAsync"/> after the step returns,
     /// so the plan terminates instead of continuing to the next step.
