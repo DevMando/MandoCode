@@ -158,6 +158,22 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         var scope = _currentScope.Value;
         if (scope != null)
         {
+            // Plan-cancellation circuit: the user picked "Cancel the plan" at an approval
+            // prompt earlier in this scope. ExecutePlanStepAsync only observes the flag
+            // AFTER the step's model call completes — but SK's auto-invoke loop keeps
+            // executing the response's remaining tool calls, each opening a fresh approval
+            // prompt (observed live: a 3-file step re-prompted per file after the first
+            // cancel). The "stop all further work" message to the model is a polite request
+            // it can ignore; this refusal is mechanical. Must stay FIRST among the circuits —
+            // cancellation trumps budget and dedup.
+            if (scope.PlanCancellationRequested)
+            {
+                var cancelMsg = "The user cancelled the plan. All further tool calls are refused. " +
+                                "Stop immediately — do not call tools, write files, or continue the work.";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, cancelMsg);
+                return;
+            }
+
             // Budget circuit: if cumulative tool results have filled ~100k tokens,
             // refuse further calls so we bail before the model's context window overflows.
             if (scope.BudgetExhausted)

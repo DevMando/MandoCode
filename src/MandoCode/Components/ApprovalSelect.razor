@@ -1,0 +1,78 @@
+@using Microsoft.AspNetCore.Components.Web
+@using Spectre.Console
+@using RazorConsole.Components
+
+@* Arrow-key selection menu rendered through the VDOM so RazorConsole's keyboard pump
+   is the ONLY console reader. Replaces Spectre's SelectionPrompt for approval menus:
+   Spectre's blocking ReadKey races the framework pump (KeyboardEventManager polls
+   KeyAvailable every 50ms and reads unconditionally), and arrow presses landing while
+   Spectre was mid-repaint were stolen and dropped — the "press an arrow twice" bug.
+
+   Structure deliberately mirrors RazorConsole's own Select.razor: one Columns>Markup
+   per option on EVERY render, with only attribute values varying via inline
+   conditionals. Swapping element shapes per row (if/else branches) breaks the VDOM
+   diff — observed live as the menu collapsing to a single cycling line. Render any
+   title/question imperatively to scrollback before showing this component, like the
+   wizard primitives do.
+
+   Palette matches the Spectre prompts this replaces: per-option colors with the
+   black-on-deepskyblue1 focus highlight. *@
+
+<div @onkeydown="HandleKeyDown">
+    <Rows>
+        @for (var i = 0; i < Options.Count; i++)
+        {
+            var option = Options[i];
+            var isFocused = i == _focusedIndex;
+            <Columns>
+                <Markup Content="@($"{(isFocused ? ">" : " ")} {option.Text}")"
+                        Foreground="@(isFocused ? Color.Black : option.Color)"
+                        Background="@(isFocused ? Color.DeepSkyBlue1 : Color.Default)" />
+            </Columns>
+        }
+    </Rows>
+</div>
+
+@code {
+    /// <summary>A selectable entry: display text plus its palette color.</summary>
+    public sealed record Option(string Text, Color Color);
+
+    [Parameter] public IReadOnlyList<Option> Options { get; set; } = Array.Empty<Option>();
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    private int _focusedIndex;
+
+    // Accept both naming conventions, mirroring RazorConsole's own Select component:
+    // the keyboard pump reports ConsoleKey names ("UpArrow"), web events use "ArrowUp".
+    private static bool IsUp(string key) =>
+        key.Equals("UpArrow", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("ArrowUp", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDown(string key) =>
+        key.Equals("DownArrow", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("ArrowDown", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCommit(string key) =>
+        key.Equals("Enter", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("Return", StringComparison.OrdinalIgnoreCase);
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (Options.Count == 0) return;
+
+        if (IsUp(e.Key))
+        {
+            _focusedIndex = (_focusedIndex - 1 + Options.Count) % Options.Count;
+            StateHasChanged();
+        }
+        else if (IsDown(e.Key))
+        {
+            _focusedIndex = (_focusedIndex + 1) % Options.Count;
+            StateHasChanged();
+        }
+        else if (IsCommit(e.Key))
+        {
+            await OnSubmit.InvokeAsync(Options[_focusedIndex].Text);
+        }
+    }
+}

@@ -388,7 +388,10 @@ public class FileSystemPlugin
                         }
                     }
                 }
-                catch { /* skip unreadable files */ }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    // Skip unreadable files — but only access failures; anything else should surface.
+                }
             }
 
             if (results.Count == 0)
@@ -515,7 +518,10 @@ public class FileSystemPlugin
                         }
                     }
                 }
-                catch { /* skip unreadable files */ }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    // Skip unreadable files — but only access failures; anything else should surface.
+                }
             }
 
             if (results.Count == 0)

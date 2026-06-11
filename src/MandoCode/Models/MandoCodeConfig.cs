@@ -409,6 +409,7 @@ public class MandoCodeConfig
         MaxRetryAttempts = Math.Clamp(MaxRetryAttempts, 0, 10);
         MarkdownRenderTimeoutSeconds = Math.Clamp(MarkdownRenderTimeoutSeconds, MinMarkdownRenderTimeoutSeconds, MaxMarkdownRenderTimeoutSeconds);
         ModelResponseTimeoutSeconds = Math.Clamp(ModelResponseTimeoutSeconds, MinModelResponseTimeoutSeconds, MaxModelResponseTimeoutSeconds);
+        RequestTimeoutMinutes = Math.Clamp(RequestTimeoutMinutes, MinRequestTimeoutMinutes, MaxRequestTimeoutMinutes);
         // 0 stays 0 ("leave Ollama's default alone"); anything else clamps to the valid band.
         if (ContextLength != 0)
             ContextLength = Math.Clamp(ContextLength, MinContextLength, MaxContextLength);

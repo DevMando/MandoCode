@@ -278,7 +278,9 @@ public sealed class OnboardingFlow
         => AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title($"[deepskyblue1]{title}[/]")
-                .HighlightStyle(new Style(foreground: Color.Green))
+                // App-standard selection treatment — same black-on-deepskyblue1 as the
+                // approval prompts and command autocomplete.
+                .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
                 .AddChoices(options));
 
     private static bool Confirm(string title, bool defaultYes)
