@@ -34,3 +34,5 @@ nupkgs/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+# Claude Code local settings (machine-specific paths)
+**/.claude/settings.local.json
