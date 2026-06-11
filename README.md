@@ -50,19 +50,25 @@ Prints your runtime version, Ollama status, models pulled, and cloud sign-in sta
 
 ### ⚠️ Local models: check your Ollama context window (the #1 gotcha)
 
+> **Using cloud models (`:cloud` tags)? Skip this section.** Cloud model context is managed on Ollama's servers and set to the model's maximum by default — nothing on your machine affects it, including the desktop app's slider.
+
 If you use **local models** and see responses cut off, the model "forgetting" earlier conversation, edits failing repeatedly on files it just wrote, or this message:
 
 > ⚠ Response was cut off because the model's CONTEXT WINDOW filled …
 
 …your Ollama **context window** is almost certainly too small. The context window is how much conversation + code the model can see at once — and **Ollama defaults it to ~4k tokens**, which an agentic session fills almost immediately. When it overflows, the oldest content (including the system prompt — the model's instructions!) is silently dropped.
 
-**If you use the Ollama desktop app** (the tray icon), the app's slider controls this — and it overrides everything else:
+**If you use the Ollama desktop app** (the tray icon), the app's **Settings → Context length** slider controls this — and it overrides everything else, including MandoCode's config:
 
 <p align="center">
   <img src="docs/images/ollama-context-slider.png" alt="Ollama desktop app — Settings → Context length slider" width="600">
 </p>
 
-Open Ollama **Settings → Context length** and drag it to **16k** (safe for most GPUs) or **32k** (8 GB+ VRAM). Bigger windows use more GPU memory (~0.5–1.5 GB per 8k depending on the model), so don't max it out "just in case" — if your tokens/sec craters after raising it, go down one notch.
+There's no universally right slider position — it's a trade between *how much the model can see* and *fitting in your GPU's memory* (every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model):
+
+- **Too low** (the 4k default): the symptoms above — the model's own instructions silently fall out of the window and it stops behaving.
+- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung.
+- **Starting points**: **16k** for most GPUs, **32k** with 8 GB+ VRAM. Only raise it if you're seeing the symptoms above; step back down a notch if generation slows badly after raising it.
 
 **If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
 
@@ -70,7 +76,20 @@ Open Ollama **Settings → Context length** and drag it to **16k** (safe for mos
 mandocode --config set contextLength 16384
 ```
 
-Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column) — cloud models are unaffected either way, since their context is managed on Ollama's servers. Run `/learn` inside MandoCode for a friendly explainer.
+Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside MandoCode for a friendly explainer.
+
+### ⚠️ All models: check your response cap (the #2 gotcha)
+
+The context window's evil twin — and unlike the slider above, this one applies to **every model, cloud included**. If the model **announces work and then just stops** — *"I'll create the game…"* and the turn ends with no plan, no files, and no error — your `maxTokens` is too low. It caps a *single reply* (`NumPredict`), and reasoning models spend output tokens thinking **before** they emit a tool call, so a low cap cuts them off before they ever act.
+
+Fresh installs default to 32k and never notice it. But if your config predates v0.11, or you once lowered `maxTokens` thinking it was the context window (they're different knobs — this caps what the model *says*, the context window caps what it *sees*), check it:
+
+```bash
+mandocode --config show                  # look at "Max Tokens"
+mandocode --config set maxTokens 32768
+```
+
+The telltale sign: token tracking shows output pinned at exactly your cap, turn after turn (e.g. `2k out` every time). Note that a running session keeps the config it loaded at startup — restart MandoCode (or use `/config set` in-app) for the change to take effect.
 
 ### Or build from source
 
@@ -314,7 +333,7 @@ Located at `~/.mandocode/config.json`
 | `modelName` | `minimax-m2.7:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
-| `maxTokens` | `4096` | Maximum response token length (`NumPredict` — output cap, not the context window) |
+| `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |
 | `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when MandoCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
 | `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
