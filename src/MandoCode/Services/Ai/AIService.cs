@@ -13,7 +13,6 @@ using MandoCode.Plugins;
 using ModelContextProtocol.Client;
 using System.Net;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace MandoCode.Services;
 
@@ -39,12 +38,7 @@ public class AIService
     private readonly McpApprovalGate _mcpApprovalGate;
     private readonly SpinnerService _spinner;
     private readonly SemaphoreSlim _historyLock = new(1, 1);
-
-    // Named event handlers stored so we can detach them when rebuilding the kernel
-    private Action<FunctionCall>? _filterInvokedHandler;
-    private Action<FunctionExecutionResult>? _filterCompletedHandler;
-    private Action? _filterStartedHandler;
-    private Action? _filterFinishedHandler;
+    private readonly FallbackFunctionCallExecutor _fallbackExecutor;
 
     /// <summary>
     /// Event raised when a function is about to be invoked.
@@ -125,6 +119,9 @@ public class AIService
         _mcpManager = mcpManager;
         _mcpApprovalGate = mcpApprovalGate;
         _spinner = spinner;
+        _fallbackExecutor = new FallbackFunctionCallExecutor(
+            call => OnFunctionInvoked?.Invoke(call),
+            result => OnFunctionCompleted?.Invoke(result));
         // Append shell-specific rules (cmd.exe vs bash) + the skill index so the model
         // knows which user-defined workflows are available for load_skill().
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
@@ -196,6 +193,7 @@ public class AIService
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_kernel), nameof(_chatService), nameof(_settings), nameof(_functionFilter))]
     private void BuildKernel()
     {
         _settings = new()
@@ -237,25 +235,17 @@ public class AIService
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
 
-        // Detach event handlers from old filter before creating a new one
-        if (_functionFilter != null)
-        {
-            if (_filterInvokedHandler != null) _functionFilter.OnFunctionInvoked -= _filterInvokedHandler;
-            if (_filterCompletedHandler != null) _functionFilter.OnFunctionCompleted -= _filterCompletedHandler;
-            if (_filterStartedHandler != null) _functionFilter.OnFunctionStarted -= _filterStartedHandler;
-            if (_filterFinishedHandler != null) _functionFilter.OnFunctionFinished -= _filterFinishedHandler;
-        }
-
-        // Set up function invocation filter for UI events, deduplication, and propose_plan interception
+        // Set up function invocation filter for UI events, deduplication, and propose_plan interception.
+        // Handlers on the PREVIOUS filter are deliberately left attached: a rebuild (e.g. /config set
+        // mid-session) can race a function still in flight on the old kernel, and that function's
+        // completion must still reach _completionTracker — detaching here would leak the pending count
+        // and pin the stall watchdog paused. The old filter only fires for calls already routed through
+        // the discarded kernel, so nothing fires twice; it becomes collectible once those finish.
         _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker, _planHandoff, _config.ToolResultCharBudget);
-        _filterInvokedHandler = call => OnFunctionInvoked?.Invoke(call);
-        _filterCompletedHandler = result => OnFunctionCompleted?.Invoke(result);
-        _filterStartedHandler = () => _completionTracker.RegisterStart();
-        _filterFinishedHandler = () => _completionTracker.RegisterCompletion();
-        _functionFilter.OnFunctionInvoked += _filterInvokedHandler;
-        _functionFilter.OnFunctionCompleted += _filterCompletedHandler;
-        _functionFilter.OnFunctionStarted += _filterStartedHandler;
-        _functionFilter.OnFunctionFinished += _filterFinishedHandler;
+        _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
+        _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
+        _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
+        _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
 
         // Wire diff approval callbacks through to the filter
         if (_onWriteApprovalRequested != null)
@@ -288,7 +278,7 @@ public class AIService
             var modelName = _config.GetEffectiveModelName();
 
             // Check if model exists and get its info
-            var response = await client.PostAsync(
+            using var response = await client.PostAsync(
                 OllamaSetupHelper.BuildUrl(_config.OllamaEndpoint, "api/show"),
                 new StringContent(JsonSerializer.Serialize(new { name = modelName }), System.Text.Encoding.UTF8, "application/json")
             );
@@ -344,47 +334,26 @@ public class AIService
         string response;
         bool needsContinuation = false;
 
-        // Stall watchdog token, declared at method scope so the catch can distinguish a stall
-        // (the model went silent) from the generous per-turn request-timeout ceiling.
-        using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
-
         try
         {
             using var scope = _functionFilter.BeginScope();
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token, responseCts.Token);
-            // pauseDuringPlan: this outer call can run a whole plan (propose_plan). Pause BOTH outer
-            // timers (the stall watchdog and the request-timeout ceiling) for the plan's duration so
-            // neither can cancel a step and surface as a bogus "Cancelled by user." Each step has its
-            // own watchdog + request timeout, so steps stay bounded.
-            using var watchdog = AttachStallWatchdog(
-                responseCts,
+
+            // pauseDuringPlan: this outer call can run a whole plan (propose_plan). Both outer
+            // timers (the stall watchdog and the request-timeout ceiling) pause for the plan's
+            // duration so neither can cancel a step and surface as a bogus "Cancelled by user."
+            // Each step has its own watchdog + request timeout, so steps stay bounded.
+            var result = await ExecuteModelCallAsync(
+                _chatHistory,
+                _settings,
+                retryOperationName: "ChatStreamAsync",
+                tokenLabel: "Chat",
+                spinnerMessage: "Thinking… (Esc to cancel)",
                 pauseDuringPlan: true,
-                requestCts: timeoutCts,
-                requestTimeout: TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-
-            // Heartbeat over the model-generation stretch: keep a ticking spinner alive (the
-            // existing one is stopped between tool events) and advertise the escape hatch so a
-            // slow/stalled direct-chat turn never looks dead.
-            _spinner.Start("Thinking… (Esc to cancel)");
-
-            var result = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    _chatHistory,
-                    _settings,
-                    _kernel,
-                    linkedCts.Token
-                ),
-                _config.MaxRetryAttempts,
-                "ChatStreamAsync",
-                linkedCts.Token
-            );
-
-            ExtractAndRecordTokens(result, "Chat");
+                cancellationToken);
 
             var rawResponse = result.Content ?? "No response from AI.";
             response = _config.EnableFallbackFunctionParsing
-                ? await ProcessTextFunctionCallsAsync(rawResponse)
+                ? await _fallbackExecutor.ProcessAsync(rawResponse, _kernel, _config.GetEffectiveModelName())
                 : rawResponse;
 
             if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
@@ -427,7 +396,7 @@ public class AIService
         {
             response = "Request cancelled.";
         }
-        catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
+        catch (ModelStallException)
         {
             // Stall watchdog fired — the model went quiet (no tokens, no tool activity) for longer
             // than the per-call budget. Usually a local model stalling as context grows.
@@ -435,7 +404,7 @@ public class AIService
                        "This usually means a local model stalled as context grew. Try /clear to trim history, a smaller request, " +
                        $"or raise the watchdog: /config set modelResponseTimeout 300.";
         }
-        catch (OperationCanceledException)
+        catch (ModelCallTimeoutException)
         {
             response = "Error: Request timed out. The model took too long to respond.\n\n" +
                       "Try breaking your request into smaller parts, or use a faster model.";
@@ -527,6 +496,83 @@ public class AIService
                applyLine + "\n" +
                "- /clear frees space right now by trimming history";
     }
+
+    /// <summary>
+    /// Shared model-call scaffolding for direct chat turns and plan steps: the per-turn
+    /// request-timeout ceiling, the stall watchdog, the heartbeat spinner, the retry policy,
+    /// and token recording. Cancellation is classified here — while the token sources are
+    /// still in scope — into typed exceptions so each caller phrases its own user-facing
+    /// message: <see cref="ModelStallException"/> when the watchdog fired,
+    /// <see cref="ModelCallTimeoutException"/> when the request ceiling was hit. A
+    /// user-initiated cancellation rethrows the original <see cref="OperationCanceledException"/>.
+    /// All other exceptions (context overflow, HTTP failures) propagate unwrapped.
+    /// </summary>
+    private async Task<ChatMessageContent> ExecuteModelCallAsync(
+        ChatHistory history,
+        OllamaPromptExecutionSettings settings,
+        string retryOperationName,
+        string tokenLabel,
+        string spinnerMessage,
+        bool pauseDuringPlan,
+        CancellationToken cancellationToken)
+    {
+        // Two timeouts: requestCts is the generous per-turn ceiling (RequestTimeoutMinutes);
+        // responseCts is the stall watchdog (ModelResponseTimeoutSeconds) — a much shorter
+        // bound on a single model-silent stretch so a local model that stops streaming once
+        // context grows recovers in minutes, not the full ceiling.
+        using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+        using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCts.Token, responseCts.Token);
+
+        // The request ceiling only needs plan-pausing on the outer chat turn (the whole plan
+        // runs inside that single model call); plan steps keep their own bounded ceiling.
+        using var watchdog = AttachStallWatchdog(
+            responseCts,
+            pauseDuringPlan,
+            requestCts: pauseDuringPlan ? requestCts : null,
+            requestTimeout: TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+
+        // Heartbeat over the model-generation stretch: keep a ticking spinner alive (the
+        // existing one is stopped between tool events) and advertise the escape hatch so a
+        // slow/stalled turn never looks dead.
+        _spinner.Start(spinnerMessage);
+
+        try
+        {
+            var result = await RetryPolicy.ExecuteWithRetryAsync(
+                async () => await _chatService.GetChatMessageContentAsync(
+                    history,
+                    settings,
+                    _kernel,
+                    linkedCts.Token
+                ),
+                _config.MaxRetryAttempts,
+                retryOperationName,
+                linkedCts.Token
+            );
+
+            ExtractAndRecordTokens(result, tokenLabel);
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
+        {
+            throw new ModelStallException();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new ModelCallTimeoutException();
+        }
+    }
+
+    /// <summary>The stall watchdog fired: the model went silent (no tokens, no tool activity) past the per-call budget.</summary>
+    private sealed class ModelStallException : Exception;
+
+    /// <summary>The per-turn request-timeout ceiling (RequestTimeoutMinutes) was hit.</summary>
+    private sealed class ModelCallTimeoutException : Exception;
 
     /// <summary>
     /// Attaches a stall watchdog to <paramref name="responseCts"/>: it fires after
@@ -643,9 +689,8 @@ public class AIService
         // 401 surfaces here too when the plan-step path rethrows as a generic Exception.
         if (ex is HttpRequestException http && IsUnauthorizedError(http))
             return FormatHttpFailure(http);
-        if (ex.Message != null
-            && (ex.Message.Contains("401")
-                || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)))
+        if (ex.Message.Contains("401")
+            || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase))
         {
             // Brief — App.razor auto-launches the sign-in walkthrough right after this.
             return "<red>Error: Ollama returned 401 Unauthorized.</red>\n\n" +
@@ -739,55 +784,30 @@ public class AIService
             // Each continuation gets a fresh scope so the budget and dedup-set reset.
             using (var scope = _functionFilter.BeginScope())
             {
-                // Two timeouts, declared outside the try so the catch can tell them apart:
-                //   • requestCts  — the generous per-turn ceiling (RequestTimeoutMinutes).
-                //   • responseCts — the stall watchdog (ModelResponseTimeoutSeconds): a much
-                //     shorter bound on a single model call so a local model that stops
-                //     streaming once context grows recovers in minutes, not the full ceiling.
-                using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-                using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCts.Token, responseCts.Token);
-
-                // Stall watchdog: pauses while any tool/approval is in flight, so a long tool call
-                // or a user deliberating at an approval prompt never trips it — it only fires on a
-                // genuine model-silent stretch. Detached when the model call returns.
-                using var watchdog = AttachStallWatchdog(responseCts);
-
                 try
                 {
-                    // Heartbeat: keep a live, ticking spinner over the model-generation stretch
-                    // (which has no function events to drive the spinner) so a slow/stalled step
-                    // never looks dead, and advertise the now-working escape hatch. Function-event
-                    // handlers replace this with per-tool messages during tool calls.
-                    _spinner.Start($"Working on {stepLabel} — press Esc to cancel");
-
-                    var result = await RetryPolicy.ExecuteWithRetryAsync(
-                        async () => await _chatService.GetChatMessageContentAsync(
-                            stepHistory,
-                            stepSettings,
-                            _kernel,
-                            linkedCts.Token
-                        ),
-                        _config.MaxRetryAttempts,
-                        "ExecutePlanStepAsync",
-                        linkedCts.Token
-                    );
-
-                    ExtractAndRecordTokens(result, stepLabel);
+                    var result = await ExecuteModelCallAsync(
+                        stepHistory,
+                        stepSettings,
+                        retryOperationName: "ExecutePlanStepAsync",
+                        tokenLabel: stepLabel,
+                        spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
+                        pauseDuringPlan: false,
+                        cancellationToken);
 
                     var response = result.Content ?? "Step completed (no response content).";
 
                     await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
                     processedResponse = _config.EnableFallbackFunctionParsing
-                        ? await ProcessTextFunctionCallsAsync(response)
+                        ? await _fallbackExecutor.ProcessAsync(response, _kernel, _config.GetEffectiveModelName())
                         : response;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw new OperationCanceledException("Step cancelled.", cancellationToken);
                 }
-                catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
+                catch (ModelStallException)
                 {
                     // Stall watchdog fired — the model went quiet for longer than the per-call
                     // budget. Almost always a local model stalling as context grows.
@@ -796,7 +816,7 @@ public class AIService
                         "This usually means a local model stalled as context grew. Try a smaller step, /clear to trim history, " +
                         "or raise the watchdog: /config set modelResponseTimeout 300.");
                 }
-                catch (OperationCanceledException)
+                catch (ModelCallTimeoutException)
                 {
                     throw new Exception("Step execution timed out. Try breaking this step into smaller parts.");
                 }
@@ -991,459 +1011,6 @@ public class AIService
             _chatHistory.AddUserMessage(lastUserContent);
         }
         finally { _historyLock.Release(); }
-    }
-
-    /// <summary>
-    /// Processes text responses to detect and execute function calls that were output as text.
-    /// Some local models (especially smaller ones) output function calls as JSON text instead of proper tool calls.
-    /// Models known to need this fallback: smaller qwen variants, some mistral variants.
-    /// </summary>
-    private async Task<string> ProcessTextFunctionCallsAsync(string response)
-    {
-        // Extract JSON objects that look like function calls
-        var functionCalls = ExtractFunctionCallsFromText(response);
-
-        if (functionCalls.Count == 0)
-        {
-            return response;
-        }
-
-        // Log fallback invocation for debugging
-        System.Diagnostics.Debug.WriteLine(
-            $"[FallbackParsing] Detected {functionCalls.Count} text-based function call(s) in response. Model: {_config.GetEffectiveModelName()}");
-
-        var resultBuilder = new System.Text.StringBuilder();
-        var functionsExecuted = new List<string>();
-
-        foreach (var (functionName, parametersJson) in functionCalls)
-        {
-            try
-            {
-                // Normalize function name (remove FileSystem_ prefix if present)
-                var normalizedName = functionName.Replace("FileSystem_", "").Replace("FileSystem.", "");
-
-                // Map common function name variations
-                normalizedName = NormalizeFunctionName(normalizedName);
-
-                System.Diagnostics.Debug.WriteLine(
-                    $"[FallbackParsing] Invoking function: {normalizedName} (original: {functionName})");
-
-                // Try to find and invoke the function
-                var functionResult = await InvokeFunctionByNameAsync(normalizedName, parametersJson);
-
-                if (functionResult != null)
-                {
-                    functionsExecuted.Add($"{normalizedName}: {functionResult}");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine(
-                    $"[FallbackParsing] Error executing function {functionName}: {ex.Message}");
-                functionsExecuted.Add($"Error executing function: {ex.Message}");
-            }
-        }
-
-        if (functionsExecuted.Any())
-        {
-            // Clean up the response by removing JSON function call text
-            var cleanedResponse = response;
-
-            // Remove JSON objects that look like function calls
-            cleanedResponse = RemoveFunctionCallJson(cleanedResponse);
-
-            // Remove common preamble text
-            cleanedResponse = Regex.Replace(cleanedResponse, @"Here is the JSON for the function call:?\s*", "", RegexOptions.IgnoreCase);
-            cleanedResponse = Regex.Replace(cleanedResponse, @"I will (call|use) the [`']?[\w_]+[`']? function[^.]*\.\s*", "", RegexOptions.IgnoreCase);
-            cleanedResponse = Regex.Replace(cleanedResponse, @"To \w+ the \w+[^,]*,\s*I will use the [`']?[\w_]+[`']? function[^.]*\.\s*", "", RegexOptions.IgnoreCase);
-            cleanedResponse = cleanedResponse.Trim();
-
-            if (!string.IsNullOrWhiteSpace(cleanedResponse))
-            {
-                resultBuilder.AppendLine(cleanedResponse);
-                resultBuilder.AppendLine();
-            }
-
-            resultBuilder.AppendLine("--- Function Results ---");
-            foreach (var result in functionsExecuted)
-            {
-                resultBuilder.AppendLine(result);
-            }
-
-            return resultBuilder.ToString();
-        }
-
-        return response;
-    }
-
-    /// <summary>
-    /// Extracts function calls from text by finding JSON objects with "name" and "parameters" fields.
-    /// Handles nested braces properly and supports multiple JSON formats:
-    /// - {"name": "func", "parameters": {...}}
-    /// - {"function_call": {"name": "func", "arguments": {...}}}
-    /// - {"tool_calls": [{"function": {"name": "func", "arguments": {...}}}]}
-    /// </summary>
-    private List<(string FunctionName, string ParametersJson)> ExtractFunctionCallsFromText(string text)
-    {
-        var results = new List<(string, string)>();
-
-        // Pattern 1: Standard {"name": "func", "parameters": {...}}
-        var namePattern = @"\{\s*""name""\s*:\s*""([^""]+)""\s*,\s*""(?:parameters|arguments)""\s*:\s*";
-        var matches = Regex.Matches(text, namePattern, RegexOptions.IgnoreCase);
-
-        foreach (Match match in matches)
-        {
-            var functionName = match.Groups[1].Value;
-            var startIndex = match.Index + match.Length;
-
-            // Extract the parameters JSON by counting braces
-            var parametersJson = ExtractJsonObject(text, startIndex);
-
-            if (!string.IsNullOrEmpty(parametersJson))
-            {
-                results.Add((functionName, parametersJson));
-            }
-        }
-
-        // Pattern 2: {"function_call": {"name": "func", "arguments": {...}}}
-        if (results.Count == 0)
-        {
-            var fcPattern = @"""function_call""\s*:\s*\{\s*""name""\s*:\s*""([^""]+)""\s*,\s*""arguments""\s*:\s*";
-            matches = Regex.Matches(text, fcPattern, RegexOptions.IgnoreCase);
-
-            foreach (Match match in matches)
-            {
-                var functionName = match.Groups[1].Value;
-                var startIndex = match.Index + match.Length;
-                var parametersJson = ExtractJsonObject(text, startIndex);
-
-                if (!string.IsNullOrEmpty(parametersJson))
-                {
-                    results.Add((functionName, parametersJson));
-                }
-            }
-        }
-
-        // Pattern 3: {"tool_calls": [{"function": {"name": "func", "arguments": {...}}}]}
-        if (results.Count == 0)
-        {
-            var tcPattern = @"""function""\s*:\s*\{\s*""name""\s*:\s*""([^""]+)""\s*,\s*""arguments""\s*:\s*";
-            matches = Regex.Matches(text, tcPattern, RegexOptions.IgnoreCase);
-
-            foreach (Match match in matches)
-            {
-                var functionName = match.Groups[1].Value;
-                var startIndex = match.Index + match.Length;
-
-                // Arguments might be a string (escaped JSON) or an object
-                var argsStart = text.IndexOf('"', startIndex);
-                if (argsStart == startIndex || argsStart == startIndex + 1)
-                {
-                    // Arguments is a string, need to extract and unescape
-                    var argsEnd = FindStringEnd(text, argsStart);
-                    if (argsEnd > argsStart)
-                    {
-                        var argsStr = text.Substring(argsStart + 1, argsEnd - argsStart - 1);
-                        // Unescape the JSON string
-                        argsStr = argsStr.Replace("\\\"", "\"").Replace("\\\\", "\\");
-                        results.Add((functionName, argsStr));
-                    }
-                }
-                else
-                {
-                    var parametersJson = ExtractJsonObject(text, startIndex);
-                    if (!string.IsNullOrEmpty(parametersJson))
-                    {
-                        results.Add((functionName, parametersJson));
-                    }
-                }
-            }
-        }
-
-        return results;
-    }
-
-    /// <summary>
-    /// Finds the end of a JSON string starting at the given position.
-    /// </summary>
-    private static int FindStringEnd(string text, int startIndex)
-    {
-        if (startIndex >= text.Length || text[startIndex] != '"')
-            return -1;
-
-        for (int i = startIndex + 1; i < text.Length; i++)
-        {
-            if (text[i] == '\\' && i + 1 < text.Length)
-            {
-                i++; // Skip escaped character
-                continue;
-            }
-            if (text[i] == '"')
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /// <summary>
-    /// Extracts a JSON object starting at the given index by counting brace depth.
-    /// </summary>
-    /// <summary>
-    /// Finds the bounds (start, end exclusive) of a JSON object starting at the given index.
-    /// Handles nested braces and string escaping. Returns null if no valid object found.
-    /// </summary>
-    private static (int Start, int End)? FindJsonObjectBounds(string text, int startIndex)
-    {
-        if (startIndex >= text.Length || text[startIndex] != '{')
-            return null;
-
-        var depth = 0;
-        var inString = false;
-        var escapeNext = false;
-
-        for (int i = startIndex; i < text.Length; i++)
-        {
-            var c = text[i];
-
-            if (escapeNext) { escapeNext = false; continue; }
-            if (c == '\\' && inString) { escapeNext = true; continue; }
-            if (c == '"') { inString = !inString; continue; }
-
-            if (!inString)
-            {
-                if (c == '{') depth++;
-                else if (c == '}')
-                {
-                    depth--;
-                    if (depth == 0)
-                        return (startIndex, i + 1);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private string ExtractJsonObject(string text, int startIndex)
-    {
-        var bounds = FindJsonObjectBounds(text, startIndex);
-        return bounds.HasValue ? text[bounds.Value.Start..bounds.Value.End] : string.Empty;
-    }
-
-    /// <summary>
-    /// Removes function call JSON from the response text.
-    /// </summary>
-    private string RemoveFunctionCallJson(string text)
-    {
-        var result = text;
-        var namePattern = @"\{\s*""name""\s*:\s*""[^""]+""";
-        var matches = Regex.Matches(text, namePattern);
-
-        var jsonRanges = new List<(int Start, int End)>();
-
-        foreach (Match match in matches)
-        {
-            var bounds = FindJsonObjectBounds(text, match.Index);
-            if (bounds.HasValue)
-            {
-                jsonRanges.Add(bounds.Value);
-            }
-        }
-
-        // Remove ranges in reverse order to maintain indices
-        foreach (var (start, end) in jsonRanges.OrderByDescending(r => r.Start))
-        {
-            result = result.Remove(start, end - start);
-        }
-
-        return result;
-    }
-
-    // Alias dictionary for common alternative function names
-    private static readonly Dictionary<string, string> FunctionAliases = new(StringComparer.OrdinalIgnoreCase)
-    {
-        // Common short aliases
-        { "mkdir", "create_folder" },
-        { "make_directory", "create_folder" },
-        { "create_directory", "create_folder" },
-        { "read_file", "read_file_contents" },
-        { "remove_file", "delete_file" },
-        { "rm", "delete_file" },
-        { "unlink", "delete_file" },
-        { "list_files", "list_files_match_glob_pattern" },
-        { "list_files_glob", "list_files_match_glob_pattern" },
-        { "list_project_files", "list_all_project_files" },
-        { "search_in_files", "search_text_in_files" },
-        { "find_in_files", "search_text_in_files" },
-    };
-
-    /// <summary>
-    /// Normalizes function names to match the actual plugin function names.
-    /// Uses convention-based conversion (PascalCase/camelCase to snake_case) and alias lookup.
-    /// </summary>
-    private string NormalizeFunctionName(string functionName)
-    {
-        // First check aliases for common alternative names
-        if (FunctionAliases.TryGetValue(functionName, out var aliasedName))
-        {
-            return aliasedName;
-        }
-
-        // Convert to snake_case if it appears to be PascalCase or camelCase
-        var snakeCased = ToSnakeCase(functionName);
-
-        // Check aliases again with the converted name
-        if (FunctionAliases.TryGetValue(snakeCased, out aliasedName))
-        {
-            return aliasedName;
-        }
-
-        return snakeCased;
-    }
-
-    /// <summary>
-    /// Converts PascalCase or camelCase to snake_case.
-    /// </summary>
-    private static string ToSnakeCase(string input)
-    {
-        if (string.IsNullOrEmpty(input))
-            return input;
-
-        // If already snake_case (contains underscore), just lowercase it
-        if (input.Contains('_'))
-            return input.ToLowerInvariant();
-
-        // Convert PascalCase/camelCase to snake_case
-        var result = new System.Text.StringBuilder();
-        for (int i = 0; i < input.Length; i++)
-        {
-            var c = input[i];
-            if (char.IsUpper(c))
-            {
-                // Add underscore before uppercase letters (except at start)
-                if (i > 0)
-                    result.Append('_');
-                result.Append(char.ToLowerInvariant(c));
-            }
-            else
-            {
-                result.Append(c);
-            }
-        }
-
-        return result.ToString();
-    }
-
-    /// <summary>
-    /// Invokes a FileSystem plugin function by name with JSON parameters.
-    /// </summary>
-    private async Task<string?> InvokeFunctionByNameAsync(string functionName, string parametersJson)
-    {
-        try
-        {
-            // Get the FileSystem plugin
-            if (!_kernel.Plugins.TryGetPlugin("FileSystem", out var plugin))
-            {
-                return null;
-            }
-
-            // Find the function
-            if (!plugin.TryGetFunction(functionName, out var function))
-            {
-                // Try case-insensitive search
-                function = plugin.FirstOrDefault(f =>
-                    f.Name.Equals(functionName, StringComparison.OrdinalIgnoreCase));
-
-                if (function == null)
-                {
-                    return $"Function '{functionName}' not found in FileSystem plugin";
-                }
-            }
-
-            // Parse parameters
-            var parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(parametersJson);
-            if (parameters == null)
-            {
-                return "Failed to parse function parameters";
-            }
-
-            // Build kernel arguments
-            var arguments = new KernelArguments();
-            foreach (var param in parameters)
-            {
-                // Convert parameter name to match function parameter names
-                var paramName = NormalizeParameterName(param.Key);
-                var paramValue = param.Value.ValueKind == JsonValueKind.String
-                    ? param.Value.GetString()
-                    : param.Value.ToString();
-
-                arguments[paramName] = paramValue;
-            }
-
-            // Raise function invoked event
-            OnFunctionInvoked?.Invoke(new FunctionCall
-            {
-                FunctionName = functionName,
-                Description = $"Executing {functionName} (fallback)",
-                Arguments = parameters.ToDictionary(p => p.Key, p => (object?)p.Value.ToString())
-            });
-
-            // Invoke the function
-            var result = await function.InvokeAsync(_kernel, arguments);
-            var resultString = result.GetValue<string>() ?? result.ToString() ?? "Function completed";
-
-            // Raise function completed event
-            OnFunctionCompleted?.Invoke(new FunctionExecutionResult
-            {
-                FunctionName = functionName,
-                Result = resultString.Length > 200 ? resultString[..200] + "..." : resultString,
-                Success = true
-            });
-
-            return resultString;
-        }
-        catch (Exception ex)
-        {
-            OnFunctionCompleted?.Invoke(new FunctionExecutionResult
-            {
-                FunctionName = functionName,
-                Result = ex.Message,
-                Success = false
-            });
-
-            return $"Error: {ex.Message}";
-        }
-    }
-
-    // Static parameter name mappings to avoid allocation per call
-    private static readonly Dictionary<string, string> ParamMappings =
-        new(StringComparer.OrdinalIgnoreCase)
-    {
-        { "pattern", "pattern" },
-        { "glob_pattern", "pattern" },
-        { "globPattern", "pattern" },
-        { "relativePath", "relativePath" },
-        { "relative_path", "relativePath" },
-        { "path", "relativePath" },
-        { "filePath", "relativePath" },
-        { "file_path", "relativePath" },
-        { "content", "content" },
-        { "file_content", "content" },
-        { "fileContent", "content" },
-        { "searchPattern", "searchPattern" },
-        { "search_pattern", "searchPattern" },
-        { "query", "searchPattern" },
-    };
-
-    /// <summary>
-    /// Normalizes parameter names to match function parameter names.
-    /// </summary>
-    private static string NormalizeParameterName(string paramName)
-    {
-        return ParamMappings.TryGetValue(paramName, out var normalizedName)
-            ? normalizedName
-            : paramName;
     }
 
     /// <summary>

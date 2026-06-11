@@ -251,24 +251,22 @@ public class MusicPlayerService : IDisposable
 
     private void StopInternal()
     {
-        try
-        {
-            _waveOut?.Stop();
-            _waveOut?.Dispose();
-            _loopStream?.Dispose();
-            _volumeChannel?.Dispose();
-            _mp3Reader?.Dispose();
-            _resourceStream?.Dispose();
-        }
-        catch { /* Swallow disposal errors */ }
-        finally
-        {
-            _waveOut = null;
-            _loopStream = null;
-            _volumeChannel = null;
-            _mp3Reader = null;
-            _resourceStream = null;
-        }
+        // Each teardown swallows its own errors so one failing Dispose (NAudio can throw
+        // if the device vanished mid-playback) doesn't skip the rest of the chain.
+        static void Quietly(Action action) { try { action(); } catch { /* swallow disposal errors */ } }
+
+        Quietly(() => _waveOut?.Stop());
+        Quietly(() => _waveOut?.Dispose());
+        Quietly(() => _loopStream?.Dispose());
+        Quietly(() => _volumeChannel?.Dispose());
+        Quietly(() => _mp3Reader?.Dispose());
+        Quietly(() => _resourceStream?.Dispose());
+
+        _waveOut = null;
+        _loopStream = null;
+        _volumeChannel = null;
+        _mp3Reader = null;
+        _resourceStream = null;
     }
 
     /// <summary>

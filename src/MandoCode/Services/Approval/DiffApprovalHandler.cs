@@ -44,8 +44,11 @@ public class DiffApprovalHandler
     private const string ApproveNoAskWriteLabel = "[green]Approve - okay to write & modify files don't ask me again[/]";
     private const string ApproveNoAskRunLabel = "[green]Approve - okay to run commands don't ask me again[/]";
     private const string ApproveNoAskDeleteLabel = "[green]Approve - okay to write, modify & delete files don't ask me again[/]";
-    private const string DenyLabel = "[red]Deny[/]";
-    private const string ProvideInstructionsLabel = "[mediumpurple1]Provide new instructions[/]";
+    // Deny and Provide-new-instructions share the warm gold accent (rgb(255,200,80)) used
+    // for files in the autocomplete panel and the submitted-prompt echo — the app's second
+    // accent color. Red stays reserved for destructive/irreversible actions (Cancel the plan).
+    private const string DenyLabel = "[rgb(255,200,80)]Deny[/]";
+    private const string ProvideInstructionsLabel = "[rgb(255,200,80)]Provide new instructions[/]";
     private const string CancelPlanLabel = "[red]Cancel the plan[/]";
 
     private string FileLink(string relativePath) =>
@@ -109,7 +112,9 @@ public class DiffApprovalHandler
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[deepskyblue1]Apply these changes?[/]")
-                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    // Same black-on-deepskyblue1 treatment as the selected row in the
+                    // command autocomplete panel, so selection reads the same everywhere.
+                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
                     .AddChoices(choices)
             );
 
@@ -217,7 +222,9 @@ public class DiffApprovalHandler
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[deepskyblue1]Run this command?[/]")
-                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    // Same black-on-deepskyblue1 treatment as the selected row in the
+                    // command autocomplete panel, so selection reads the same everywhere.
+                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
                     .AddChoices(cmdChoices)
             );
 
@@ -346,7 +353,9 @@ public class DiffApprovalHandler
             var approvalChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[deepskyblue1]Delete this file?[/]")
-                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    // Same black-on-deepskyblue1 treatment as the selected row in the
+                    // command autocomplete panel, so selection reads the same everywhere.
+                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
                     .AddChoices(delChoices)
             );
 
@@ -483,7 +492,9 @@ public class DiffApprovalHandler
             choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[deepskyblue1]Run this MCP tool?[/]")
-                    .HighlightStyle(new Style(decoration: Decoration.Invert))
+                    // Same black-on-deepskyblue1 treatment as the selected row in the
+                    // command autocomplete panel, so selection reads the same everywhere.
+                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
                     .AddChoices(mcpChoices)
             );
         }

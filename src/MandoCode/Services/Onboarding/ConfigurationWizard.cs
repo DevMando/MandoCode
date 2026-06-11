@@ -9,6 +9,10 @@ namespace MandoCode.Services;
 /// </summary>
 public class ConfigurationWizard
 {
+    // App-standard selection treatment — same black-on-deepskyblue1 as the approval
+    // prompts and command autocomplete, so selection reads the same everywhere.
+    private static readonly Style SelectionHighlight = new(foreground: Color.Black, background: Color.DeepSkyBlue1);
+
     /// <summary>
     /// Runs the interactive configuration wizard.
     /// </summary>
@@ -146,6 +150,7 @@ public class ConfigurationWizard
         var modelChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[deepskyblue1]How would you like to configure your model?[/]")
+                .HighlightStyle(SelectionHighlight)
                 .AddChoices(new[]
                 {
                     "Select from available Ollama models",
@@ -164,6 +169,7 @@ public class ConfigurationWizard
                     var selectedModel = AnsiConsole.Prompt(
                         new SelectionPrompt<string>()
                             .Title("[deepskyblue1]Select a model:[/]")
+                            .HighlightStyle(SelectionHighlight)
                             .PageSize(10)
                             .AddChoices(availableModels)
                     );
@@ -264,6 +270,7 @@ public class ConfigurationWizard
         var maxTokens = AnsiConsole.Prompt(
             new SelectionPrompt<int>()
                 .Title("[deepskyblue1]Max response tokens:[/]")
+                .HighlightStyle(SelectionHighlight)
                 .AddChoices(ordered)
                 .UseConverter(tokens =>
                 {
@@ -333,6 +340,7 @@ public class ConfigurationWizard
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[deepskyblue1]What would you like to do?[/]")
+                    .HighlightStyle(SelectionHighlight)
                     .AddChoices(new[]
                     {
                         "Add directory to ignore list",

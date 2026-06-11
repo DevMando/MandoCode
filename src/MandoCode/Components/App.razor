@@ -95,6 +95,15 @@
             Expand="true" />
 }
 
+@* Plan-approval select — VDOM replacement for the Spectre SelectionPrompt so arrow keys
+   aren't stolen by the framework's keyboard pump (see ApprovalSelect.razor). Bridged to
+   the awaiting handler with a TCS, same pattern as the wizard primitives above. *@
+@if (_planSelectActive)
+{
+    <ApprovalSelect Options="@_planSelectOptions"
+                    OnSubmit="HandlePlanSelectSubmit" />
+}
+
 @code {
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
@@ -472,6 +481,7 @@
         var picked = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[deepskyblue1]Select a model:[/]")
+                .HighlightStyle(SelectionHighlight)
                 .AddChoices(labeled));
         var modelTag = picked.Split(' ')[0];
 
@@ -1753,6 +1763,69 @@
     /// Shows the approval UI, runs execution if approved, and returns a summary
     /// string that the model will see as the tool result.
     /// </summary>
+    // Plain labels — ApprovalSelect carries the palette (green = proceed, warm gold =
+    // redirect/stop), so these stay markup-free for clean comparisons and scrollback echo.
+    private const string ExecutePlanLabel = "Execute plan";
+    private const string RejectPlanLabel = "Reject (answer without a plan)";
+    private const string CancelRequestLabel = "Cancel request";
+
+    // App-standard selection treatment for the remaining Spectre prompts — same
+    // black-on-deepskyblue1 as ApprovalSelect, DiffApprovalHandler, and the command
+    // autocomplete, so selection reads the same everywhere.
+    private static readonly Style SelectionHighlight = new(foreground: Color.Black, background: Color.DeepSkyBlue1);
+
+    // Plan-approval select bridge — mirrors the wizard TCS pattern above.
+    private bool _planSelectActive;
+    private TaskCompletionSource<string>? _planSelectTcs;
+    private static readonly ApprovalSelect.Option[] _planSelectOptions =
+    {
+        new(ExecutePlanLabel, Color.Green),
+        new(RejectPlanLabel, new Color(255, 200, 80)),
+        new(CancelRequestLabel, new Color(255, 200, 80)),
+    };
+
+    /// <summary>
+    /// Shows the VDOM plan-approval select and awaits the user's choice. Observes
+    /// <paramref name="ct"/> so a cancelled request (Esc, timeout) unwinds the await
+    /// instead of leaving the turn stuck at an orphaned prompt.
+    /// </summary>
+    private async Task<string> PromptPlanChoiceAsync(CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _planSelectTcs = tcs;
+        using var cancelReg = ct.Register(() => tcs.TrySetCanceled(ct));
+
+        // Title goes to scrollback imperatively (same as WizardPromptSelectAsync) so the
+        // VDOM region holds only the option rows — keeps the live-repaint area minimal.
+        AnsiConsole.MarkupLine("[deepskyblue1]The assistant proposes this plan. What would you like to do?[/]");
+
+        _planSelectActive = true;
+        await InvokeAsync(StateHasChanged);
+
+        string choice;
+        try
+        {
+            choice = await tcs.Task;
+        }
+        finally
+        {
+            _planSelectActive = false;
+            await InvokeAsync(StateHasChanged);
+            // Brief wait so the VDOM tears down the select before imperative writes
+            // (matches the wizard primitives' teardown delay).
+            await Task.Delay(50);
+        }
+
+        // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
+        Console.WriteLine($"\u001b[38;2;255;200;80m> {choice}\u001b[0m");
+        return choice;
+    }
+
+    private void HandlePlanSelectSubmit(string choice)
+    {
+        _planSelectTcs?.TrySetResult(choice);
+    }
+
     private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
     {
         string choice;
@@ -1769,17 +1842,18 @@
             AnsiConsole.WriteLine();
             DisplayPlan(plan);
 
+            // VDOM select instead of a Spectre SelectionPrompt — Spectre's blocking
+            // ReadKey races RazorConsole's keyboard pump and intermittently lost arrow
+            // presses (see ApprovalSelect.razor). Suppress() is still required: the
+            // Escape listener reads the same console and would steal keys from the
+            // pump exactly the way the pump stole them from Spectre.
             using (KeyCoordinator.Suppress())
             {
-                choice = AnsiConsole.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("The assistant proposes this plan. What would you like to do?")
-                        .AddChoices(new[] { "Execute plan", "Reject (answer without a plan)", "Cancel request" })
-                );
+                choice = await PromptPlanChoiceAsync(ct);
             }
         }
 
-        if (choice == "Cancel request")
+        if (choice == CancelRequestLabel)
         {
             AnsiConsole.MarkupLine("[dim]Plan cancelled.[/]");
             AnsiConsole.WriteLine();
@@ -1792,7 +1866,7 @@
             return "User cancelled the request. Stop here and do not take further action.";
         }
 
-        if (choice == "Reject (answer without a plan)")
+        if (choice == RejectPlanLabel)
         {
             AnsiConsole.MarkupLine("[dim]Plan rejected — continuing without stepwise execution.[/]");
             AnsiConsole.WriteLine();
@@ -1807,7 +1881,7 @@
         {
             await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan, ct))
             {
-                await HandleProgressEventAsync(progressEvent, plan);
+                HandleProgressEvent(progressEvent, plan);
             }
         }
         catch (OperationCanceledException)
@@ -1868,7 +1942,7 @@
         AnsiConsole.WriteLine();
     }
 
-    private async Task HandleProgressEventAsync(TaskProgressEvent progressEvent, TaskPlan plan)
+    private void HandleProgressEvent(TaskProgressEvent progressEvent, TaskPlan plan)
     {
         switch (progressEvent.ProgressType)
         {
@@ -1904,18 +1978,22 @@
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
+                // Palette: gold = redirect (skip), red = destructive (kill the plan).
+                const string skipStepLabel = "[rgb(255,200,80)]Skip this step and continue[/]";
+                const string cancelPlanLabel = "[red]Cancel the plan[/]";
+
                 string failChoice;
                 using (KeyCoordinator.Suppress())
                 {
                     failChoice = AnsiConsole.Prompt(
                         new SelectionPrompt<string>()
-                            .Title("How would you like to proceed?")
-                            .HighlightStyle(new Style(foreground: Color.Green))
-                            .AddChoices(new[] { "Skip this step and continue", "Cancel the plan" })
+                            .Title("[deepskyblue1]How would you like to proceed?[/]")
+                            .HighlightStyle(SelectionHighlight)
+                            .AddChoices(new[] { skipStepLabel, cancelPlanLabel })
                     );
                 }
 
-                if (failChoice == "Cancel the plan")
+                if (failChoice == cancelPlanLabel)
                 {
                     TaskPlanner.CancelPlan(plan);
                 }
@@ -2010,7 +2088,8 @@
         {
             selected = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("[green]Select a skill to force:[/] [dim](type to filter)[/]")
+                    .Title("[deepskyblue1]Select a skill to force:[/] [dim](type to filter)[/]")
+                    .HighlightStyle(SelectionHighlight)
                     .PageSize(10)
                     .MoreChoicesText("[dim](scroll for more)[/]")
                     .EnableSearch()
@@ -2778,7 +2857,8 @@
         AnsiConsole.WriteLine();
         var selected = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("[green]Select a genre:[/]")
+                .Title("[deepskyblue1]Select a genre:[/]")
+                .HighlightStyle(SelectionHighlight)
                 .AddChoices(choices)
         );
 
@@ -2824,12 +2904,13 @@
         AnsiConsole.WriteLine();
         var choice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("Configuration Options:")
+                .Title("[deepskyblue1]Configuration Options:[/]")
+                .HighlightStyle(SelectionHighlight)
                 .AddChoices(new[]
                 {
                     "Run configuration wizard",
                     "View current configuration",
-                    "Cancel"
+                    "[rgb(255,200,80)]Cancel[/]"
                 })
         );
 

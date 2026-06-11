@@ -5,6 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <!-- dotnet tool settings -->
     <PackAsTool>true</PackAsTool>
@@ -23,11 +24,14 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.11.0 — Agentic-loop hardening
+v0.11.0 — Agentic-loop hardening + prompt trust
 
-Long agentic sessions no longer die mysteriously. Every fix in this release closes a way a session could hang, thrash, or silently lose its mind — each one found and verified live by building real projects with MandoCode.
+Long agentic sessions no longer die mysteriously, and the prompts where you make decisions got a full trust pass: one color language everywhere, arrow keys that never drop, and cancellation that is enforced by the app instead of requested of the model. Every fix found and verified live by building real projects with MandoCode.
 
 Fixed:
+- "Cancel the plan" mid-step now stops the work immediately. Cancelling at one file's diff used to leave the step's remaining writes queued — each opened another approval prompt after you'd already said stop, because the "stop" message returned to the model was only advisory. A new circuit mechanically refuses every further tool call the moment you cancel: a stop gate, not a stop sign.
+- Arrow keys at the plan-approval menu sometimes needed a second press — two console readers (Spectre's blocking prompt and the UI framework's keyboard loop) raced for keystrokes and the loser's keys were silently dropped. The menu now renders through the framework's own input path: one reader, deterministic keys.
+- Changing settings with /config set while a tool call was in flight could permanently freeze the stall watchdog — the kernel rebuild orphaned the in-flight call's completion, so later genuine stalls hung silently for the rest of the session.
 - Concurrent approval prompts could deadlock the session forever — two tool calls in one model response opened two blocking prompts that stole each other's keys; the invisible one blocked its function and the input prompt never came back. All approval prompts (diff, delete, command, MCP, plan) now serialize through a single gate, and approval awaits observe cancellation so Esc and timeouts can always unwind a stuck turn.
 - The agent edited large files blind — reads cap at ~10K chars, so on a 900-line file the model only ever saw the top third and composed edits from memory of code it could no longer see, thrash-looping on "Could not find old_text". read_file_contents now takes startLine/endLine, and truncation names the exact line to resume from.
 - Local models ran with Ollama's ~4K default context window, silently truncating the system prompt and earlier reads as conversations grew. New contextLength config sets OLLAMA_CONTEXT_LENGTH when MandoCode starts the daemon, auto-sized to the hardware tier of the model you pick; diagnostics point Ollama desktop app users at the app's Context length slider.
@@ -37,9 +41,13 @@ Fixed:
 - Cloud models with size-variant tags (e.g. qwen3-coder:480b-cloud) were misclassified as local — the "-cloud" suffix form is now recognized everywhere, including cloud sign-in detection.
 - The "hit the token limit" warning no longer misdiagnoses: it now distinguishes the response cap from a filled local context window from a filled server-side (cloud) window, with the right fix for each — and explains when a thinking model spent the whole budget on internal reasoning.
 
+UI:
+- One palette across every menu in the app: green = proceed, gold = redirect/decline, red = destructive, blue highlight = your current selection. Applied to all approval prompts, /config, the /setup wizard, onboarding, /model, /skill, and the rest — every choice now carries an instant visual cue of how consequential it is.
+
 Changed:
 - /model is now a true quick switch: pick a model, done. Response length moved to /config, and its picker tiers are honest response-cap values (2k–64k) instead of context-window-sized numbers.
 - /learn gained a context-window section: what it is, what it costs in VRAM, and why the Ollama desktop app's 4k slider default matters.
+- Internal quality: the core AI service was decomposed, compiler warnings are now build errors, and the test suite grew to 367 passing tests.
     </PackageReleaseNotes>
   </PropertyGroup>
 
