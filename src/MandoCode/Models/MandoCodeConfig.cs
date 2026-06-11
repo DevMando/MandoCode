@@ -170,12 +170,17 @@ public class MandoCodeConfig
     /// stalled and cancelled. Bounds the common "local model stops streaming once context
     /// grows" failure so a step recovers in a few minutes instead of waiting out the much
     /// longer <see cref="RequestTimeoutMinutes"/> ceiling. The whole turn (all continuations
-    /// and plan steps) is still capped by RequestTimeoutMinutes. Raise this on slow,
-    /// CPU-only hardware where a legitimate generation can take longer than the default.
-    /// You can also cancel any call manually with Esc / Ctrl+C.
+    /// and plan steps) is still capped by RequestTimeoutMinutes.
+    /// Default is 420s: model calls are non-streaming, so the watchdog gets NO signal
+    /// during generation and can't tell "healthily generating a long response" from
+    /// "hung" — a several-thousand-token reply on a slow provider (~10 tok/s observed
+    /// on busy cloud models) legitimately runs past 3 minutes. Observed live at 180s:
+    /// a plan step composing a design doc was killed mid-generation. Lower this on fast
+    /// hardware for snappier stall detection; the real fix is streaming with per-chunk
+    /// watchdog resets. You can also cancel any call manually with Esc / Ctrl+C.
     /// </summary>
     [JsonPropertyName("modelResponseTimeoutSeconds")]
-    public int ModelResponseTimeoutSeconds { get; set; } = 180;
+    public int ModelResponseTimeoutSeconds { get; set; } = 420;
 
     /// <summary>
     /// Total character budget for tool-call results within a single chat turn or plan step.
@@ -498,7 +503,7 @@ public class MandoCodeConfig
             MaxTokens = 32768,
             ContextLength = 8192,
             RequestTimeoutMinutes = 15,
-            ModelResponseTimeoutSeconds = 180,
+            ModelResponseTimeoutSeconds = 420,
             ToolResultCharBudget = 100_000,
             EnableAutoContinuation = true,
             MaxAutoContinuations = 3,
