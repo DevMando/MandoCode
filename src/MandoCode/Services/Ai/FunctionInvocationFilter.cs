@@ -174,6 +174,25 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 return;
             }
 
+            // Post-plan mutation gate: a plan already executed real work this turn. The
+            // outer model never sees the steps run (each executes in its own chat history)
+            // — all it gets back is a tool-result summary, and models routinely treat that
+            // as "not started yet" and redo the task from scratch. Observed live: after
+            // "4 of 4 steps completed", the model re-created the project folder and
+            // overwrote the finished build with a fresh skeleton, all auto-approved.
+            // The manifest PlanHandoff returns is the persuasion; this is the enforcement.
+            // Reads and shell stay allowed so the model can still inspect results or run
+            // a build the user asked about. A fresh scope (next user message) resets it.
+            if (scope.PlanWorkCompleted && IsMutatingFunction(context.Function.Name))
+            {
+                var gateMsg = "A plan already completed this work during this turn — the files it " +
+                              "created or modified exist on disk. Do NOT recreate or rewrite them. " +
+                              "Respond to the user with a brief summary of the completed work; if " +
+                              "further changes are needed, the user will ask in a follow-up message.";
+                context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, gateMsg);
+                return;
+            }
+
             // Budget circuit: if cumulative tool results have filled ~100k tokens,
             // refuse further calls so we bail before the model's context window overflows.
             if (scope.BudgetExhausted)
@@ -1059,7 +1078,19 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
                 if (!string.IsNullOrEmpty(path))
+                {
                     scope.RecordWrite(NormalizePathKey(path));
+                    // Evidence for the plan manifest — no-ops outside plan execution.
+                    _planHandoff?.RecordFileOperation(context.Function.Name, path);
+                }
+                break;
+            }
+            case "create_folder":
+            case "delete_folder":
+            {
+                var path = context.Arguments.TryGetValue("relativePath", out var p) ? p?.ToString() ?? "" : "";
+                if (!string.IsNullOrEmpty(path))
+                    _planHandoff?.RecordFileOperation(context.Function.Name, path);
                 break;
             }
         }
@@ -1093,7 +1124,14 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
         // or cancelled — any further propose_plan this turn is a runaway and the
         // interception above short-circuits it.
         if (proposals.Length > 0)
+        {
             _currentScope.Value?.MarkPlanProcessed();
+
+            // Arm the mutation gate only when steps actually ran. A rejected plan means
+            // the model is expected to do the work directly — mutations must stay open.
+            if (_planHandoff.LastPlanExecutedWork)
+                _currentScope.Value?.MarkPlanWorkCompleted();
+        }
 
         return summary;
     }
@@ -1329,6 +1367,16 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                functionName.Contains("delete", StringComparison.OrdinalIgnoreCase) ||
                functionName.Equals("execute_command", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Functions refused by the post-plan mutation gate: anything that changes the
+    /// filesystem. Narrower than <see cref="IsWriteOperation"/> on purpose —
+    /// execute_command stays allowed post-plan (running a build or test the user asks
+    /// about is legitimate, and destructive commands still pass command approval),
+    /// and reads stay allowed so the model can inspect the plan's output.
+    /// </summary>
+    private static bool IsMutatingFunction(string? functionName) =>
+        functionName is "write_file" or "edit_file" or "delete_file" or "delete_folder" or "create_folder";
 
     private string GetFunctionDescription(string? pluginName, string? functionName, IReadOnlyDictionary<string, object?> arguments)
     {
