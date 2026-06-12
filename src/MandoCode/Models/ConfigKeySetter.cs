@@ -26,7 +26,13 @@ public static class ConfigKeySetter
         DaemonRestart
     }
 
-    public sealed record SetResult(bool Ok, string Message, ApplyScope Scope = ApplyScope.Immediate);
+    /// <param name="PostSetValidation">
+    /// Optional async check the caller runs AFTER saving (e.g. a live Tavily API probe
+    /// for tavilyKey) and prints the returned message. Lives on the result rather than
+    /// inside TrySet so the setter stays synchronous and shared between the CLI and the
+    /// in-app command; the save is never gated on it — the user may simply be offline.
+    /// </param>
+    public sealed record SetResult(bool Ok, string Message, ApplyScope Scope = ApplyScope.Immediate, Func<Task<string>>? PostSetValidation = null);
 
     private static SetResult Fail(string message) => new(false, message);
 
@@ -172,6 +178,24 @@ public static class ConfigKeySetter
                 }
                 return Fail($"Error: Render timeout must be between {MandoCodeConfig.MinMarkdownRenderTimeoutSeconds} and {MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds} seconds");
 
+            case "tavilykey":
+            case "tavily":
+            case "tavilyapikey":
+                if (string.IsNullOrWhiteSpace(value) ||
+                    value.Equals("clear", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.TavilyApiKey = null;
+                    return new(true, "✓ Tavily API key cleared — web search falls back to DuckDuckGo", ApplyScope.KernelRebuild);
+                }
+                var tavilyKey = value.Trim();
+                config.TavilyApiKey = tavilyKey;
+                var tavilyMsg = $"✓ Tavily API key saved ({MandoCodeConfig.MaskApiKey(tavilyKey)}) — web search now prefers Tavily, with DuckDuckGo as fallback";
+                if (!tavilyKey.StartsWith("tvly-", StringComparison.OrdinalIgnoreCase))
+                    tavilyMsg += "\n  Note: Tavily keys normally start with \"tvly-\" — double-check yours if verification fails.";
+                return new(true, tavilyMsg, ApplyScope.KernelRebuild,
+                    PostSetValidation: () => Plugins.WebSearchPlugin.ValidateTavilyKeyAsync(tavilyKey));
+
             case "mcp":
             case "enablemcp":
                 if (bool.TryParse(value, out var enableMcp))
@@ -210,6 +234,7 @@ public static class ConfigKeySetter
         taskPlanning         {config.EnableTaskPlanning}
         diffApprovals        {config.EnableDiffApprovals}
         webSearch            {config.EnableWebSearch}
+        tavilyKey            {(string.IsNullOrWhiteSpace(config.TavilyApiKey) ? "not set" : MandoCodeConfig.MaskApiKey(config.TavilyApiKey))}  (Tavily API key for reliable web search — free at https://app.tavily.com; "clear" to remove)
         mcp                  {config.EnableMcp}
         themeCustomization   {config.EnableThemeCustomization}
         """;

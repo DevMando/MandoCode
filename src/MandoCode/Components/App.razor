@@ -537,6 +537,13 @@
 
         Config.Save();
 
+        // Some keys (tavilyKey) carry a live verification probe — instant "your key
+        // works" feedback at set time instead of a silent failure on first real use.
+        if (result.PostSetValidation != null)
+        {
+            AnsiConsole.WriteLine(await result.PostSetValidation());
+        }
+
         switch (result.Scope)
         {
             case ConfigKeySetter.ApplyScope.KernelRebuild:

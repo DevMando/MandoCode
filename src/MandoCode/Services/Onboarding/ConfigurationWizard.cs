@@ -1,4 +1,5 @@
 using MandoCode.Models;
+using MandoCode.Plugins;
 using Spectre.Console;
 using System.Text.Json;
 
@@ -51,7 +52,10 @@ public class ConfigurationWizard
         // Step 6: Ignore Directories
         config.IgnoreDirectories = ConfigureIgnoreDirectories(config.IgnoreDirectories);
 
-        // Step 7: Save Configuration
+        // Step 7: Web Search (optional Tavily key — skippable, works without one)
+        await ConfigureWebSearchAsync(config);
+
+        // Step 8: Save Configuration
         if (ConfirmSave())
         {
             config.Save();
@@ -375,9 +379,83 @@ public class ConfigurationWizard
         return currentIgnoreDirectories;
     }
 
+    /// <summary>
+    /// Optional Tavily key for web search. Deliberately skippable with a default of
+    /// "no": search works keyless via DuckDuckGo, and a user who hasn't hit DuckDuckGo's
+    /// rate-limiting yet has no reason to want a key — the in-context teaching happens
+    /// at the moment a search actually gets blocked (see WebSearchPlugin).
+    /// </summary>
+    private static async Task ConfigureWebSearchAsync(MandoCodeConfig config)
+    {
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]7. Web Search[/]").LeftJustified());
+        AnsiConsole.WriteLine();
+
+        AnsiConsole.MarkupLine("[dim]Web search works out of the box via DuckDuckGo — no key needed. But DuckDuckGo's[/]");
+        AnsiConsole.MarkupLine("[dim]free endpoint rate-limits and temporarily blocks IPs, so searches can randomly fail.[/]");
+        AnsiConsole.MarkupLine("[dim]For reliable, AI-optimized results you can add a Tavily API key — free tier of about[/]");
+        AnsiConsole.MarkupLine("[dim]1,000 searches/month at https://app.tavily.com. The key is stored locally in[/]");
+        AnsiConsole.MarkupLine("[dim]config.json and only ever sent to Tavily; DuckDuckGo stays as the fallback.[/]");
+        AnsiConsole.WriteLine();
+
+        if (!string.IsNullOrWhiteSpace(config.TavilyApiKey))
+        {
+            var choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title($"[deepskyblue1]Tavily key configured ({MandoCodeConfig.MaskApiKey(config.TavilyApiKey)}). What would you like to do?[/]")
+                    .HighlightStyle(SelectionHighlight)
+                    .AddChoices("Keep current key", "Replace key", "Remove key"));
+
+            if (choice == "Keep current key")
+            {
+                AnsiConsole.WriteLine();
+                return;
+            }
+            if (choice == "Remove key")
+            {
+                config.TavilyApiKey = null;
+                AnsiConsole.MarkupLine("[rgb(255,200,80)]✓ Tavily key removed — web search falls back to DuckDuckGo[/]");
+                AnsiConsole.WriteLine();
+                return;
+            }
+        }
+        else if (!AnsiConsole.Confirm("[deepskyblue1]Add a Tavily API key now?[/]", false))
+        {
+            AnsiConsole.MarkupLine("[dim]Skipped — DuckDuckGo will be used. Add a key anytime: /config set tavilyKey <key>[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var key = AnsiConsole.Prompt(
+            new TextPrompt<string>("[deepskyblue1]Tavily API key (starts with tvly-; Enter to skip):[/]")
+                .Secret('*')
+                .AllowEmpty());
+
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            AnsiConsole.MarkupLine("[dim]Skipped — no key entered. Add one anytime: /config set tavilyKey <key>[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        config.TavilyApiKey = key.Trim();
+
+        // Verify immediately — instant feedback at configuration time is the single
+        // biggest trust win for an optional key. The key stays set even if the probe
+        // fails (the user may be offline); the message says so.
+        string verification = "";
+        await AnsiConsole.Status()
+            .Spinner(LoadingMessages.GetRandomSpinner())
+            .StartAsync("[yellow]Verifying key with Tavily...[/]", async _ =>
+            {
+                verification = await WebSearchPlugin.ValidateTavilyKeyAsync(key.Trim());
+            });
+        AnsiConsole.WriteLine(verification);
+        AnsiConsole.WriteLine();
+    }
+
     private static bool ConfirmSave()
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Save Configuration[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]8. Save Configuration[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         return AnsiConsole.Confirm("[deepskyblue1]Save this configuration?[/]", true);
