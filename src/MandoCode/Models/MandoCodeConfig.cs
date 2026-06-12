@@ -273,10 +273,46 @@ public class MandoCodeConfig
 
     /// <summary>
     /// Enable web search and page fetching capabilities.
-    /// When enabled, the AI can search DuckDuckGo and fetch web pages.
+    /// When enabled, the AI can search the web (Tavily when a key is configured,
+    /// DuckDuckGo otherwise) and fetch web pages.
     /// </summary>
     [JsonPropertyName("enableWebSearch")]
     public bool EnableWebSearch { get; set; } = true;
+
+    /// <summary>
+    /// Optional Tavily API key for web search. DuckDuckGo's free HTML endpoint
+    /// rate-limits and temporarily blocks IPs under normal agentic use; with a key set,
+    /// search_web prefers Tavily (an LLM-optimized search API with a free tier) and
+    /// keeps DuckDuckGo as the no-key fallback. Stored locally in config.json and only
+    /// ever sent to Tavily. The TAVILY_API_KEY environment variable overrides this
+    /// without being persisted — see <see cref="GetEffectiveTavilyApiKey"/>.
+    /// </summary>
+    [JsonPropertyName("tavilyApiKey")]
+    public string? TavilyApiKey { get; set; }
+
+    /// <summary>
+    /// Resolves the Tavily key to actually use: the TAVILY_API_KEY environment variable
+    /// wins over the config value. Deliberately NOT applied via the Program.cs env-override
+    /// pattern (which writes into the config object) — a later Save() would persist the
+    /// env-provided secret to disk, defeating the point of keeping it out of the file.
+    /// Returns null when no key is configured anywhere.
+    /// </summary>
+    public string? GetEffectiveTavilyApiKey()
+    {
+        var env = Environment.GetEnvironmentVariable("TAVILY_API_KEY");
+        if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
+        return string.IsNullOrWhiteSpace(TavilyApiKey) ? null : TavilyApiKey.Trim();
+    }
+
+    /// <summary>
+    /// Masks an API key for display: "tvly-abc…f2a3". Never show the full key in
+    /// /config show, DescribeKeys, or set-confirmation messages.
+    /// </summary>
+    public static string MaskApiKey(string key)
+    {
+        var trimmed = key.Trim();
+        return trimmed.Length <= 9 ? "****" : $"{trimmed[..5]}…{trimmed[^4..]}";
+    }
 
     /// <summary>
     /// Directory for user-level skills (available in every project).
@@ -547,7 +583,12 @@ public class MandoCodeConfig
         Console.WriteLine($"  Deduplication Window: {FunctionDeduplicationWindowSeconds}s");
         Console.WriteLine($"  Max Retry Attempts: {MaxRetryAttempts}");
         Console.WriteLine($"  Theme Customization: {(EnableThemeCustomization ? "Enabled" : "Disabled")}");
-        Console.WriteLine($"  Web Search: {(EnableWebSearch ? "Enabled" : "Disabled")}");
+        var tavilyKey = GetEffectiveTavilyApiKey();
+        Console.WriteLine($"  Web Search: {(EnableWebSearch
+            ? tavilyKey != null
+                ? $"Enabled — Tavily ({MaskApiKey(tavilyKey)}), DuckDuckGo fallback"
+                : "Enabled — DuckDuckGo only (set tavilyKey for more reliable search)"
+            : "Disabled")}");
         Console.WriteLine($"  MCP: {(EnableMcp ? $"Enabled ({McpServers.Count(kv => !kv.Value.Disabled)} active / {McpServers.Count} configured)" : "Disabled")}");
         Console.WriteLine($"  Music Volume: {(int)(Music.Volume * 100)}%  Genre: {Music.Genre}");
         Console.WriteLine($"  Config File: {GetDefaultConfigPath()}");

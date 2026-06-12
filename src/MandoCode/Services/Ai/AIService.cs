@@ -25,7 +25,7 @@ public class AIService
     private Kernel _kernel;
     private IChatCompletionService _chatService;
     private readonly ChatHistory _chatHistory;
-    private readonly string _systemPrompt;
+    private string _systemPrompt;
 
     // The verbatim user message that opened the current chat turn (including @file/@folder
     // expansions). Plan steps execute in isolated chat histories and need it for ground
@@ -127,19 +127,30 @@ public class AIService
         _fallbackExecutor = new FallbackFunctionCallExecutor(
             call => OnFunctionInvoked?.Invoke(call),
             result => OnFunctionCompleted?.Invoke(result));
-        // Append shell-specific rules (cmd.exe vs bash) + the skill index so the model
-        // knows which user-defined workflows are available for load_skill().
-        var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
-        _systemPrompt = SystemPrompts.MandoCodeAssistant + "\n\n" + ShellEnvironment.SystemPromptRules;
-        if (!string.IsNullOrEmpty(skillIndex))
-        {
-            _systemPrompt += "\n\n" + skillIndex;
-        }
-
+        RebuildSystemPrompt();
         BuildKernel();
 
         // Initialize chat history with system prompt
         _chatHistory = new ChatHistory(_systemPrompt);
+    }
+
+    /// <summary>
+    /// Composes the system prompt from the current config: main prompt (web-search
+    /// claims conditional on EnableWebSearch), shell-specific rules (cmd.exe vs bash),
+    /// and the skill index so the model knows which workflows load_skill() offers.
+    /// Called from the constructor and from every settings path — the prompt must track
+    /// the config, or toggling websearch would leave the model promising searches it
+    /// can't run (or denying ones it can).
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_systemPrompt))]
+    private void RebuildSystemPrompt()
+    {
+        var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
+        _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch) + "\n\n" + ShellEnvironment.SystemPromptRules;
+        if (!string.IsNullOrEmpty(skillIndex))
+        {
+            _systemPrompt += "\n\n" + skillIndex;
+        }
     }
 
     /// <summary>
@@ -149,6 +160,7 @@ public class AIService
     public async Task ReinitializeAsync(MandoCodeConfig config)
     {
         _config = config;
+        RebuildSystemPrompt();
         BuildKernel();
         await AttachMcpPluginsAsync();
         await ClearHistoryAsync();
@@ -164,6 +176,16 @@ public class AIService
     public async Task RefreshSettingsAsync(MandoCodeConfig config)
     {
         _config = config;
+        RebuildSystemPrompt();
+
+        // The history-preserving path still has the OLD system prompt as message 0 —
+        // swap it in place so a mid-conversation toggle (e.g. websearch) actually
+        // reaches the model instead of waiting for the next /clear.
+        if (_chatHistory.Count > 0 && _chatHistory[0].Role == AuthorRole.System)
+        {
+            _chatHistory[0] = new ChatMessageContent(AuthorRole.System, _systemPrompt);
+        }
+
         BuildKernel();
         await AttachMcpPluginsAsync();
     }
@@ -225,7 +247,7 @@ public class AIService
 
         if (_config.EnableWebSearch)
         {
-            builder.Plugins.AddFromObject(new WebSearchPlugin(), "WebSearch");
+            builder.Plugins.AddFromObject(new WebSearchPlugin(_config.GetEffectiveTavilyApiKey()), "WebSearch");
         }
 
         if (_config.EnableTaskPlanning)

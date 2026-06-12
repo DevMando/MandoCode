@@ -23,7 +23,7 @@ class Program
         // Handle config commands first
         if (args.Length > 0 && args[0].ToLower() == "--config")
         {
-            HandleConfigCommand(args.Skip(1).ToArray());
+            await HandleConfigCommandAsync(args.Skip(1).ToArray());
             return;
         }
 
@@ -236,7 +236,7 @@ class Program
         return problems == 0 ? 0 : 1;
     }
 
-    static void HandleConfigCommand(string[] args)
+    static async Task HandleConfigCommandAsync(string[] args)
     {
         if (args.Length == 0 || args[0] == "--help" || args[0] == "-h")
         {
@@ -268,7 +268,7 @@ class Program
                     Console.WriteLine("Usage: mandocode config set <key> <value>");
                     return;
                 }
-                SetConfigValue(args[1], args[2]);
+                await SetConfigValueAsync(args[1], args[2]);
                 break;
 
             case "path":
@@ -307,6 +307,7 @@ class Program
         Console.WriteLine("  • diffApprovals   - Enable/disable diff approval prompts (true/false)");
         Console.WriteLine("  • themeCustomization - Enable/disable terminal theme customization (true/false)");
         Console.WriteLine("  • webSearch          - Enable/disable web search capabilities (true/false)");
+        Console.WriteLine("  • tavilyKey          - Tavily API key for reliable web search (free at https://app.tavily.com; \"clear\" to remove)");
         Console.WriteLine("  • mcp                - Enable/disable MCP server integration (true/false)");
         Console.WriteLine("  • renderTimeout      - Markdown render timeout in seconds (5-300)");
         Console.WriteLine();
@@ -317,7 +318,7 @@ class Program
         Console.WriteLine("  mandocode --config set temperature 0.5");
     }
 
-    static void SetConfigValue(string key, string value)
+    static async Task SetConfigValueAsync(string key, string value)
     {
         var config = MandoCodeConfig.Load();
 
@@ -334,6 +335,14 @@ class Program
         }
 
         config.Save();
+
+        // Keys that carry a live verification probe (tavilyKey) report it here, after
+        // the save — the key stays saved even if the probe fails (user may be offline).
+        if (result.PostSetValidation != null)
+        {
+            Console.WriteLine(await result.PostSetValidation());
+        }
+
         Console.WriteLine($"Configuration saved to: {MandoCodeConfig.GetDefaultConfigPath()}");
     }
 }

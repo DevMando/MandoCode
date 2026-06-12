@@ -177,7 +177,7 @@ CLI equivalents: `mandocode --config set autoContinue false`, `--config set tool
 | `Services/RetryPolicy.cs` | Exponential backoff for transient HTTP errors |
 | `Models/TaskPlan.cs` | `TaskPlan`, `TaskStep`, `TaskPlanStatus`, `TaskStepStatus` |
 | `Models/TaskProgressEvent.cs` | Progress event types for UI updates |
-| `Models/SystemPrompts.cs` | `MandoCodeAssistant` (the main prompt; shell rules are appended at runtime) |
+| `Models/SystemPrompts.cs` | `BuildMandoCodeAssistant(webSearchEnabled)` (the main prompt; shell rules are appended at runtime) |
 
 ### Data Models
 

@@ -22,7 +22,7 @@
 
 MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
 
-Run locally or connect to Ollama cloud — no API keys required for anything, including web search. It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
+Run locally or connect to Ollama cloud — no API keys required for anything, including web search (an optional free [Tavily](https://www.tavily.com/) key upgrades search reliability). It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
 ---
 
@@ -139,7 +139,7 @@ Complex requests are automatically broken into step-by-step plans. Review the pl
 
 ### Web Search & Fetch
 
-The AI can search DuckDuckGo and read webpages to find documentation, tutorials, or answers — no API keys needed.
+The AI can search the web and read webpages to find documentation, tutorials, or answers — no API keys needed. Optionally add a free [Tavily](https://www.tavily.com/) key for AI-optimized search that doesn't hit DuckDuckGo's rate limits.
 
 <img src="docs/images/web-search.png" alt="Web search" width="400">
 
@@ -174,7 +174,7 @@ If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare
 | | Feature | Description |
 |-|---------|-------------|
 | **AI** | Project-aware assistant | Reads, writes, deletes, and searches your entire codebase |
-| **AI** | Web search & fetch | DuckDuckGo search and webpage reading — no API keys needed |
+| **AI** | Web search & fetch | Web search and webpage reading — keyless via DuckDuckGo, or Tavily with a free API key |
 | **AI** | MCP server support | Connect to any Model Context Protocol server (stdio or remote HTTP) — Claude-Desktop-compatible config |
 | **AI** | Streaming responses | Real-time output with animated spinners |
 | **AI** | Task planner | Auto-detects complex requests and breaks them into steps |
@@ -268,7 +268,7 @@ Run `mandocode --doctor` any time chat is misbehaving — exits 0 if everything'
   Rich markdown rendered in your terminal
 ```
 
-The AI has sandboxed access to your project through a **FileSystemPlugin** (9 functions: list files, glob search, read, write, delete files/folders, text search, path resolution) and a **WebSearchPlugin** (web search via DuckDuckGo, webpage fetching — no API keys required). All file operations are locked to your project root — path traversal is blocked.
+The AI has sandboxed access to your project through a **FileSystemPlugin** (9 functions: list files, glob search, read, write, delete files/folders, text search, path resolution) and a **WebSearchPlugin** (web search via Tavily or DuckDuckGo, webpage fetching — works without any API key). All file operations are locked to your project root — path traversal is blocked.
 
 ---
 
@@ -600,10 +600,17 @@ The AI can search the web and fetch page content — no API keys required.
 
 | Function | Description |
 |----------|-------------|
-| `search_web(query, maxResults)` | Searches DuckDuckGo and returns titles, URLs, and snippets (1–10 results) |
+| `search_web(query, maxResults)` | Searches the web and returns titles, URLs, and snippets (1–10 results) |
 | `fetch_webpage(url, maxCharacters)` | Fetches a URL and extracts readable text content (500–15,000 chars) |
 
-Web search uses DuckDuckGo's HTML endpoint. Fetched pages are cleaned of scripts, nav, and non-content elements via HtmlAgilityPack.
+Out of the box, search uses DuckDuckGo's free HTML endpoint — which rate-limits and temporarily blocks IPs under heavy agentic use, so searches can randomly fail. For reliable, AI-optimized search, add a free [Tavily](https://www.tavily.com/) API key (free tier ~1,000 searches/month):
+
+```bash
+/config set tavilyKey tvly-...        # in-app — verifies the key live against Tavily
+mandocode --config set tavilyKey tvly-...   # or from the CLI
+```
+
+With a key set, `search_web` prefers Tavily and keeps DuckDuckGo as the fallback; clear it anytime with `/config set tavilyKey clear`. The key is stored locally in `~/.mandocode/config.json` and only ever sent to Tavily — set the `TAVILY_API_KEY` environment variable instead if you'd rather keep it out of the file. Fetched pages are cleaned of scripts, nav, and non-content elements via HtmlAgilityPack.
 
 </details>
 

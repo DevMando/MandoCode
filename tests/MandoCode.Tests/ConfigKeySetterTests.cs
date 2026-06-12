@@ -91,6 +91,69 @@ public class ConfigKeySetterTests
     }
 
     [Fact]
+    public void TavilyKey_Set_StoresKey_MasksItInTheMessage_AndCarriesValidation()
+    {
+        var config = new MandoCodeConfig();
+
+        var result = ConfigKeySetter.TrySet(config, "tavilyKey", "tvly-abcdef1234567890");
+
+        Assert.True(result.Ok);
+        Assert.Equal("tvly-abcdef1234567890", config.TavilyApiKey);
+        Assert.Equal(ConfigKeySetter.ApplyScope.KernelRebuild, result.Scope);
+        // The confirmation must never echo the full secret back.
+        Assert.DoesNotContain("tvly-abcdef1234567890", result.Message);
+        Assert.Contains("tvly-", result.Message);
+        // The live verification probe rides on the result for the caller to run post-save.
+        Assert.NotNull(result.PostSetValidation);
+    }
+
+    [Theory]
+    [InlineData("clear")]
+    [InlineData("none")]
+    public void TavilyKey_Clear_RemovesKey(string clearWord)
+    {
+        var config = new MandoCodeConfig { TavilyApiKey = "tvly-abcdef1234567890" };
+
+        var result = ConfigKeySetter.TrySet(config, "tavilyKey", clearWord);
+
+        Assert.True(result.Ok);
+        Assert.Null(config.TavilyApiKey);
+        Assert.Contains("DuckDuckGo", result.Message);
+        Assert.Null(result.PostSetValidation);
+    }
+
+    [Fact]
+    public void TavilyKey_UnexpectedPrefix_StillSavesButWarns()
+    {
+        var config = new MandoCodeConfig();
+
+        var result = ConfigKeySetter.TrySet(config, "tavilyKey", "sk-wrong-provider-key-12345");
+
+        Assert.True(result.Ok);
+        Assert.Equal("sk-wrong-provider-key-12345", config.TavilyApiKey);
+        Assert.Contains("tvly-", result.Message); // the "keys normally start with" warning
+    }
+
+    [Fact]
+    public void DescribeKeys_MasksTheTavilyKey()
+    {
+        var config = new MandoCodeConfig { TavilyApiKey = "tvly-abcdef1234567890" };
+        var listing = ConfigKeySetter.DescribeKeys(config);
+
+        Assert.Contains("tavilyKey", listing);
+        Assert.DoesNotContain("tvly-abcdef1234567890", listing);
+
+        Assert.Contains("not set", ConfigKeySetter.DescribeKeys(new MandoCodeConfig()));
+    }
+
+    [Fact]
+    public void MaskApiKey_NeverRevealsTheMiddle_AndHandlesShortKeys()
+    {
+        Assert.Equal("tvly-…7890", MandoCodeConfig.MaskApiKey("tvly-abcdef1234567890"));
+        Assert.Equal("****", MandoCodeConfig.MaskApiKey("short"));
+    }
+
+    [Fact]
     public void DescribeKeys_ListsEveryUserFacingKey_WithCurrentValues()
     {
         var config = new MandoCodeConfig { ModelName = "qwen3.5:4b", ModelResponseTimeoutSeconds = 300 };
