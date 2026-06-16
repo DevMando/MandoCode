@@ -26,17 +26,21 @@
     <PackageReleaseNotes>
 v0.12.0 — Long sessions that don't freeze
 
-The last release promised that a working session shouldn't silently lock up. Then we kept building real projects with MandoCode and found more ways it could — freeze mid-task, scramble its own output, or spin its wheels instead of finishing. Every one is fixed here, and every one was caught by dogfooding. The worst of them we tracked down from a live snapshot of the frozen app while it was building a game, so these address the real causes, not the symptoms. If you've ever watched MandoCode stop dead in the middle of a task with the spinner gone, this is the release that ends it.
+This release is all about reliability on long, real-world tasks. While building actual projects with MandoCode, I found several ways a long session could freeze, scramble its own output, or spin in circles instead of finishing — and I fixed every one. The hardest freezes were tracked down by inspecting the stuck app directly, so these address the real causes, not just the symptoms.
 
 Fixed:
-- Approving a change no longer freezes the app. Deep into a multi-step task — right when the assistant starts writing files and asking you to approve them — the approval prompt could lock up with nothing on screen, and your only option was to kill it and lose the work. That entire class of freeze is gone; approvals always respond now.
-- A tricky command can no longer pin your CPU and hang. A single command with a long, quote-heavy string — the kind the assistant runs to check its own code — could send one CPU core to 100% indefinitely: fans roaring, nothing on screen, no way back. It's now capped to a fraction of a second and keeps going.
-- No more garbled or doubled-up output. On long replies, slow-to-format text could paint a scrambled second copy over what was already there. Output now renders once, cleanly, every time.
-- It won't burn your whole session repeating the same web search. A research step could fire the identical search over and over, spending the entire request on duplicate results. Repeats are caught now, and the assistant moves on with what it already found.
-- Asking it to "test in the browser" no longer hangs. The assistant used to try to start a local web server to preview your work — which can't stay running under it and just stalled for 30 seconds at a time. Now it hands you the exact command and URL to run yourself, instantly.
 
-Under the hood:
-- More automated tests guard every fix above, and the hardest freeze was diagnosed from a real snapshot of the stuck process rather than guesswork — so the fixes target the actual cause.
+- No more freezing when you approve a change. Deep in a multi-step task — right as MandoCode started creating files and asking you to approve them — it could lock up with nothing on screen, leaving you no choice but to quit and lose your progress. The approval prompts could end up waiting forever for a keypress that never reached them; I rebuilt them so they always respond.
+
+- No more locking up while running a command. Some commands could make MandoCode hang on a single step and never come back. It was getting stuck while formatting the command for display — certain commands (long ones, or ones containing file paths) could send it into a loop that never finished. That can't happen now, and a safety cutoff stops anything that ever runs unusually long.
+
+- No more garbled or duplicated text. On longer replies, a second, scrambled copy of the text could end up drawn over the first. I changed how responses are written to the screen so they show once, cleanly, every time.
+
+- No more wasting a session on repeated searches. While researching, MandoCode could run the same web search over and over without realizing it already had the answer — burning time and tokens for nothing. It now recognizes a repeated search and moves on with what it already found.
+
+- No more stalling when previewing your work. Asked to "test it in the browser," MandoCode used to try to start a local web server it couldn't keep running, and would just sit there waiting. Now it simply gives you the exact command and link to open it yourself.
+
+Every fix is covered by automated tests — the suite grew to 449 checks to keep these from coming back.
     </PackageReleaseNotes>
   </PropertyGroup>
 
