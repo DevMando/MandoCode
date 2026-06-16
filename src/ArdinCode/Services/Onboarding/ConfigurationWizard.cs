@@ -299,8 +299,8 @@ public class ConfigurationWizard
         // The old 128k/200k tiers were context-window numbers that made no sense as
         // single-reply lengths — no agent reply is 200k tokens, and agentic work is
         // chunked across tool calls by design.
-        var allTokens = new[] { 2048, 4096, 8192, 16384, 32768, 65536 };
-        var preferred = allTokens.Contains(currentMaxTokens) ? currentMaxTokens : 32768;
+        var allTokens = new[] { 2048, 4096, 8192, 16384 };
+        var preferred = allTokens.Contains(currentMaxTokens) ? currentMaxTokens : 4096;
         var ordered = new[] { preferred }.Concat(allTokens.Where(t => t != preferred)).ToArray();
 
         var maxTokens = AnsiConsole.Prompt(
@@ -314,11 +314,9 @@ public class ConfigurationWizard
                     return tokens switch
                     {
                         2048   => $"2k     Quick Q&A, short answers{marker}",
-                        4096   => $"4k     General coding assistance{marker}",
+                        4096   => $"4k     General coding assistance (default){marker}",
                         8192   => $"8k     Multi-component generation, detailed code{marker}",
                         16384  => $"16k    Full-page scaffolding, large file rewrites{marker}",
-                        32768  => $"32k    Large multi-file refactors (default){marker}",
-                        65536  => $"64k    Huge single-file generation on cloud models{marker}",
                         _      => tokens.ToString()
                     };
                 })

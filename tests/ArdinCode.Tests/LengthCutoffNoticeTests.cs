@@ -12,9 +12,9 @@ namespace ArdinCode.Tests;
 public class LengthCutoffNoticeTests
 {
     [Theory]
-    [InlineData(32768, 32768)] // exactly at the cap
-    [InlineData(31000, 32768)] // within 90% — stops a few tokens shy
-    [InlineData(0, 32768)]     // unreported count — assume cap, give the safe generic advice
+    [InlineData(16384, 16384)] // exactly at the cap
+    [InlineData(15000, 16384)] // within 90% — stops a few tokens shy
+    [InlineData(0, 16384)]     // unreported count — assume cap, give the safe generic advice
     public void AtOrNearResponseCap_AdvisesMaxTokens(long completionTokens, int maxTokens)
     {
         var notice = AIService.BuildLengthCutoffNotice(completionTokens, maxTokens, emptyContent: false);
@@ -27,7 +27,7 @@ public class LengthCutoffNoticeTests
     [Fact]
     public void FarBelowCap_DiagnosesContextWindow_NotMaxTokens()
     {
-        var notice = AIService.BuildLengthCutoffNotice(1300, 32768, emptyContent: false);
+        var notice = AIService.BuildLengthCutoffNotice(1300, 16384, emptyContent: false);
 
         Assert.Contains("CONTEXT WINDOW", notice);
         Assert.Contains("raising max tokens won't help", notice);
@@ -39,7 +39,7 @@ public class LengthCutoffNoticeTests
     [Fact]
     public void EmptyContent_MentionsReasoning()
     {
-        var notice = AIService.BuildLengthCutoffNotice(1300, 32768, emptyContent: true);
+        var notice = AIService.BuildLengthCutoffNotice(1300, 16384, emptyContent: true);
 
         Assert.Contains("reasoning", notice);
     }

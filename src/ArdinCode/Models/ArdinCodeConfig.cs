@@ -43,7 +43,7 @@ public class ArdinCodeConfig
     public const double MinTemperature = 0.0;
     public const double MaxTemperature = 1.0;
     public const int MinMaxTokens = 256;
-    public const int MaxMaxTokens = 65536; // 64k — this caps a SINGLE reply (NumPredict), not the context window. Agentic work is chunked across tool calls; no reply legitimately needs more. Old configs saved with larger values are healed by ValidateAndClamp.
+    public const int MaxMaxTokens = 16384; // 16k — this caps a SINGLE reply (NumPredict), not the context window. OpenAI-compatible APIs reject values larger than 16384 for many models (like gpt-4o-mini). Old configs saved with larger values are healed by ValidateAndClamp.
     public const int MinRequestTimeoutMinutes = 1;
     public const int MaxRequestTimeoutMinutes = 60;
     public const int MinModelResponseTimeoutSeconds = 30;
@@ -94,10 +94,10 @@ public class ArdinCodeConfig
     public double Temperature { get; set; } = 0.7;
 
     /// <summary>
-    /// Maximum tokens for model responses. Default is 32k.
+    /// Maximum tokens for model responses. Default is 4k.
     /// </summary>
     [JsonPropertyName("maxTokens")]
-    public int MaxTokens { get; set; } = 32768;
+    public int MaxTokens { get; set; } = 4096;
 
     /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
@@ -472,7 +472,7 @@ public class ArdinCodeConfig
             ApiKey = "",
             ModelName = DefaultModel,
             Temperature = 0.7,
-            MaxTokens = 32768,
+            MaxTokens = 4096,
             RequestTimeoutMinutes = 15,
             ModelResponseTimeoutSeconds = 420,
             ToolResultCharBudget = 100_000,
