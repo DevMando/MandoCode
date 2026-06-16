@@ -2,7 +2,7 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [0.12.0] - Unreleased
+## [0.12.0] - 2026-06-16
 
 Finishes the approval-menu migration started in 0.11.0 and closes several ways a long plan
 could freeze, corrupt its own output, or burn a turn's budget on a runaway loop — all found
