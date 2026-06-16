@@ -241,6 +241,48 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                     return;
                 }
+
+                // Long-running-server circuit: dev servers / watchers (http.server, npm run
+                // dev, vite, dotnet watch, …) never exit on their own. execute_command runs
+                // each command to completion, so these block until the idle-timeout kills
+                // them — and the model then loops with backgrounding tricks (&, start, > log)
+                // that can't keep a process alive across tool calls either. Observed live: a
+                // model stalled ~30s per attempt trying to `python -m http.server` to "test" a
+                // game. Refuse up front and hand the command to the user instead.
+                if (LooksLikeLongRunningCommand(cmd))
+                {
+                    var msg = "Refusing to start a long-running server or watcher. " +
+                              "MandoCode runs each command to completion and cannot keep a process alive across tool calls — " +
+                              "this command would just block until it's killed for being idle, so backgrounding it (&, start, > log) won't help either. " +
+                              "Do NOT start a server to test your work. Instead, tell the user the exact command and URL to run themselves " +
+                              "(e.g. \"run `python -m http.server` in the StarFox folder, then open http://localhost:8000\"). " +
+                              "One-shot commands that exit on their own — builds, tests, installs, git, linters — are fine.";
+                    context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                    return;
+                }
+            }
+
+            // Duplicate web-call circuit: the same search_web query or fetch_webpage URL
+            // twice in a scope is a stuck loop. Unlike reads there's no "modified since"
+            // escape hatch — the result is already in history and nothing in-scope
+            // invalidates it. The time-windowed _recentCalls cache (2s for non-writes) can't
+            // catch this when a slow cloud model spaces the calls further apart, and the
+            // char-budget circuit doesn't either because web results are individually small.
+            // Observed live: 40+ byte-identical search_web calls in a single plan step burned
+            // the whole turn's token budget. Refuse before the call runs and steer the model
+            // to use what it already has.
+            if (context.Function.Name == "search_web" || context.Function.Name == "fetch_webpage")
+            {
+                var webKey = BuildWebCallKey(context.Function.Name, context.Arguments);
+                if (webKey != null && scope.IsDuplicateWebCall(webKey))
+                {
+                    var what = context.Function.Name == "search_web" ? "search" : "page fetch";
+                    var msg = $"You already ran this exact web {what} earlier this turn — the results are " +
+                              "in the conversation above. Use them instead of repeating the call. If you need " +
+                              "different information, change the query or URL; otherwise continue with the task.";
+                    context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                    return;
+                }
             }
         }
 
@@ -854,6 +896,39 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Builds the per-scope dedup key for a web call. <c>search_web</c> keys on the
+    /// normalized query + result count, <c>fetch_webpage</c> on the normalized URL + char
+    /// count — including the count param mirrors <see cref="BuildReadKey"/>'s "include the
+    /// range so a legitimately different request isn't mistaken for a repeat." Whitespace is
+    /// collapsed/trimmed (and case folded by the OrdinalIgnoreCase set) so trivially-equal
+    /// queries share a key. Returns null when the primary argument is empty — nothing to
+    /// dedup on, let it through.
+    /// </summary>
+    internal static string? BuildWebCallKey(string functionName, IReadOnlyDictionary<string, object?> arguments)
+    {
+        if (functionName == "search_web")
+        {
+            var query = arguments.TryGetValue("query", out var q) ? q?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(query)) return null;
+            var max = arguments.TryGetValue("maxResults", out var m) ? m?.ToString() ?? "5" : "5";
+            return $"search_web:{NormalizeWebArg(query)}:{max}";
+        }
+
+        if (functionName == "fetch_webpage")
+        {
+            var url = arguments.TryGetValue("url", out var u) ? u?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            var max = arguments.TryGetValue("maxCharacters", out var m) ? m?.ToString() ?? "5000" : "5000";
+            return $"fetch_webpage:{NormalizeWebArg(url)}:{max}";
+        }
+
+        return null;
+    }
+
+    /// <summary>Collapses internal whitespace and trims so "a  b" and "a b" share a key.</summary>
+    private static string NormalizeWebArg(string s) => Regex.Replace(s.Trim(), @"\s+", " ");
+
+    /// <summary>
     /// Builds display event for read operations.
     /// </summary>
     private OperationDisplayEvent BuildReadDisplay(IReadOnlyDictionary<string, object?> arguments, string resultStr)
@@ -1093,6 +1168,17 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                     _planHandoff?.RecordFileOperation(context.Function.Name, path);
                 break;
             }
+            case "search_web":
+            case "fetch_webpage":
+            {
+                // Record only on success: a failed search/fetch (DuckDuckGo 403, fetch 429,
+                // etc.) stays retryable — the loop we're guarding against was successful,
+                // byte-identical repeats, not retries of a failure.
+                var webKey = BuildWebCallKey(context.Function.Name, context.Arguments);
+                if (webKey != null)
+                    scope.RecordWebCall(webKey);
+                break;
+            }
         }
     }
 
@@ -1326,6 +1412,53 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     private static readonly System.Text.RegularExpressions.Regex ShellReadWrapper =
         new(@"^\s*(?:powershell(?:\.exe)?|pwsh|cmd(?:\.exe)?)\b[^""']*?(?:-Command|-c|/c)\s+(?:""([^""]*)""|'([^']*)'|(\S.*))$",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Commands that start a long-running server / watcher: they never exit on their own, so
+    // execute_command (which runs to completion) blocks until the idle-timeout kill, and the
+    // model then loops with backgrounding tricks that can't keep a process alive across tool
+    // calls. Searched ANYWHERE in the string (not anchored) so it's still caught after a
+    // `cd X && ` prefix. Conservative by design — multi-token signatures (`python -m
+    // http.server`, `npm run dev`, `ng serve`) keep false positives rare; `vite` excludes its
+    // one-shot `build` subcommand; `dotnet run` is deliberately omitted (often a short-lived
+    // console app — too ambiguous to refuse, and the idle timeout still backstops it).
+    private static readonly System.Text.RegularExpressions.Regex LongRunningServerCommand =
+        new(@"python[0-9.]*\s+-m\s+http\.server" +
+            @"|\bmanage\.py\s+runserver\b" +
+            @"|\bhttp-server\b|\blive-server\b" +
+            @"|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|serve|start|watch)\b" +
+            @"|\bnpx\s+serve\b" +
+            @"|\bvite\b(?!\s+build)" +
+            @"|\b(?:next|nuxt|astro|remix)\s+dev\b" +
+            @"|\bng\s+serve\b" +
+            @"|\bflask\s+run\b|\bphp\s+-S\b" +
+            @"|\bdotnet\s+watch\b" +
+            @"|\bwebpack(?:-dev-server)?\s+serve\b|\bwebpack-dev-server\b" +
+            @"|\brails\s+(?:server|s)\b|\bjekyll\s+serve\b|\bhugo\s+server\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// True if the command starts a long-running server/watcher that never exits on its own.
+    /// Matched anywhere in the string (so a `cd X && ` prefix doesn't hide it) and through a
+    /// powershell/pwsh/cmd wrapper. execute_command runs to completion, so these block until
+    /// the idle-timeout kill — refusing up front and handing the command to the user is faster
+    /// and clearer. Public so the classification is unit-testable without the full filter.
+    /// </summary>
+    public static bool LooksLikeLongRunningCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        if (LongRunningServerCommand.IsMatch(command)) return true;
+
+        var wrapped = ShellReadWrapper.Match(command);
+        if (wrapped.Success)
+        {
+            var inner = wrapped.Groups[1].Success ? wrapped.Groups[1].Value
+                      : wrapped.Groups[2].Success ? wrapped.Groups[2].Value
+                      : wrapped.Groups[3].Value;
+            if (!string.IsNullOrWhiteSpace(inner) && LongRunningServerCommand.IsMatch(inner))
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// True if the command looks like a shell-based file-read (type/cat/head/findstr/grep/etc.),

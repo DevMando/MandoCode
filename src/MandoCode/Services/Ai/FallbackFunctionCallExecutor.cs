@@ -43,6 +43,27 @@ public class FallbackFunctionCallExecutor
     /// </summary>
     public async Task<string> ProcessAsync(string response, Kernel kernel, string modelName)
     {
+        try
+        {
+            return await ProcessCoreAsync(response, kernel, modelName);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A parsing regex backtracked past the process-wide match timeout on a
+            // pathological or very large response. Degrade gracefully: skip fallback
+            // tool-call extraction and hand back the model's text UNCHANGED, rather than
+            // letting the exception bubble up to AIService's generic handler (which would
+            // replace the model's real answer with an error). A text-encoded tool call —
+            // rare, and only some local models emit them — simply won't auto-run; the model
+            // self-corrects next turn when it sees the action didn't take effect.
+            System.Diagnostics.Debug.WriteLine(
+                $"[FallbackParsing] Regex match timed out for model {modelName}; returning response unparsed.");
+            return response;
+        }
+    }
+
+    private async Task<string> ProcessCoreAsync(string response, Kernel kernel, string modelName)
+    {
         var functionCalls = ExtractFunctionCallsFromText(response);
 
         if (functionCalls.Count == 0)

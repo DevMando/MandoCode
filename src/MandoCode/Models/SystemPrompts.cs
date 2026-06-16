@@ -152,7 +152,7 @@ Important guidelines:
    - Explain what you're changing and why
    - Keep edits minimal unless requested otherwise
 5. Work across multi-language codebases intelligently
-6. Use execute_command to run git commands (git status, git diff, git add, git commit), build tools (dotnet build, npm run), and other CLI tasks
+6. Use execute_command to run git commands (git status, git diff, git add, git commit), build tools (dotnet build, npm run), and other one-shot CLI tasks that finish on their own. Do NOT use it to start long-running servers or watchers (e.g. `python -m http.server`, `npm run dev`, `vite`, `dotnet watch`) — commands run to completion under the agent, so a server just blocks until it is killed. To let the user preview or run something, tell them the exact command and URL to run themselves instead of launching it yourself.
 7. Be thorough but concise in your responses
 8. If you're unsure about a file's location, use grep_files to search across all project files, or list_files_match_glob_pattern with a pattern
 

@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.11.0</Version>
+    <Version>0.12.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -24,26 +24,23 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.11.0 — A release about trust
+v0.12.0 — Long sessions that don't freeze
 
-When you tell MandoCode to stop, it should stop. When it's working, it shouldn't silently freeze. And when it searches the web, the search should actually work. This release fixes every way we found those promises could break — each one discovered by building real projects with MandoCode itself.
-
-New:
-- Web search that doesn't randomly fail. Search works out of the box with no key, but the free DuckDuckGo service sometimes blocks busy users mid-session. You can now add a free Tavily key (about 1,000 searches a month) with: /config set tavilyKey YOUR-KEY — searches become faster and more reliable, and DuckDuckGo stays as the backup. Skip it and nothing changes; if a search ever does get blocked, the assistant explains the option right in the chat. The assistant also now treats live questions — weather, news, scores, latest versions — as search-first, instead of telling you about its training cutoff and suggesting you Google it yourself.
-- Change settings without losing your session. /config set lets you adjust the model, temperature, timeouts, and more mid-conversation — no restart, history kept.
+This release is all about reliability on long, real-world tasks. While building actual projects with MandoCode, I found several ways a long session could freeze, scramble its own output, or spin in circles instead of finishing — and I fixed every one. The hardest freezes were tracked down by inspecting the stuck app directly, so these address the real causes, not just the symptoms.
 
 Fixed:
-- "Stop" now means stop. Cancelling a plan or request used to politely ask the AI to stop — and sometimes it just kept going, writing files you'd already said no to. Now the app itself refuses to run anything further the moment you cancel.
-- No more silent freezes. We closed every way we found a session could hang forever: prompts that fought over your keyboard, a watchdog that fell asleep after a settings change, and approvals that couldn't be escaped. Esc always works now.
-- The AI can finally see large files. It used to read only the top of long files and guess at the rest, then loop on failed edits. It now reads exactly the section it's working on and knows where to continue.
-- Local models stopped "forgetting" your instructions. Ollama's small default memory window was silently dropping older context as conversations grew; MandoCode now sizes it to your hardware automatically.
-- Finished work stays finished. After a plan completes, the AI can no longer bulldoze the result with "improvements" you didn't ask for, or propose endless follow-up plans.
-- Clearer guidance when a reply gets cut off: the warning now tells you which limit you actually hit and the one setting that fixes it.
 
-Polish:
-- Every menu speaks the same color language — green means go, gold means redirect, red means destructive — so you can tell how consequential a choice is at a glance. Arrow keys never drop a press.
-- /model is now a true quick switch: pick a model, done.
-- Under the hood: 393 automated tests now guard all of the above.
+- No more freezing when you approve a change. Deep in a multi-step task — right as MandoCode started creating files and asking you to approve them — it could lock up with nothing on screen, leaving you no choice but to quit and lose your progress. The approval prompts could end up waiting forever for a keypress that never reached them; I rebuilt them so they always respond.
+
+- No more locking up while running a command. Some commands could make MandoCode hang on a single step and never come back. It was getting stuck while formatting the command for display — certain commands (long ones, or ones containing file paths) could send it into a loop that never finished. That can't happen now, and a safety cutoff stops anything that ever runs unusually long.
+
+- No more garbled or duplicated text. On longer replies, a second, scrambled copy of the text could end up drawn over the first. I changed how responses are written to the screen so they show once, cleanly, every time.
+
+- No more wasting a session on repeated searches. While researching, MandoCode could run the same web search over and over without realizing it already had the answer — burning time and tokens for nothing. It now recognizes a repeated search and moves on with what it already found.
+
+- No more stalling when previewing your work. Asked to "test it in the browser," MandoCode used to try to start a local web server it couldn't keep running, and would just sit there waiting. Now it simply gives you the exact command and link to open it yourself.
+
+Every fix is covered by automated tests — the suite grew to 449 checks to keep these from coming back.
     </PackageReleaseNotes>
   </PropertyGroup>
 

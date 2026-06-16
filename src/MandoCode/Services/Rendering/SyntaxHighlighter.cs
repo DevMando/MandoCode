@@ -119,37 +119,77 @@ public static class SyntaxHighlighter
 
     // ── Regex patterns ──────────────────────────────────────────────
 
+    // Catastrophic-backtracking guard for the hand-rolled patterns below. On adversarial
+    // input these alternation/quantifier patterns can backtrack pathologically — observed
+    // live as a single core pegged for 17 minutes inside Regex.Match while highlighting an
+    // execute_command command panel. That work runs synchronously on the UI path right after
+    // the spinner is stopped, and NO watchdog covers it (the model call already returned), so
+    // it froze the whole turn. A per-match timeout bounds any one match; Highlight catches the
+    // timeout and falls back to plain escaped text.
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+
+    // Above this length, skip tokenizing entirely and return escaped plain text. Color adds
+    // nothing on a huge blob (e.g. a model emitting a whole file inline as a shell command),
+    // and per-token matching over tens of thousands of chars is where the backtracking bites.
+    private const int MaxHighlightChars = 20_000;
+
     // Single-line comment: // or #
-    private static readonly Regex SingleLineCommentSlash = new(@"\G//[^\n]*", RegexOptions.Compiled);
-    private static readonly Regex SingleLineCommentHash = new(@"\G#[^\n]*", RegexOptions.Compiled);
+    private static readonly Regex SingleLineCommentSlash = new(@"\G//[^\n]*", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex SingleLineCommentHash = new(@"\G#[^\n]*", RegexOptions.Compiled, RegexTimeout);
 
     // Multi-line comment: /* ... */
-    private static readonly Regex MultiLineComment = new(@"\G/\*[\s\S]*?\*/", RegexOptions.Compiled);
+    private static readonly Regex MultiLineComment = new(@"\G/\*[\s\S]*?\*/", RegexOptions.Compiled, RegexTimeout);
 
     // Strings
-    private static readonly Regex TripleQuoteDouble = new(@"\G""""""[\s\S]*?""""""", RegexOptions.Compiled);
-    private static readonly Regex TripleQuoteSingle = new(@"\G'''[\s\S]*?'''", RegexOptions.Compiled);
-    private static readonly Regex VerbatimString = new(@"\G@""(?:[^""]|"""")*""", RegexOptions.Compiled);
-    private static readonly Regex DoubleQuoteString = new(@"\G""(?:[^""\\]|\\.)*""", RegexOptions.Compiled);
-    private static readonly Regex SingleQuoteString = new(@"\G'(?:[^'\\]|\\.)*'", RegexOptions.Compiled);
-    private static readonly Regex BacktickString = new(@"\G`(?:[^`\\]|\\.)*`", RegexOptions.Compiled);
+    private static readonly Regex TripleQuoteDouble = new(@"\G""""""[\s\S]*?""""""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex TripleQuoteSingle = new(@"\G'''[\s\S]*?'''", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex VerbatimString = new(@"\G@""(?:[^""]|"""")*""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex DoubleQuoteString = new(@"\G""(?:[^""\\]|\\.)*""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex SingleQuoteString = new(@"\G'(?:[^'\\]|\\.)*'", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex BacktickString = new(@"\G`(?:[^`\\]|\\.)*`", RegexOptions.Compiled, RegexTimeout);
 
     // Numbers. The (?<!\w\.) lookbehind keeps the tokenizer from re-matching
     // the tail of a version-style fragment (e.g. the `0` in `net8.0`) as a
     // standalone numeric literal after the leading identifier got consumed by
     // the Word rule. Real numbers like `0.5`, `3.14`, `1e10` are untouched
     // because they're not preceded by `word-char + dot`.
-    private static readonly Regex NumberLiteral = new(@"\G(?<!\w\.)\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G(?<!\w\.)\b0[bB][01_]+[lLuU]*\b|\G(?<!\w\.)\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled);
+    private static readonly Regex NumberLiteral = new(@"\G(?<!\w\.)\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G(?<!\w\.)\b0[bB][01_]+[lLuU]*\b|\G(?<!\w\.)\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled, RegexTimeout);
 
     // Identifier (word)
-    private static readonly Regex Word = new(@"\G[a-zA-Z_]\w*", RegexOptions.Compiled);
+    private static readonly Regex Word = new(@"\G[a-zA-Z_]\w*", RegexOptions.Compiled, RegexTimeout);
 
     // ── Public API ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Returns a Spectre.Console markup string with syntax-highlighted code.
+    /// Returns a Spectre.Console markup string with syntax-highlighted code. Guarded against
+    /// pathological regex backtracking: oversized input skips tokenizing, and any single regex
+    /// that exceeds <see cref="RegexTimeout"/> aborts the whole pass back to plain escaped text.
+    /// Either way the return value is always valid Spectre markup (every code path escapes).
     /// </summary>
     public static string Highlight(string code, string language)
+    {
+        if (string.IsNullOrEmpty(code))
+            return string.Empty;
+
+        // Oversized input: don't even attempt tokenizing. Highlighting a huge blob is where
+        // the per-token matching turns pathological, and color is worthless there anyway.
+        if (code.Length > MaxHighlightChars)
+            return Markup.Escape(code);
+
+        try
+        {
+            return HighlightCore(code, language);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A pattern backtracked past the timeout on adversarial input. Fall back to plain
+            // escaped text rather than hang the caller — this runs synchronously on the UI
+            // path after the spinner is stopped, with no watchdog to recover it.
+            return Markup.Escape(code);
+        }
+    }
+
+    private static string HighlightCore(string code, string language)
     {
         var lang = NormalizeLanguage(language);
         var (keywords, types, commentStyle) = GetLanguageProfile(lang);
@@ -229,7 +269,23 @@ public static class SyntaxHighlighter
                     break;
                 pos++;
             }
-            sb.Append(Markup.Escape(code[batchStart..pos]));
+
+            if (pos == batchStart)
+            {
+                // Forward-progress guarantee. The batch loop above breaks on any char that
+                // COULD start a token, but in some languages rules 1–4 don't actually consume
+                // it — e.g. '/' in bash (comments are '#', not '//'), a backtick outside JS/TS,
+                // or '@' not followed by '"' in C#. When that happens pos never moves and the
+                // outer loop spins in place forever, pinning a CPU core and freezing the app
+                // (observed live on a command containing a '/'). Emit the lone char literally
+                // and advance one, so every iteration consumes at least one character.
+                sb.Append(Markup.Escape(code[pos].ToString()));
+                pos++;
+            }
+            else
+            {
+                sb.Append(Markup.Escape(code[batchStart..pos]));
+            }
         }
 
         return sb.ToString();

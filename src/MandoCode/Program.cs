@@ -16,6 +16,18 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        // Process-wide backstop against runaway regex backtracking. Any regex — ours or a
+        // library's — that doesn't set its own match timeout will throw after this budget
+        // instead of pinning a CPU core forever (the failure mode behind several freezes:
+        // catastrophic backtracking in syntax highlighting and response parsing). 10s is
+        // generous on purpose: it's a last resort, not the primary guard (the highlighter
+        // sets its own 1s, the markdown renderer its own cap), so it must never trip on
+        // legitimately large rendering. Sites that catch RegexMatchTimeoutException degrade
+        // to plain/raw output and keep going. MUST be set before any Regex is constructed,
+        // so it's the first line of Main. (Does not affect the non-regex tokenizer loop —
+        // that's guarded structurally by forward progress, not a timeout.)
+        AppDomain.CurrentDomain.SetData("REGEX_DEFAULT_MATCH_TIMEOUT", TimeSpan.FromSeconds(10));
+
         // Set console encoding to UTF-8 for Unicode characters (spinners, emojis, etc.)
         Console.OutputEncoding = Encoding.UTF8;
         Console.InputEncoding = Encoding.UTF8;
@@ -78,6 +90,12 @@ class Program
             // Register InstructionPromptCoordinator — bridges DiffApprovalHandler's
             // "Provide new instructions" path to a VDOM TextInput in App.razor.
             services.AddSingleton<InstructionPromptCoordinator>();
+
+            // Register ApprovalSelectCoordinator — bridges DiffApprovalHandler's approval
+            // menus to a VDOM ApprovalSelect in App.razor, so they no longer run through
+            // Spectre's blocking SelectionPrompt (whose ReadKey races the keyboard pump and
+            // could hang a plan step with the spinner already stopped).
+            services.AddSingleton<ApprovalSelectCoordinator>();
 
             // Register ApprovalPromptGate — serializes all approval prompts so concurrent
             // tool invocations can't open two blocking Spectre prompts at once.

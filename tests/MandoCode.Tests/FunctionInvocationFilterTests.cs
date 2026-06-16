@@ -76,4 +76,60 @@ public class FunctionInvocationFilterTests
     {
         Assert.False(FunctionInvocationFilter.LooksLikeShellFileRead(command));
     }
+
+    [Theory]
+    // Static file servers — the exact observed loop (`python -m http.server` to "test" a game).
+    [InlineData("python -m http.server")]
+    [InlineData("python -m http.server 8000")]
+    [InlineData("python3 -m http.server 8000")]
+    [InlineData("http-server -p 8080")]
+    [InlineData("npx serve")]
+    [InlineData("live-server")]
+    // Caught even behind a `cd X && ` prefix (matched anywhere, not anchored).
+    [InlineData("cd StarFox && python -m http.server 8000")]
+    [InlineData("cd StarFox && python -m http.server 8000 > server.log 2>&1 & echo started")]
+    // Node/JS dev servers and watchers.
+    [InlineData("npm start")]
+    [InlineData("npm run dev")]
+    [InlineData("yarn dev")]
+    [InlineData("pnpm run serve")]
+    [InlineData("vite")]
+    [InlineData("vite preview")]
+    [InlineData("next dev")]
+    [InlineData("ng serve")]
+    [InlineData("webpack serve")]
+    [InlineData("webpack-dev-server")]
+    // Other ecosystems.
+    [InlineData("flask run")]
+    [InlineData("php -S localhost:8000")]
+    [InlineData("dotnet watch")]
+    [InlineData("python manage.py runserver")]
+    [InlineData("rails server")]
+    [InlineData("hugo server -D")]
+    // Wrapped — inner command is a server.
+    [InlineData("powershell -Command \"npm run dev\"")]
+    public void LooksLikeLongRunningCommand_BlocksServers(string command)
+    {
+        Assert.True(FunctionInvocationFilter.LooksLikeLongRunningCommand(command));
+    }
+
+    [Theory]
+    // One-shot commands that exit on their own — must NOT be refused.
+    [InlineData("git status")]
+    [InlineData("dotnet build")]
+    [InlineData("dotnet test")]
+    [InlineData("dotnet run")] // deliberately allowed — often a short-lived console app
+    [InlineData("npm install")]
+    [InlineData("npm run build")]
+    [InlineData("vite build")] // the one-shot subcommand, not the dev server
+    [InlineData("yarn build")]
+    [InlineData("ng build")]
+    [InlineData("ls")]
+    [InlineData("echo serve the build")] // 'serve' as prose, not the command
+    [InlineData("")]
+    [InlineData("   ")]
+    public void LooksLikeLongRunningCommand_AllowsOneShotCommands(string command)
+    {
+        Assert.False(FunctionInvocationFilter.LooksLikeLongRunningCommand(command));
+    }
 }
