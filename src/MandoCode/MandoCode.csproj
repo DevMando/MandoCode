@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.11.0</Version>
+    <Version>0.12.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -24,26 +24,19 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.11.0 — A release about trust
+v0.12.0 — Long sessions that don't freeze
 
-When you tell MandoCode to stop, it should stop. When it's working, it shouldn't silently freeze. And when it searches the web, the search should actually work. This release fixes every way we found those promises could break — each one discovered by building real projects with MandoCode itself.
-
-New:
-- Web search that doesn't randomly fail. Search works out of the box with no key, but the free DuckDuckGo service sometimes blocks busy users mid-session. You can now add a free Tavily key (about 1,000 searches a month) with: /config set tavilyKey YOUR-KEY — searches become faster and more reliable, and DuckDuckGo stays as the backup. Skip it and nothing changes; if a search ever does get blocked, the assistant explains the option right in the chat. The assistant also now treats live questions — weather, news, scores, latest versions — as search-first, instead of telling you about its training cutoff and suggesting you Google it yourself.
-- Change settings without losing your session. /config set lets you adjust the model, temperature, timeouts, and more mid-conversation — no restart, history kept.
+The last release promised that a working session shouldn't silently lock up. Then we kept building real projects with MandoCode and found more ways it could — freeze mid-task, scramble its own output, or spin its wheels instead of finishing. Every one is fixed here, and every one was caught by dogfooding. The worst of them we tracked down from a live snapshot of the frozen app while it was building a game, so these address the real causes, not the symptoms. If you've ever watched MandoCode stop dead in the middle of a task with the spinner gone, this is the release that ends it.
 
 Fixed:
-- "Stop" now means stop. Cancelling a plan or request used to politely ask the AI to stop — and sometimes it just kept going, writing files you'd already said no to. Now the app itself refuses to run anything further the moment you cancel.
-- No more silent freezes. We closed every way we found a session could hang forever: prompts that fought over your keyboard, a watchdog that fell asleep after a settings change, and approvals that couldn't be escaped. Esc always works now.
-- The AI can finally see large files. It used to read only the top of long files and guess at the rest, then loop on failed edits. It now reads exactly the section it's working on and knows where to continue.
-- Local models stopped "forgetting" your instructions. Ollama's small default memory window was silently dropping older context as conversations grew; MandoCode now sizes it to your hardware automatically.
-- Finished work stays finished. After a plan completes, the AI can no longer bulldoze the result with "improvements" you didn't ask for, or propose endless follow-up plans.
-- Clearer guidance when a reply gets cut off: the warning now tells you which limit you actually hit and the one setting that fixes it.
+- Approving a change no longer freezes the app. Deep into a multi-step task — right when the assistant starts writing files and asking you to approve them — the approval prompt could lock up with nothing on screen, and your only option was to kill it and lose the work. That entire class of freeze is gone; approvals always respond now.
+- A tricky command can no longer pin your CPU and hang. A single command with a long, quote-heavy string — the kind the assistant runs to check its own code — could send one CPU core to 100% indefinitely: fans roaring, nothing on screen, no way back. It's now capped to a fraction of a second and keeps going.
+- No more garbled or doubled-up output. On long replies, slow-to-format text could paint a scrambled second copy over what was already there. Output now renders once, cleanly, every time.
+- It won't burn your whole session repeating the same web search. A research step could fire the identical search over and over, spending the entire request on duplicate results. Repeats are caught now, and the assistant moves on with what it already found.
+- Asking it to "test in the browser" no longer hangs. The assistant used to try to start a local web server to preview your work — which can't stay running under it and just stalled for 30 seconds at a time. Now it hands you the exact command and URL to run yourself, instantly.
 
-Polish:
-- Every menu speaks the same color language — green means go, gold means redirect, red means destructive — so you can tell how consequential a choice is at a glance. Arrow keys never drop a press.
-- /model is now a true quick switch: pick a model, done.
-- Under the hood: 393 automated tests now guard all of the above.
+Under the hood:
+- More automated tests guard every fix above, and the hardest freeze was diagnosed from a real snapshot of the stuck process rather than guesswork — so the fixes target the actual cause.
     </PackageReleaseNotes>
   </PropertyGroup>
 

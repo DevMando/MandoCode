@@ -16,6 +16,7 @@
 @inject DiffApprovalHandler DiffApproval
 @inject CancelKeyCoordinator KeyCoordinator
 @inject InstructionPromptCoordinator InstructionCoordinator
+@inject ApprovalSelectCoordinator ApprovalMenu
 @inject ShellCommandHandler Shell
 @inject TerminalThemeService ThemeService
 @inject InputStateMachine StateMachine
@@ -69,6 +70,17 @@
                BorderStyle="BoxBorder.Rounded"
                Expand="true"
                FocusOrder="0" />
+}
+
+@* Approval menu — surfaced by DiffApprovalHandler for write / command / delete / MCP
+   approvals. VDOM ApprovalSelect (same component as plan approval) instead of Spectre's
+   SelectionPrompt so the keyboard pump is the only console reader and arrow keys can't be
+   stolen mid-prompt, which previously hung a plan step. Bridged via
+   ApprovalSelectCoordinator (TCS). *@
+@if (ApprovalMenu.IsActive)
+{
+    <ApprovalSelect Options="@_approvalMenuOptions"
+                    OnSubmit="HandleApprovalMenuSubmit" />
 }
 
 @* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
@@ -161,6 +173,11 @@
     // Instruction input — bound to the VDOM TextInput surfaced when DiffApprovalHandler
     // requests instructions via InstructionPromptCoordinator.
     private string _instructionValue = "";
+
+    // Approval menu options — projected from ApprovalSelectCoordinator.Options into the
+    // ApprovalSelect component's own Option type. Rebuilt whenever the coordinator's state
+    // changes (see OnApprovalMenuStateChanged) so the render path stays allocation-free.
+    private IReadOnlyList<ApprovalSelect.Option> _approvalMenuOptions = Array.Empty<ApprovalSelect.Option>();
 
     private bool _isProcessing = false;
     private bool _autocompleteActive = false;
@@ -287,6 +304,9 @@
 
         // Re-render when DiffApprovalHandler activates the instruction TextInput.
         InstructionCoordinator.StateChanged += OnInstructionStateChanged;
+
+        // Re-render when DiffApprovalHandler activates the VDOM approval menu.
+        ApprovalMenu.StateChanged += OnApprovalMenuStateChanged;
 
         // Wire up diff approval callbacks if enabled
         if (Config.EnableDiffApprovals)
@@ -1171,6 +1191,28 @@
     }
 
     /// <summary>
+    /// Bound to the approval menu's ApprovalSelect.OnSubmit. Hands the chosen option text
+    /// back to whichever DiffApprovalHandler call is awaiting via the coordinator.
+    /// </summary>
+    private void HandleApprovalMenuSubmit(string value)
+    {
+        ApprovalMenu.Submit(value ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Re-projects the coordinator's options into ApprovalSelect's Option type and
+    /// re-renders. Done here (on state change) rather than inline in markup so the option
+    /// list isn't rebuilt on every unrelated render pass.
+    /// </summary>
+    private void OnApprovalMenuStateChanged()
+    {
+        _approvalMenuOptions = ApprovalMenu.Options
+            .Select(o => new ApprovalSelect.Option(o.Text, o.Color))
+            .ToList();
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
     /// Bound to the wizard's Select.ValueChanged — fires when the user presses Enter on a
     /// highlighted option (RazorConsole's Select uses Enter as the commit signal).
     /// </summary>
@@ -1709,56 +1751,63 @@
 
     /// <summary>
     /// Renders <paramref name="text"/> as markdown, guarded against rendering hangs on
-    /// malformed/huge content. The build+write runs on a background task; a 1s grace passes
-    /// before a "Rendering..." spinner shows, with a hard cap of
+    /// malformed/huge content. The expensive part — building the renderable (Markdig parse,
+    /// HTML walk, regex linkify) — runs on a background task; a 1s grace passes before a
+    /// "Rendering..." spinner shows, with a hard cap of
     /// <see cref="MandoCodeConfig.MarkdownRenderTimeoutSeconds"/>. On timeout or failure it
-    /// falls back to raw text. Shared by the direct-chat response path and the per-step plan
-    /// path so neither can freeze the interactive loop.
+    /// falls back to raw text. The console write happens ONLY on the calling thread (never
+    /// on the background task), so a build that overruns the timeout can't later dump a
+    /// second, garbled copy on top of the raw-text fallback. Shared by the direct-chat
+    /// response path and the per-step plan path so neither can freeze the interactive loop.
     /// </summary>
     private void RenderMarkdownGuarded(string text)
     {
         try
         {
-            // Large responses with many tables/code blocks can take 10+ seconds to render.
-            var renderTask = Task.Run(() =>
-            {
-                var renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot);
-                AnsiConsole.Write(renderable);
-            });
+            // Build off-thread but DON'T write from there. Building is the expensive,
+            // occasionally-pathological work; the write is fast. Keeping the write on the
+            // calling thread means that if the build overruns the timeout and we fall back
+            // to raw text, the orphaned task just finishes computing a renderable nobody
+            // reads and exits — it can't write to the console out of band and corrupt the
+            // view (or interleave with the next step's output). It also serializes the write
+            // with the surrounding imperative AnsiConsole output on this same thread.
+            // Large responses with many tables/code blocks can take 10+ seconds to build.
+            Spectre.Console.Rendering.IRenderable? renderable = null;
+            var buildTask = Task.Run(() =>
+                renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot));
 
-            // Show a spinner if rendering takes more than 1 second. The remaining
+            // Show a spinner if the build takes more than 1 second. The remaining
             // budget comes from config — big tool-grounded responses (MCP, many
-            // tables) can legitimately take 30+ seconds to render.
-            if (!renderTask.Wait(TimeSpan.FromSeconds(1)))
+            // tables) can legitimately take 30+ seconds to build.
+            if (!buildTask.Wait(TimeSpan.FromSeconds(1)))
             {
                 Spinner.Start("Rendering...");
                 var remainingSeconds = Math.Max(1, Config.MarkdownRenderTimeoutSeconds - 1);
-                if (!renderTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
+                if (!buildTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
                 {
                     Spinner.Stop();
-                    // Rendering exceeded the configured budget — fall back to raw text
+                    // Build exceeded the configured budget — fall back to raw text. The
+                    // orphaned task finishes computing into a local nobody reads, then exits
+                    // without ever touching the console.
                     Console.WriteLine();
                     Console.Write(text);
                     Console.WriteLine();
                     AnsiConsole.MarkupLine($"[dim](markdown rendering timed out after {Config.MarkdownRenderTimeoutSeconds}s — showing raw text. Raise with /config or mandocode --config set renderTimeout 120)[/]");
+                    return;
                 }
-                else if (renderTask.IsFaulted)
-                {
-                    Spinner.Stop();
-                    throw renderTask.Exception!.InnerException ?? renderTask.Exception;
-                }
-                else
-                {
-                    Spinner.Stop();
-                }
+                Spinner.Stop();
             }
-            else if (renderTask.IsFaulted)
-            {
-                throw renderTask.Exception!.InnerException ?? renderTask.Exception;
-            }
+
+            // Build finished within budget (a faulted build rethrows out of Wait above and
+            // lands in the catch below). Write the rendered markdown on this thread.
+            if (renderable != null)
+                AnsiConsole.Write(renderable);
         }
         catch (Exception renderEx)
         {
+            // A faulted Wait throws straight to here, skipping the Spinner.Stop() calls
+            // above — stop it so the "Rendering..." spinner doesn't leak. Stop() is idempotent.
+            Spinner.Stop();
             System.Diagnostics.Debug.WriteLine($"[MandoCode] Render failed: {renderEx.Message}");
             // Fallback to raw text if markdown rendering fails
             Console.Write(text);
@@ -2978,6 +3027,7 @@
             Console.CancelKeyPress -= _cancelKeyHandler;
 
         InstructionCoordinator.StateChanged -= OnInstructionStateChanged;
+        ApprovalMenu.StateChanged -= OnApprovalMenuStateChanged;
 
         // Clear the PlanHandoff callback so late-arriving propose_plan calls don't
         // hit a disposed App. AIService stays, but plan requests just return the

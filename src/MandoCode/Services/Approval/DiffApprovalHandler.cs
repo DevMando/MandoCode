@@ -15,6 +15,7 @@ public class DiffApprovalHandler
     private readonly PlanHandoff _planHandoff;
     private readonly CancelKeyCoordinator _keyCoordinator;
     private readonly InstructionPromptCoordinator _instructionPrompt;
+    private readonly ApprovalSelectCoordinator _approvalSelect;
     private readonly ApprovalPromptGate _promptGate;
 
     private bool _globalWriteBypass = false;
@@ -26,6 +27,7 @@ public class DiffApprovalHandler
         PlanHandoff planHandoff,
         CancelKeyCoordinator keyCoordinator,
         InstructionPromptCoordinator instructionPrompt,
+        ApprovalSelectCoordinator approvalSelect,
         ApprovalPromptGate promptGate)
     {
         _spinner = spinner;
@@ -33,23 +35,31 @@ public class DiffApprovalHandler
         _planHandoff = planHandoff;
         _keyCoordinator = keyCoordinator;
         _instructionPrompt = instructionPrompt;
+        _approvalSelect = approvalSelect;
         _promptGate = promptGate;
     }
 
-    // Labels used as both UI text and switch discriminators. Spectre markup is
-    // baked into the strings so SelectionPrompt renders them in color while
-    // string equality at selection time still resolves correctly.
-    private const string ApproveLabel = "[green]Approve[/]";
-    private const string ApproveDeletionLabel = "[green]Approve deletion[/]";
-    private const string ApproveNoAskWriteLabel = "[green]Approve - okay to write & modify files don't ask me again[/]";
-    private const string ApproveNoAskRunLabel = "[green]Approve - okay to run commands don't ask me again[/]";
-    private const string ApproveNoAskDeleteLabel = "[green]Approve - okay to write, modify & delete files don't ask me again[/]";
-    // Deny and Provide-new-instructions share the warm gold accent (rgb(255,200,80)) used
-    // for files in the autocomplete panel and the submitted-prompt echo — the app's second
-    // accent color. Red stays reserved for destructive/irreversible actions (Cancel the plan).
-    private const string DenyLabel = "[rgb(255,200,80)]Deny[/]";
-    private const string ProvideInstructionsLabel = "[rgb(255,200,80)]Provide new instructions[/]";
-    private const string CancelPlanLabel = "[red]Cancel the plan[/]";
+    // Labels used as both UI text and switch discriminators. These are now PLAIN text
+    // (no Spectre markup): the VDOM ApprovalSelect carries each option's color separately
+    // and parses its Content as markup, so an embedded color tag would be double-applied
+    // and a literal '[' would corrupt the render. The returned choice is the option's
+    // Text verbatim, so plain-string equality below still resolves correctly.
+    private const string ApproveLabel = "Approve";
+    private const string ApproveDeletionLabel = "Approve deletion";
+    private const string ApproveNoAskWriteLabel = "Approve - okay to write & modify files don't ask me again";
+    private const string ApproveNoAskRunLabel = "Approve - okay to run commands don't ask me again";
+    private const string ApproveNoAskDeleteLabel = "Approve - okay to write, modify & delete files don't ask me again";
+    private const string DenyLabel = "Deny";
+    private const string ProvideInstructionsLabel = "Provide new instructions";
+    private const string CancelPlanLabel = "Cancel the plan";
+
+    // Option palette, applied by ApprovalSelect. Green = proceed; warm gold (rgb(255,200,80),
+    // the app's second accent, also used for files in the autocomplete panel and the
+    // submitted-prompt echo) = deny / redirect; red stays reserved for the destructive
+    // "Cancel the plan".
+    private static readonly Color ApproveColor = Color.Green;
+    private static readonly Color RedirectColor = new(255, 200, 80);
+    private static readonly Color DestructiveColor = Color.Red;
 
     private string FileLink(string relativePath) =>
         FileLinkHelper.FileLink(_projectRoot.ProjectRoot, relativePath);
@@ -86,37 +96,37 @@ public class DiffApprovalHandler
             return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
-        // Build choices for the SelectionPrompt — now safe since our spinner is stopped
+        // Build choices for the menu — now safe since our spinner is stopped. The
+        // not-new-file label embeds the file name, so escape it: ApprovalSelect parses each
+        // option's text as Spectre markup, and the same escaped text is what's returned and
+        // compared below.
         var noAskLabel = isNewFile
             ? ApproveNoAskWriteLabel
-            : $"[green]Approve - Don't ask again to modify {Spectre.Console.Markup.Escape(fileName)}[/]";
+            : $"Approve - Don't ask again to modify {Spectre.Console.Markup.Escape(fileName)}";
 
-        var choices = new List<string>
+        var choices = new List<ApprovalSelectCoordinator.Option>
         {
-            ApproveLabel,
-            noAskLabel,
-            DenyLabel,
-            ProvideInstructionsLabel
+            new(ApproveLabel, ApproveColor),
+            new(noAskLabel, ApproveColor),
+            new(DenyLabel, RedirectColor),
+            new(ProvideInstructionsLabel, RedirectColor)
         };
         // "Cancel the plan" only makes sense when a plan is actually running — in a direct
         // chat, the user can just pick Deny to abort this single tool call.
-        if (_planHandoff.IsExecuting) choices.Add(CancelPlanLabel);
+        if (_planHandoff.IsExecuting) choices.Add(new(CancelPlanLabel, DestructiveColor));
 
-        // Single suppression scope spans BOTH prompts and the if/else dispatch.
-        // If the user picks "Provide new instructions" and starts typing ahead
-        // before the TextPrompt opens, those queued keys aren't eaten by the
-        // listener during the gap.
+        // Title is rendered imperatively to scrollback — ApprovalSelect holds only the
+        // option rows (see ApprovalSelect.razor).
+        AnsiConsole.MarkupLine("[deepskyblue1]Apply these changes?[/]");
+
+        // Single suppression scope spans BOTH prompts and the if/else dispatch. Suppress()
+        // is still required even though the menu is now VDOM: it stops App's background
+        // Escape listener from reading the same console and stealing keys from the keyboard
+        // pump — exactly the way the pump used to steal them from Spectre's prompt.
         DiffApprovalResult result;
         using (_keyCoordinator.Suppress())
         {
-            var approvalChoice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]Apply these changes?[/]")
-                    // Same black-on-deepskyblue1 treatment as the selected row in the
-                    // command autocomplete panel, so selection reads the same everywhere.
-                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
-                    .AddChoices(choices)
-            );
+            var approvalChoice = await _approvalSelect.RequestAsync(choices);
 
             if (approvalChoice == ApproveLabel)
             {
@@ -207,26 +217,23 @@ public class DiffApprovalHandler
             return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
-        var cmdChoices = new List<string>
+        var cmdChoices = new List<ApprovalSelectCoordinator.Option>
         {
-            ApproveLabel,
-            ApproveNoAskRunLabel,
-            DenyLabel,
-            ProvideInstructionsLabel
+            new(ApproveLabel, ApproveColor),
+            new(ApproveNoAskRunLabel, ApproveColor),
+            new(DenyLabel, RedirectColor),
+            new(ProvideInstructionsLabel, RedirectColor)
         };
-        if (_planHandoff.IsExecuting) cmdChoices.Add(CancelPlanLabel);
+        if (_planHandoff.IsExecuting) cmdChoices.Add(new(CancelPlanLabel, DestructiveColor));
+
+        // Title to scrollback; the VDOM menu holds only the option rows. Suppress() still
+        // gates App's Escape listener so it can't steal keys from the keyboard pump.
+        AnsiConsole.MarkupLine("[deepskyblue1]Run this command?[/]");
 
         DiffApprovalResult result;
         using (_keyCoordinator.Suppress())
         {
-            var approvalChoice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]Run this command?[/]")
-                    // Same black-on-deepskyblue1 treatment as the selected row in the
-                    // command autocomplete panel, so selection reads the same everywhere.
-                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
-                    .AddChoices(cmdChoices)
-            );
+            var approvalChoice = await _approvalSelect.RequestAsync(cmdChoices);
 
             if (approvalChoice == ApproveLabel)
             {
@@ -338,26 +345,23 @@ public class DiffApprovalHandler
             return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
-        var delChoices = new List<string>
+        var delChoices = new List<ApprovalSelectCoordinator.Option>
         {
-            ApproveDeletionLabel,
-            ApproveNoAskDeleteLabel,
-            DenyLabel,
-            ProvideInstructionsLabel
+            new(ApproveDeletionLabel, ApproveColor),
+            new(ApproveNoAskDeleteLabel, ApproveColor),
+            new(DenyLabel, RedirectColor),
+            new(ProvideInstructionsLabel, RedirectColor)
         };
-        if (_planHandoff.IsExecuting) delChoices.Add(CancelPlanLabel);
+        if (_planHandoff.IsExecuting) delChoices.Add(new(CancelPlanLabel, DestructiveColor));
+
+        // Title to scrollback; the VDOM menu holds only the option rows. Suppress() still
+        // gates App's Escape listener so it can't steal keys from the keyboard pump.
+        AnsiConsole.MarkupLine("[deepskyblue1]Delete this file?[/]");
 
         DiffApprovalResult result;
         using (_keyCoordinator.Suppress())
         {
-            var approvalChoice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]Delete this file?[/]")
-                    // Same black-on-deepskyblue1 treatment as the selected row in the
-                    // command autocomplete panel, so selection reads the same everywhere.
-                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
-                    .AddChoices(delChoices)
-            );
+            var approvalChoice = await _approvalSelect.RequestAsync(delChoices);
 
             if (approvalChoice == ApproveDeletionLabel)
             {
@@ -477,26 +481,25 @@ public class DiffApprovalHandler
             return new DiffApprovalResult { Response = DiffApprovalResponse.Approved };
         }
 
-        var noAskMcpLabel = $"[green]Approve - don't ask again for {Spectre.Console.Markup.Escape(toolName)} this session[/]";
-        var mcpChoices = new List<string>
+        // Embeds the tool name, so escape it — ApprovalSelect parses option text as markup
+        // and returns it verbatim for the comparison below.
+        var noAskMcpLabel = $"Approve - don't ask again for {Spectre.Console.Markup.Escape(toolName)} this session";
+        var mcpChoices = new List<ApprovalSelectCoordinator.Option>
         {
-            ApproveLabel,
-            noAskMcpLabel,
-            DenyLabel
+            new(ApproveLabel, ApproveColor),
+            new(noAskMcpLabel, ApproveColor),
+            new(DenyLabel, RedirectColor)
         };
-        if (_planHandoff.IsExecuting) mcpChoices.Add(CancelPlanLabel);
+        if (_planHandoff.IsExecuting) mcpChoices.Add(new(CancelPlanLabel, DestructiveColor));
+
+        // Title to scrollback; the VDOM menu holds only the option rows. Suppress() still
+        // gates App's Escape listener so it can't steal keys from the keyboard pump.
+        AnsiConsole.MarkupLine("[deepskyblue1]Run this MCP tool?[/]");
 
         string choice;
         using (_keyCoordinator.Suppress())
         {
-            choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]Run this MCP tool?[/]")
-                    // Same black-on-deepskyblue1 treatment as the selected row in the
-                    // command autocomplete panel, so selection reads the same everywhere.
-                    .HighlightStyle(new Style(foreground: Color.Black, background: Color.DeepSkyBlue1))
-                    .AddChoices(mcpChoices)
-            );
+            choice = await _approvalSelect.RequestAsync(mcpChoices);
         }
 
         DiffApprovalResult result;

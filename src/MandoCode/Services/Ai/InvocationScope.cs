@@ -7,10 +7,13 @@ namespace MandoCode.Services;
 /// to catch pathological tool-call loops that would otherwise fill the model's
 /// context window before the step finishes.
 ///
-/// Two circuits:
+/// Circuits:
 ///   1. Duplicate-read detection — a second <c>read_file_contents</c> with the
 ///      same args is short-circuited unless the path was written/edited since.
-///   2. Result-budget tracking — accumulated tool-result characters are capped
+///   2. Duplicate web-call detection — a second <c>search_web</c>/<c>fetch_webpage</c>
+///      with the same normalized query/URL is short-circuited (no escape hatch — the
+///      result is already in history and nothing in-scope changes it).
+///   3. Result-budget tracking — accumulated tool-result characters are capped
 ///      so we bail gracefully instead of blowing past the context window.
 ///
 /// A scope is cheap; spin one up per chat turn and per plan step.
@@ -21,6 +24,9 @@ public class InvocationScope : IDisposable
     // are treated as the same file — matches OS semantics and keeps the two maps aligned.
     private readonly HashSet<string> _readKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pathsModifiedSinceRead = new(StringComparer.OrdinalIgnoreCase);
+    // Web calls (search_web / fetch_webpage) already issued this scope, keyed on the
+    // normalized query/URL. No companion "modified-since" set — see IsDuplicateWebCall.
+    private readonly HashSet<string> _webCallKeys = new(StringComparer.OrdinalIgnoreCase);
     // Edit-failure bookkeeping per path — used by the filter to dedupe the content-hint
     // that's attached to "Could not find old_text" errors, and to trip a circuit breaker
     // when the model keeps failing against the same path in an exploratory loop.
@@ -74,6 +80,25 @@ public class InvocationScope : IDisposable
             _readKeys.Add(readKey);
             _pathsModifiedSinceRead.Remove(path);
         }
+    }
+
+    /// <summary>
+    /// Returns true if this exact web call (search_web / fetch_webpage, keyed on the
+    /// normalized query/URL) already ran in this scope. Unlike reads there is NO
+    /// "modified since" escape hatch — the result is already in the model's history and
+    /// nothing in-scope invalidates it, so any repeat is a stuck loop. Observed live: a
+    /// model fired the SAME search_web query 40+ times in one plan step, burning the turn's
+    /// token budget on byte-identical responses. Web results are individually small, so the
+    /// result-char budget circuit never tripped — this set is the only thing that catches it.
+    /// </summary>
+    public bool IsDuplicateWebCall(string webKey)
+    {
+        lock (_lock) return _webCallKeys.Contains(webKey);
+    }
+
+    public void RecordWebCall(string webKey)
+    {
+        lock (_lock) _webCallKeys.Add(webKey);
     }
 
     /// <summary>
