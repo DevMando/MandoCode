@@ -1,0 +1,24 @@
+namespace ArdinCode.Services;
+
+/// <summary>
+/// Generates OSC 8 clickable file hyperlinks for terminal output.
+/// </summary>
+public static class FileLinkHelper
+{
+    /// <summary>
+    /// Wraps a relative file path in an OSC 8 hyperlink so clicking it
+    /// opens the file in the user's default editor / handler.
+    /// </summary>
+    public static string FileLink(string projectRoot, string relativePath)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(projectRoot, relativePath));
+        var fileUri = new Uri(fullPath).AbsoluteUri;
+        return $"\u001b]8;;{fileUri}\u0007{relativePath}\u001b]8;;\u0007";
+    }
+
+    /// <summary>
+    /// Wraps arbitrary display text in an OSC 8 hyperlink for any URI.
+    /// </summary>
+    public static string Hyperlink(string uri, string displayText)
+        => $"\u001b]8;;{uri}\u0007{displayText}\u001b]8;;\u0007";
+}

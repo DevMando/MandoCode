@@ -1,0 +1,70 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- dotnet tool settings -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ardincode</ToolCommandName>
+    <PackageId>ArdinCode</PackageId>
+
+    <!-- NuGet metadata -->
+    <Version>0.12.0</Version>
+    <Authors>Arardin Fernandez (DevArdin)</Authors>
+    <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
+    <PackageProjectUrl>https://github.com/DevArdin/ArdinCode</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DevArdin/ArdinCode</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>ai;cli;coding-assistant;ollama;semantic-kernel;local-llm</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>MC.png</PackageIcon>
+    <ApplicationIcon>MC.ico</ApplicationIcon>
+    <PackageReleaseNotes>
+v0.12.0 — Long sessions that don't freeze
+
+This release is all about reliability on long, real-world tasks. While building actual projects with ArdinCode, I found several ways a long session could freeze, scramble its own output, or spin in circles instead of finishing — and I fixed every one. The hardest freezes were tracked down by inspecting the stuck app directly, so these address the real causes, not just the symptoms.
+
+Fixed:
+
+- No more freezing when you approve a change. Deep in a multi-step task — right as ArdinCode started creating files and asking you to approve them — it could lock up with nothing on screen, leaving you no choice but to quit and lose your progress. The approval prompts could end up waiting forever for a keypress that never reached them; I rebuilt them so they always respond.
+
+- No more locking up while running a command. Some commands could make ArdinCode hang on a single step and never come back. It was getting stuck while formatting the command for display — certain commands (long ones, or ones containing file paths) could send it into a loop that never finished. That can't happen now, and a safety cutoff stops anything that ever runs unusually long.
+
+- No more garbled or duplicated text. On longer replies, a second, scrambled copy of the text could end up drawn over the first. I changed how responses are written to the screen so they show once, cleanly, every time.
+
+- No more wasting a session on repeated searches. While researching, ArdinCode could run the same web search over and over without realizing it already had the answer — burning time and tokens for nothing. It now recognizes a repeated search and moves on with what it already found.
+
+- No more stalling when previewing your work. Asked to "test it in the browser," ArdinCode used to try to start a local web server it couldn't keep running, and would just sit there waiting. Now it simply gives you the exact command and link to open it yourself.
+
+Every fix is covered by automated tests — the suite grew to 449 checks to keep these from coming back.
+    </PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HtmlAgilityPack" Version="1.11.72" />
+    <PackageReference Include="Markdig" Version="1.0.0" />
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.3" />
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.72.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.72.0-alpha" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.5.2" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.2" />
+    <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="RazorConsole.Core" Version="0.5.0-alpha.20260225-7c02f3c" />
+    <PackageReference Include="YamlDotNet" Version="16.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Audio\**\*.mp3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="MC.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

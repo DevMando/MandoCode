@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/mcbanner.png" alt="MandoCode Logo" width="800">
+  <img src="docs/images/mcbanner.png" alt="ArdinCode Logo" width="800">
 </p>
 
 <p align="center">
@@ -8,19 +8,19 @@
 </p>
 
 <p align="center">
-  <a href="https://www.nuget.org/packages/MandoCode"><img src="https://img.shields.io/nuget/v/MandoCode?logo=nuget&color=blue" alt="NuGet"></a>
+  <a href="https://www.nuget.org/packages/ArdinCode"><img src="https://img.shields.io/nuget/v/ArdinCode?logo=nuget&color=blue" alt="NuGet"></a>
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
   <img src="https://img.shields.io/badge/.NET-8.0-blueviolet?logo=dotnet" alt=".NET 8.0">
   <img src="https://img.shields.io/badge/Ollama-Local%20LLM-black?logo=ollama" alt="Ollama">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/Made%20with%20%3C3%20by-Mando-red" alt="Made with <3 by Mando">
+  <img src="https://img.shields.io/badge/Made%20with%20%3C3%20by-Ardin-red" alt="Made with <3 by Ardin">
 </p>
 
 <p align="center">
-  <img src="docs/images/hero-demo.gif" alt="MandoCode in action" width="800">
+  <img src="docs/images/hero-demo.gif" alt="ArdinCode in action" width="800">
 </p>
 
-MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
+ArdinCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
 
 Run locally or connect to Ollama cloud — no API keys required for anything, including web search (an optional free [Tavily](https://www.tavily.com/) key upgrades search reliability). It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
@@ -29,13 +29,13 @@ Run locally or connect to Ollama cloud — no API keys required for anything, in
 ## Prerequisites
 
 - **.NET 8 SDK** — [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) *(SDK includes the runtime — install only the SDK)*
-- **Ollama** — [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
+- **Ollama** — [ollama.com/download](https://ollama.com/download) *(ArdinCode walks you through setup on first run)*
 
 ## Install
 
 ```bash
-dotnet tool install -g MandoCode
-mandocode
+dotnet tool install -g ArdinCode
+ardincode
 ```
 
 First run launches a guided wizard: it detects Ollama, offers to start it, walks you through cloud sign-in if you'd like more powerful models, and auto-pulls a sensible default. You can re-run it any time with `/setup`.
@@ -43,7 +43,7 @@ First run launches a guided wizard: it detects Ollama, offers to start it, walks
 ## Troubleshooting
 
 ```bash
-mandocode --doctor
+ardincode --doctor
 ```
 
 Prints your runtime version, Ollama status, models pulled, and cloud sign-in state.
@@ -58,7 +58,7 @@ If you use **local models** and see responses cut off, the model "forgetting" ea
 
 …your Ollama **context window** is almost certainly too small. The context window is how much conversation + code the model can see at once — and **Ollama defaults it to ~4k tokens**, which an agentic session fills almost immediately. When it overflows, the oldest content (including the system prompt — the model's instructions!) is silently dropped.
 
-**If you use the Ollama desktop app** (the tray icon), the app's **Settings → Context length** slider controls this — and it overrides everything else, including MandoCode's config:
+**If you use the Ollama desktop app** (the tray icon), the app's **Settings → Context length** slider controls this — and it overrides everything else, including ArdinCode's config:
 
 <p align="center">
   <img src="docs/images/ollama-context-slider.png" alt="Ollama desktop app — Settings → Context length slider" width="600">
@@ -70,13 +70,13 @@ There's no universally right slider position — it's a trade between *how much 
 - **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung.
 - **Starting points**: **16k** for most GPUs, **32k** with 8 GB+ VRAM. Only raise it if you're seeing the symptoms above; step back down a notch if generation slows badly after raising it.
 
-**If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
+**If you run `ollama serve` yourself** (no desktop app), ArdinCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
 
 ```bash
-mandocode --config set contextLength 16384
+ardincode --config set contextLength 16384
 ```
 
-Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside MandoCode for a friendly explainer.
+Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside ArdinCode for a friendly explainer.
 
 ### ⚠️ All models: check your response cap (the #2 gotcha)
 
@@ -85,24 +85,24 @@ The context window's evil twin — and unlike the slider above, this one applies
 Fresh installs default to 32k and never notice it. But if your config predates v0.11, or you once lowered `maxTokens` thinking it was the context window (they're different knobs — this caps what the model *says*, the context window caps what it *sees*), check it:
 
 ```bash
-mandocode --config show                  # look at "Max Tokens"
-mandocode --config set maxTokens 32768
+ardincode --config show                  # look at "Max Tokens"
+ardincode --config set maxTokens 32768
 ```
 
-The telltale sign: token tracking shows output pinned at exactly your cap, turn after turn (e.g. `2k out` every time). Note that a running session keeps the config it loaded at startup — restart MandoCode (or use `/config set` in-app) for the change to take effect.
+The telltale sign: token tracking shows output pinned at exactly your cap, turn after turn (e.g. `2k out` every time). Note that a running session keeps the config it loaded at startup — restart ArdinCode (or use `/config set` in-app) for the change to take effect.
 
 ### Or build from source
 
 ```bash
-git clone https://github.com/DevMando/MandoCode.git
-cd MandoCode
-dotnet build src/MandoCode/MandoCode.csproj
-dotnet run --project src/MandoCode/MandoCode.csproj -- /path/to/your/project
+git clone https://github.com/DevArdin/ArdinCode.git
+cd ArdinCode
+dotnet build src/ArdinCode/ArdinCode.csproj
+dotnet run --project src/ArdinCode/ArdinCode.csproj -- /path/to/your/project
 ```
 
 ---
 
-## What Makes MandoCode Different
+## What Makes ArdinCode Different
 
 <table>
 <tr>
@@ -159,7 +159,7 @@ Lofi and synthwave tracks bundled right in. A waveform visualizer runs in the co
 
 ### Offline-Friendly Startup
 
-If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare error. Use `/retry` to reconnect without restarting.
+If Ollama isn't running, ArdinCode shows setup guidance inline instead of a bare error. Use `/retry` to reconnect without restarting.
 
 <img src="docs/images/offline-guidance.png" alt="Offline guidance" width="400">
 
@@ -227,7 +227,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/mcp tools <server>` | List tools exposed by connected MCP servers (server optional) |
 | `/mcp-reload` | Restart all MCP servers and re-register their tools |
 | `/clear` | Clear conversation history |
-| `/exit` | Exit MandoCode |
+| `/exit` | Exit ArdinCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
 | `!cd <path>` | Change project root directory |
 
@@ -240,14 +240,14 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 ### CLI flags (outside the chat loop)
 
 ```bash
-mandocode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
-mandocode --config show     # print current config
-mandocode --config init     # create a default config file
-mandocode --config set <key> <value>   # set a single value (e.g. set model qwen3.5:9b)
-mandocode --config path     # show config file location
+ardincode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
+ardincode --config show     # print current config
+ardincode --config init     # create a default config file
+ardincode --config set <key> <value>   # set a single value (e.g. set model qwen3.5:9b)
+ardincode --config path     # show config file location
 ```
 
-Run `mandocode --doctor` any time chat is misbehaving — exits 0 if everything's green, 1 if anything's missing, with a clear summary of what's wrong.
+Run `ardincode --doctor` any time chat is misbehaving — exits 0 if everything's green, 1 if anything's missing, with a clear summary of what's wrong.
 
 ---
 
@@ -256,7 +256,7 @@ Run `mandocode --doctor` any time chat is misbehaving — exits 0 if everything'
 ```
   You type a prompt
         |
-  MandoCode adds project context (@files, system prompt)
+  ArdinCode adds project context (@files, system prompt)
         |
   Semantic Kernel sends to Ollama (local or cloud model)
         |
@@ -274,7 +274,7 @@ The AI has sandboxed access to your project through a **FileSystemPlugin** (9 fu
 
 ## Recommended Models
 
-Models with **tool/function calling** support work best with MandoCode. The first-run wizard offers exactly the models below — auto-pulls the cloud default, or lets you pick a local tier matched to your hardware.
+Models with **tool/function calling** support work best with ArdinCode. The first-run wizard offers exactly the models below — auto-pulls the cloud default, or lets you pick a local tier matched to your hardware.
 
 **Cloud** (no GPU required — runs on Ollama's servers, free with `ollama signin`):
 
@@ -291,7 +291,7 @@ Models with **tool/function calling** support work best with MandoCode. The firs
 | `qwen3.5:4b` | ~3.4 GB | Mid-range GPU (4-6 GB VRAM) or 16 GB RAM — balanced day-to-day use |
 | `qwen3.5:9b` | ~6.6 GB | Dedicated GPU (8+ GB VRAM) — best local quality, multi-file refactors |
 
-MandoCode validates model compatibility on startup. Run `/learn` for a detailed guide on model sizes and hardware requirements, or `/setup` to switch between tiers any time.
+ArdinCode validates model compatibility on startup. Run `/learn` for a detailed guide on model sizes and hardware requirements, or `/setup` to switch between tiers any time.
 
 ---
 
@@ -300,7 +300,7 @@ MandoCode validates model compatibility on startup. Run `/learn` for a detailed 
 
 ### Config File
 
-Located at `~/.mandocode/config.json`
+Located at `~/.ardincode/config.json`
 
 ```json
 {
@@ -334,7 +334,7 @@ Located at `~/.mandocode/config.json`
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |
-| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when MandoCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
+| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when ArdinCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
 | `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
 | `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
@@ -350,11 +350,11 @@ Located at `~/.mandocode/config.json`
 ### CLI Config Commands
 
 ```bash
-mandocode config show              # Display current configuration
-mandocode config init              # Create default configuration file
-mandocode config set <key> <value> # Set a configuration value
-mandocode config path              # Show configuration file location
-mandocode config --help            # Show help
+ardincode config show              # Display current configuration
+ardincode config init              # Create default configuration file
+ardincode config set <key> <value> # Set a configuration value
+ardincode config path              # Show configuration file location
+ardincode config --help            # Show help
 ```
 
 ### Environment Variables
@@ -369,7 +369,7 @@ mandocode config --help            # Show help
 <details>
 <summary><h2>Diff Approvals — Deep Dive</h2></summary>
 
-When the AI writes or deletes a file, MandoCode intercepts the operation and shows a color-coded diff before applying changes.
+When the AI writes or deletes a file, ArdinCode intercepts the operation and shows a color-coded diff before applying changes.
 
 ### What You See
 
@@ -398,7 +398,7 @@ File deletions show all existing content as red removals with a deletion warning
 ### Toggle
 
 ```bash
-mandocode config set diffApprovals false
+ardincode config set diffApprovals false
 ```
 
 </details>
@@ -413,16 +413,16 @@ Type `@` anywhere in your input (after a space or at position 0) to trigger file
 1. Type your prompt and hit `@` — a file dropdown appears
 2. Type a partial name to filter (e.g., `Conf`) — matches narrow down
 3. Use arrow keys to navigate, **Tab** or **Enter** to select
-4. The selected path is inserted (e.g., `@src/MandoCode/Models/MandoCodeConfig.cs`)
+4. The selected path is inserted (e.g., `@src/ArdinCode/Models/ArdinCodeConfig.cs`)
 5. Continue typing and press **Enter** to submit
-6. MandoCode reads the referenced file(s) and injects the content as context for the AI
+6. ArdinCode reads the referenced file(s) and injects the content as context for the AI
 
 ### Examples
 
 ```
-explain @src/MandoCode/Services/AIService.cs to me
-what does the ProcessFileReferences method do in @src/MandoCode/Components/App.razor
-refactor @src/MandoCode/Models/LoadingMessages.cs to use fewer spinners
+explain @src/ArdinCode/Services/AIService.cs to me
+what does the ProcessFileReferences method do in @src/ArdinCode/Components/App.razor
+refactor @src/ArdinCode/Models/LoadingMessages.cs to use fewer spinners
 ```
 
 Multiple `@` references in one prompt are supported. Files over 10,000 characters are automatically truncated.
@@ -443,7 +443,7 @@ Multiple `@` references in one prompt are supported. Files over 10,000 character
 <details>
 <summary><h2>Task Planner — Deep Dive</h2></summary>
 
-MandoCode automatically detects complex requests and offers to break them into a step-by-step plan before execution.
+ArdinCode automatically detects complex requests and offers to break them into a step-by-step plan before execution.
 
 ### Triggers
 
@@ -463,7 +463,7 @@ Simple questions, short prompts, and single-action operations (delete, remove, r
 4. **Step-by-step execution** — each step runs with progress tracking
 5. **Error handling** — skip failed steps or cancel the entire plan
 
-See [Task Planner Documentation](src/MandoCode/docs/TaskPlanner.md) for full technical details.
+See [Task Planner Documentation](src/ArdinCode/docs/TaskPlanner.md) for full technical details.
 
 </details>
 
@@ -495,18 +495,18 @@ When Ollama is running, `/learn` offers an interactive chat mode where the AI ex
 <details>
 <summary><h2>MCP Servers — Deep Dive</h2></summary>
 
-MandoCode speaks the [Model Context Protocol](https://modelcontextprotocol.io) as a client, which means you can plug in any published MCP server — filesystem, database, GitHub, Linear, Slack, whatever — and its tools show up to the model alongside MandoCode's built-in plugins.
+ArdinCode speaks the [Model Context Protocol](https://modelcontextprotocol.io) as a client, which means you can plug in any published MCP server — filesystem, database, GitHub, Linear, Slack, whatever — and its tools show up to the model alongside ArdinCode's built-in plugins.
 
 ### Adding a server
 
 Two ways:
 
-- **`/mcp add`** inside MandoCode — an interactive wizard that prompts through name, transport, URL/command, and optional headers/env vars, previews the JSON, and saves + reloads automatically.
-- **Hand-edit `~/.mandocode/config.json`** — useful when copy-pasting a `mcpServers` block from a server's README. Run `/mcp-reload` after saving.
+- **`/mcp add`** inside ArdinCode — an interactive wizard that prompts through name, transport, URL/command, and optional headers/env vars, previews the JSON, and saves + reloads automatically.
+- **Hand-edit `~/.ardincode/config.json`** — useful when copy-pasting a `mcpServers` block from a server's README. Run `/mcp-reload` after saving.
 
 ### Config shape
 
-The `mcpServers` block mirrors [Claude Desktop's schema](https://modelcontextprotocol.io/docs/develop/connect-local-servers), so you can copy-paste any server's README installation snippet directly into `~/.mandocode/config.json`:
+The `mcpServers` block mirrors [Claude Desktop's schema](https://modelcontextprotocol.io/docs/develop/connect-local-servers), so you can copy-paste any server's README installation snippet directly into `~/.ardincode/config.json`:
 
 ```json
 {
@@ -534,9 +534,9 @@ The `mcpServers` block mirrors [Claude Desktop's schema](https://modelcontextpro
 - **stdio** — for local servers. Populate `command` + `args` + optional `env`. Works with any server published as an npm/pip/go binary.
 - **HTTP / SSE** — for remote servers. Populate `url`; the client auto-detects Streamable HTTP or SSE. Custom headers go in `headers` — most commonly `Authorization: Bearer …` for servers that accept static tokens.
 
-### Does MandoCode need Node?
+### Does ArdinCode need Node?
 
-**No.** MandoCode itself is pure .NET. But *individual servers* may need whatever runtime their `command` points at — Node for `npx`, Python for `uvx`, or nothing extra for standalone binaries. Same situation as Claude Desktop, Cursor, and VS Code.
+**No.** ArdinCode itself is pure .NET. But *individual servers* may need whatever runtime their `command` points at — Node for `npx`, Python for `uvx`, or nothing extra for standalone binaries. Same situation as Claude Desktop, Cursor, and VS Code.
 
 ### OAuth-only servers
 
@@ -551,7 +551,7 @@ Native OAuth is not in this release. For servers that require an OAuth flow (som
 
 ### Approvals
 
-MandoCode cannot tell a read-only MCP tool from a destructive one by inspecting arguments, so the first call of each `(server, tool)` pair prompts you with **Approve / Approve for session / Deny**. Pre-trusted tools can be listed under `autoApprove` in a server's config entry to skip the prompt entirely.
+ArdinCode cannot tell a read-only MCP tool from a destructive one by inspecting arguments, so the first call of each `(server, tool)` pair prompts you with **Approve / Approve for session / Deny**. Pre-trusted tools can be listed under `autoApprove` in a server's config entry to skip the prompt entirely.
 
 ### Slash commands
 
@@ -564,7 +564,7 @@ MandoCode cannot tell a read-only MCP tool from a destructive one by inspecting 
 ### Toggle
 
 ```bash
-mandocode --config set mcp false   # disable all MCP integration
+ardincode --config set mcp false   # disable all MCP integration
 ```
 
 Individual servers can be muted without deleting them — set `"disabled": true` on any entry in `mcpServers`.
@@ -607,10 +607,10 @@ Out of the box, search uses DuckDuckGo's free HTML endpoint — which rate-limit
 
 ```bash
 /config set tavilyKey tvly-...        # in-app — verifies the key live against Tavily
-mandocode --config set tavilyKey tvly-...   # or from the CLI
+ardincode --config set tavilyKey tvly-...   # or from the CLI
 ```
 
-With a key set, `search_web` prefers Tavily and keeps DuckDuckGo as the fallback; clear it anytime with `/config set tavilyKey clear`. The key is stored locally in `~/.mandocode/config.json` and only ever sent to Tavily — set the `TAVILY_API_KEY` environment variable instead if you'd rather keep it out of the file. Fetched pages are cleaned of scripts, nav, and non-content elements via HtmlAgilityPack.
+With a key set, `search_web` prefers Tavily and keeps DuckDuckGo as the fallback; clear it anytime with `/config set tavilyKey clear`. The key is stored locally in `~/.ardincode/config.json` and only ever sent to Tavily — set the `TAVILY_API_KEY` environment variable instead if you'd rather keep it out of the file. Fetched pages are cleaned of scripts, nav, and non-content elements via HtmlAgilityPack.
 
 </details>
 
@@ -636,7 +636,7 @@ Attempt 3 -> fail -> throw
 
 ### Fallback Function Parsing
 
-Some local models output function calls as JSON text instead of proper tool calls. MandoCode detects and parses:
+Some local models output function calls as JSON text instead of proper tool calls. ArdinCode detects and parses:
 
 - Standard: `{"name": "func", "parameters": {...}}`
 - OpenAI-style: `{"function_call": {"name": "func", "arguments": {...}}}`
@@ -677,7 +677,7 @@ Function executions use semaphore-based signaling, ensuring each task plan step 
 ## Architecture
 
 ```
-src/MandoCode/
+src/ArdinCode/
   Components/        Razor UI (App, Banner, HelpDisplay, ConfigMenu, Prompt)
   Services/          Core logic (AI, markdown, syntax, tokens, music, diffs, input state machine)
   Models/            Data models, config, system prompts, educational content
@@ -707,7 +707,7 @@ Most AI coding agents in the wild are built with Python, Rust, or TypeScript. .N
 
 [Semantic Kernel](https://github.com/microsoft/semantic-kernel) is Microsoft's open-source SDK for building AI agents, and it's one of the most capable orchestration frameworks available: native plugin systems, function calling, structured planning, and first-class support for local models through connectors like Ollama. It runs cross-platform on Windows, Linux, and macOS.
 
-MandoCode exists partly to prove the point: you can build a full-featured, agentic CLI tool on .NET and Semantic Kernel that stands alongside anything built in other ecosystems. The tooling is there. It's open source. It just doesn't get the attention it deserves.
+ArdinCode exists partly to prove the point: you can build a full-featured, agentic CLI tool on .NET and Semantic Kernel that stands alongside anything built in other ecosystems. The tooling is there. It's open source. It just doesn't get the attention it deserves.
 
 ---
 

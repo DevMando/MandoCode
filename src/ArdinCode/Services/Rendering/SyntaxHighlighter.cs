@@ -1,0 +1,394 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using Spectre.Console;
+
+namespace ArdinCode.Services;
+
+/// <summary>
+/// Regex-based syntax highlighter that produces Spectre.Console markup strings
+/// for fenced code blocks. Supports C#, Python, JavaScript/TypeScript, Bash,
+/// and a generic fallback.
+/// </summary>
+public static class SyntaxHighlighter
+{
+    // ── Language alias map ───────────────────────────────────────────
+
+    private static readonly Dictionary<string, string> LanguageAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["cs"] = "csharp",
+        ["csharp"] = "csharp",
+        ["c#"] = "csharp",
+        ["py"] = "python",
+        ["python"] = "python",
+        ["js"] = "javascript",
+        ["javascript"] = "javascript",
+        ["ts"] = "typescript",
+        ["typescript"] = "typescript",
+        ["jsx"] = "javascript",
+        ["tsx"] = "typescript",
+        ["sh"] = "bash",
+        ["bash"] = "bash",
+        ["shell"] = "bash",
+        ["zsh"] = "bash",
+    };
+
+    // ── Keyword sets ────────────────────────────────────────────────
+
+    private static readonly HashSet<string> CSharpKeywords = new()
+    {
+        "abstract", "as", "async", "await", "base", "break", "case", "catch",
+        "checked", "class", "const", "continue", "default", "delegate", "do",
+        "else", "enum", "event", "explicit", "extern", "false", "finally",
+        "fixed", "for", "foreach", "goto", "if", "implicit", "in", "interface",
+        "internal", "is", "lock", "namespace", "new", "null", "operator", "out",
+        "override", "params", "private", "protected", "public", "readonly",
+        "ref", "return", "sealed", "sizeof", "stackalloc", "static", "struct",
+        "switch", "this", "throw", "true", "try", "typeof", "unchecked",
+        "unsafe", "using", "var", "virtual", "void", "volatile", "while",
+        "yield", "record", "init", "required", "global", "when", "where",
+        "get", "set", "value", "partial",
+    };
+
+    private static readonly HashSet<string> CSharpTypes = new()
+    {
+        "bool", "byte", "char", "decimal", "double", "float", "int", "long",
+        "object", "sbyte", "short", "string", "uint", "ulong", "ushort",
+        "dynamic", "nint", "nuint", "Task", "List", "Dictionary", "HashSet",
+        "IEnumerable", "IList", "ICollection", "Action", "Func", "Span",
+        "ReadOnlySpan", "Memory", "StringBuilder", "Console", "Math",
+        "Exception", "ArgumentException", "InvalidOperationException",
+    };
+
+    private static readonly HashSet<string> PythonKeywords = new()
+    {
+        "False", "None", "True", "and", "as", "assert", "async", "await",
+        "break", "class", "continue", "def", "del", "elif", "else", "except",
+        "finally", "for", "from", "global", "if", "import", "in", "is",
+        "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+        "while", "with", "yield", "self", "match", "case",
+    };
+
+    private static readonly HashSet<string> PythonTypes = new()
+    {
+        "int", "float", "str", "bool", "list", "dict", "tuple", "set",
+        "frozenset", "bytes", "bytearray", "type", "object", "None",
+        "range", "enumerate", "zip", "map", "filter", "print", "len",
+        "isinstance", "issubclass", "super", "property", "staticmethod",
+        "classmethod", "Exception", "ValueError", "TypeError", "KeyError",
+    };
+
+    private static readonly HashSet<string> JsKeywords = new()
+    {
+        "async", "await", "break", "case", "catch", "class", "const",
+        "continue", "debugger", "default", "delete", "do", "else", "enum",
+        "export", "extends", "false", "finally", "for", "from", "function",
+        "if", "implements", "import", "in", "instanceof", "interface", "let",
+        "new", "null", "of", "package", "private", "protected", "public",
+        "return", "static", "super", "switch", "this", "throw", "true",
+        "try", "type", "typeof", "undefined", "var", "void", "while",
+        "with", "yield", "as", "abstract", "declare", "readonly", "keyof",
+    };
+
+    private static readonly HashSet<string> JsTypes = new()
+    {
+        "string", "number", "boolean", "any", "unknown", "never", "void",
+        "object", "symbol", "bigint", "Array", "Map", "Set", "Promise",
+        "Date", "RegExp", "Error", "JSON", "Math", "console", "window",
+        "document", "Buffer", "Record", "Partial", "Required", "Readonly",
+        "Pick", "Omit",
+    };
+
+    private static readonly HashSet<string> BashKeywords = new()
+    {
+        "if", "then", "else", "elif", "fi", "for", "do", "done", "while",
+        "until", "case", "esac", "in", "function", "select", "time",
+        "coproc", "echo", "exit", "return", "export", "local", "declare",
+        "typeset", "readonly", "unset", "shift", "source", "eval", "exec",
+        "trap", "set", "read", "printf", "cd", "pwd", "test", "true",
+        "false",
+    };
+
+    private static readonly HashSet<string> BashTypes = new()
+    {
+        "grep", "sed", "awk", "find", "xargs", "sort", "uniq", "wc",
+        "cut", "tr", "head", "tail", "cat", "ls", "mkdir", "rm", "cp",
+        "mv", "chmod", "chown", "curl", "wget", "tar", "git", "docker",
+        "npm", "node", "python", "pip", "dotnet", "sudo", "apt", "yum",
+        "brew",
+    };
+
+    // ── Regex patterns ──────────────────────────────────────────────
+
+    // Catastrophic-backtracking guard for the hand-rolled patterns below. On adversarial
+    // input these alternation/quantifier patterns can backtrack pathologically — observed
+    // live as a single core pegged for 17 minutes inside Regex.Match while highlighting an
+    // execute_command command panel. That work runs synchronously on the UI path right after
+    // the spinner is stopped, and NO watchdog covers it (the model call already returned), so
+    // it froze the whole turn. A per-match timeout bounds any one match; Highlight catches the
+    // timeout and falls back to plain escaped text.
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+
+    // Above this length, skip tokenizing entirely and return escaped plain text. Color adds
+    // nothing on a huge blob (e.g. a model emitting a whole file inline as a shell command),
+    // and per-token matching over tens of thousands of chars is where the backtracking bites.
+    private const int MaxHighlightChars = 20_000;
+
+    // Single-line comment: // or #
+    private static readonly Regex SingleLineCommentSlash = new(@"\G//[^\n]*", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex SingleLineCommentHash = new(@"\G#[^\n]*", RegexOptions.Compiled, RegexTimeout);
+
+    // Multi-line comment: /* ... */
+    private static readonly Regex MultiLineComment = new(@"\G/\*[\s\S]*?\*/", RegexOptions.Compiled, RegexTimeout);
+
+    // Strings
+    private static readonly Regex TripleQuoteDouble = new(@"\G""""""[\s\S]*?""""""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex TripleQuoteSingle = new(@"\G'''[\s\S]*?'''", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex VerbatimString = new(@"\G@""(?:[^""]|"""")*""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex DoubleQuoteString = new(@"\G""(?:[^""\\]|\\.)*""", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex SingleQuoteString = new(@"\G'(?:[^'\\]|\\.)*'", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex BacktickString = new(@"\G`(?:[^`\\]|\\.)*`", RegexOptions.Compiled, RegexTimeout);
+
+    // Numbers. The (?<!\w\.) lookbehind keeps the tokenizer from re-matching
+    // the tail of a version-style fragment (e.g. the `0` in `net8.0`) as a
+    // standalone numeric literal after the leading identifier got consumed by
+    // the Word rule. Real numbers like `0.5`, `3.14`, `1e10` are untouched
+    // because they're not preceded by `word-char + dot`.
+    private static readonly Regex NumberLiteral = new(@"\G(?<!\w\.)\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G(?<!\w\.)\b0[bB][01_]+[lLuU]*\b|\G(?<!\w\.)\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled, RegexTimeout);
+
+    // Identifier (word)
+    private static readonly Regex Word = new(@"\G[a-zA-Z_]\w*", RegexOptions.Compiled, RegexTimeout);
+
+    // ── Public API ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns a Spectre.Console markup string with syntax-highlighted code. Guarded against
+    /// pathological regex backtracking: oversized input skips tokenizing, and any single regex
+    /// that exceeds <see cref="RegexTimeout"/> aborts the whole pass back to plain escaped text.
+    /// Either way the return value is always valid Spectre markup (every code path escapes).
+    /// </summary>
+    public static string Highlight(string code, string language)
+    {
+        if (string.IsNullOrEmpty(code))
+            return string.Empty;
+
+        // Oversized input: don't even attempt tokenizing. Highlighting a huge blob is where
+        // the per-token matching turns pathological, and color is worthless there anyway.
+        if (code.Length > MaxHighlightChars)
+            return Markup.Escape(code);
+
+        try
+        {
+            return HighlightCore(code, language);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A pattern backtracked past the timeout on adversarial input. Fall back to plain
+            // escaped text rather than hang the caller — this runs synchronously on the UI
+            // path after the spinner is stopped, with no watchdog to recover it.
+            return Markup.Escape(code);
+        }
+    }
+
+    private static string HighlightCore(string code, string language)
+    {
+        var lang = NormalizeLanguage(language);
+        var (keywords, types, commentStyle) = GetLanguageProfile(lang);
+
+        var sb = new StringBuilder(code.Length * 2);
+        var pos = 0;
+
+        while (pos < code.Length)
+        {
+            Match match;
+
+            // 1. Comments (highest priority)
+            if (TryMatchComment(code, pos, commentStyle, out match))
+            {
+                sb.Append("[dim]");
+                sb.Append(Markup.Escape(match.Value));
+                sb.Append("[/]");
+                pos += match.Length;
+                continue;
+            }
+
+            // 2. Strings
+            if (TryMatchString(code, pos, lang, out match))
+            {
+                sb.Append("[green]");
+                sb.Append(Markup.Escape(match.Value));
+                sb.Append("[/]");
+                pos += match.Length;
+                continue;
+            }
+
+            // 3. Numbers
+            match = NumberLiteral.Match(code, pos);
+            if (match.Success && match.Index == pos)
+            {
+                sb.Append("[magenta]");
+                sb.Append(Markup.Escape(match.Value));
+                sb.Append("[/]");
+                pos += match.Length;
+                continue;
+            }
+
+            // 4. Words (keywords, types, or plain identifiers)
+            match = Word.Match(code, pos);
+            if (match.Success && match.Index == pos)
+            {
+                var word = match.Value;
+                if (keywords.Contains(word))
+                {
+                    sb.Append("[yellow]");
+                    sb.Append(Markup.Escape(word));
+                    sb.Append("[/]");
+                }
+                else if (types.Contains(word))
+                {
+                    sb.Append("[cyan]");
+                    sb.Append(Markup.Escape(word));
+                    sb.Append("[/]");
+                }
+                else
+                {
+                    sb.Append(Markup.Escape(word));
+                }
+                pos += match.Length;
+                continue;
+            }
+
+            // 5. Non-token characters — batch consecutive punctuation/whitespace/operators
+            var batchStart = pos;
+            while (pos < code.Length)
+            {
+                var ch = code[pos];
+                // Stop if this could start a comment, string, number, or identifier
+                if (ch == '/' || ch == '#' || ch == '"' || ch == '\'' || ch == '`' || ch == '@'
+                    || (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
+                    || (ch >= 'A' && ch <= 'Z') || ch == '_')
+                    break;
+                pos++;
+            }
+
+            if (pos == batchStart)
+            {
+                // Forward-progress guarantee. The batch loop above breaks on any char that
+                // COULD start a token, but in some languages rules 1–4 don't actually consume
+                // it — e.g. '/' in bash (comments are '#', not '//'), a backtick outside JS/TS,
+                // or '@' not followed by '"' in C#. When that happens pos never moves and the
+                // outer loop spins in place forever, pinning a CPU core and freezing the app
+                // (observed live on a command containing a '/'). Emit the lone char literally
+                // and advance one, so every iteration consumes at least one character.
+                sb.Append(Markup.Escape(code[pos].ToString()));
+                pos++;
+            }
+            else
+            {
+                sb.Append(Markup.Escape(code[batchStart..pos]));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    // ── Internals ───────────────────────────────────────────────────
+
+    private enum CommentStyle
+    {
+        SlashAndBlock,   // C#, JS/TS: // and /* */
+        Hash,            // Python, Bash: #
+    }
+
+    private static string NormalizeLanguage(string language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+            return "generic";
+
+        var trimmed = language.Trim().ToLowerInvariant();
+        return LanguageAliases.TryGetValue(trimmed, out var normalized)
+            ? normalized
+            : "generic";
+    }
+
+    private static (HashSet<string> keywords, HashSet<string> types, CommentStyle commentStyle)
+        GetLanguageProfile(string lang)
+    {
+        return lang switch
+        {
+            "csharp"     => (CSharpKeywords, CSharpTypes, CommentStyle.SlashAndBlock),
+            "python"     => (PythonKeywords, PythonTypes, CommentStyle.Hash),
+            "javascript" => (JsKeywords, JsTypes, CommentStyle.SlashAndBlock),
+            "typescript" => (JsKeywords, JsTypes, CommentStyle.SlashAndBlock),
+            "bash"       => (BashKeywords, BashTypes, CommentStyle.Hash),
+            _            => (new HashSet<string>(), new HashSet<string>(), CommentStyle.SlashAndBlock),
+        };
+    }
+
+    private static bool TryMatchComment(string code, int pos, CommentStyle style, out Match match)
+    {
+        // Always try multi-line block comments for slash-style languages
+        if (style == CommentStyle.SlashAndBlock)
+        {
+            match = MultiLineComment.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+
+            match = SingleLineCommentSlash.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+        }
+        else // Hash
+        {
+            match = SingleLineCommentHash.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+        }
+
+        match = Match.Empty;
+        return false;
+    }
+
+    private static bool TryMatchString(string code, int pos, string lang, out Match match)
+    {
+        // Python triple-quoted strings (must check before regular quotes)
+        if (lang == "python")
+        {
+            match = TripleQuoteDouble.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+
+            match = TripleQuoteSingle.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+        }
+
+        // C# verbatim strings
+        if (lang == "csharp")
+        {
+            match = VerbatimString.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+        }
+
+        // Double-quoted string
+        match = DoubleQuoteString.Match(code, pos);
+        if (match.Success && match.Index == pos)
+            return true;
+
+        // Single-quoted string
+        match = SingleQuoteString.Match(code, pos);
+        if (match.Success && match.Index == pos)
+            return true;
+
+        // Backtick template literals (JS/TS)
+        if (lang is "javascript" or "typescript")
+        {
+            match = BacktickString.Match(code, pos);
+            if (match.Success && match.Index == pos)
+                return true;
+        }
+
+        match = Match.Empty;
+        return false;
+    }
+}
