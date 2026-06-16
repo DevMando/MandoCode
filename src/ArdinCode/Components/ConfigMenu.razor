@@ -17,7 +17,7 @@
     <Markup Content="" />
     <Panel Title="Current Configuration" Border="@BoxBorder.Rounded">
         <Rows>
-            <Markup Content="@($"Ollama Endpoint: {Config.OllamaEndpoint}")" />
+            <Markup Content="@($"API Endpoint: {Config.ApiEndpoint}")" />
             <Markup Content="@($"Model Name: {Config.ModelName}")" />
             @if (!string.IsNullOrEmpty(Config.ModelPath))
             {

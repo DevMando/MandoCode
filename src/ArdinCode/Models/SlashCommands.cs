@@ -14,7 +14,7 @@ public static class SlashCommands
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
     {
         { "/help", "Show this help message" },
-        { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
+        { "/setup", "Change API Provider configuration or select a model (guided wizard)" },
         { "/model", "Quick switch — pick a different model" },
         { "/config", "Adjust settings — guided wizard (model, temperature, tokens, timeout)" },
         { "/config set", "Set one setting inline (usage: /config set modelResponseTimeout 300)" },
@@ -23,7 +23,7 @@ public static class SlashCommands
         { "/command", "Run a shell command (also: !<cmd>)" },
         { "/clear", "Clear conversation history" },
         { "/learn", "Learn about LLMs and local AI models" },
-        { "/retry", "Retry Ollama connection" },
+        { "/retry", "Retry API Provider connection" },
         { "/music", "Play music" },
         { "/music-stop", "Stop music playback" },
         { "/music-pause", "Pause/resume music" },

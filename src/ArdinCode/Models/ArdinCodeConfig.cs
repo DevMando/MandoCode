@@ -35,52 +35,9 @@ public class ArdinCodeConfig
     };
 
     /// <summary>
-    /// Cloud model auto-pulled by the onboarding wizard when a signed-in user has no
-    /// models yet. Tuned for the broadest "best out-of-box" experience on hardware-light
-    /// setups; bump as Ollama publishes newer cloud-tier defaults.
+    /// Default model to use.
     /// </summary>
-    public const string DefaultCloudModel = "minimax-m2.7:cloud";
-
-    /// <summary>
-    /// True when the tag names an Ollama cloud model. Cloud tags end in "cloud" with a
-    /// ':' or '-' separator — "minimax-m2.7:cloud" but also "qwen3-coder:480b-cloud"
-    /// (size variant + "-cloud"). The old scattered Contains(":cloud") checks missed the
-    /// "-cloud" form and misclassified those models as local. Single source of truth for
-    /// the pickers, onboarding flow, and config display.
-    /// </summary>
-    public static bool IsCloudModel(string? modelTag) =>
-        !string.IsNullOrEmpty(modelTag)
-        && (modelTag.TrimEnd().EndsWith(":cloud", StringComparison.OrdinalIgnoreCase)
-            || modelTag.TrimEnd().EndsWith("-cloud", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Maps a local model tag to a context window sized for the hardware that choice
-    /// implies — the user self-selected the model tier knowing their GPU, so the tag is
-    /// the best hardware signal we have without probing VRAM. Returns 0 for cloud models
-    /// (context is managed server-side at the model's full window; the local KV cache
-    /// setting is irrelevant) so callers know to leave <see cref="ContextLength"/> alone.
-    /// Unparseable local tags (mistral, llama3.1) get the safe floor.
-    /// </summary>
-    public static int RecommendedContextLength(string? modelTag)
-    {
-        if (IsCloudModel(modelTag)) return 0;
-        if (string.IsNullOrEmpty(modelTag)) return 8192;
-
-        // Parse the parameter count from the tag: "qwen3.5:0.8b" → 0.8, "qwen2.5-coder:14b" → 14.
-        var afterColon = modelTag.Contains(':') ? modelTag[(modelTag.IndexOf(':') + 1)..] : modelTag;
-        var match = System.Text.RegularExpressions.Regex.Match(afterColon, @"^(\d+(?:\.\d+)?)b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (!match.Success || !double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var billions))
-            return 8192;
-
-        // KV-cache VRAM grows with both window size and model size; bigger picks imply
-        // bigger GPUs, which also covers the larger cache.
-        return billions switch
-        {
-            < 3 => 8192,   // CPU / iGPU / 4 GB tier
-            < 7 => 16384,  // 4-6 GB VRAM tier
-            _   => 32768   // 8 GB+ VRAM tier
-        };
-    }
+    public const string DefaultModel = "gpt-4o-mini";
 
     // ── Validation ranges (single source of truth) ──
     public const double MinTemperature = 0.0;
@@ -97,9 +54,6 @@ public class ArdinCodeConfig
     public const int MaxMaxAutoContinuations = 10;
     public const int MinMarkdownRenderTimeoutSeconds = 5;
     public const int MaxMarkdownRenderTimeoutSeconds = 300;
-    public const int MinContextLength = 2048;
-    public const int MaxContextLength = 262144;
-
     public static bool IsValidTemperature(double value) => value >= MinTemperature && value <= MaxTemperature;
     public static bool IsValidMaxTokens(int value) => value >= MinMaxTokens && value <= MaxMaxTokens;
     public static bool IsValidRequestTimeout(int value) => value >= MinRequestTimeoutMinutes && value <= MaxRequestTimeoutMinutes;
@@ -107,24 +61,27 @@ public class ArdinCodeConfig
     public static bool IsValidToolResultCharBudget(long value) => value >= MinToolResultCharBudget && value <= MaxToolResultCharBudget;
     public static bool IsValidMaxAutoContinuations(int value) => value >= MinMaxAutoContinuations && value <= MaxMaxAutoContinuations;
     public static bool IsValidMarkdownRenderTimeout(int value) => value >= MinMarkdownRenderTimeoutSeconds && value <= MaxMarkdownRenderTimeoutSeconds;
-    // 0 is valid: "don't set it — leave Ollama's own default in place".
-    public static bool IsValidContextLength(int value) => value == 0 || (value >= MinContextLength && value <= MaxContextLength);
 
     /// <summary>
-    /// Ollama endpoint URL.
+    /// AI Provider Endpoint URL.
     /// </summary>
-    [JsonPropertyName("ollamaEndpoint")]
-    public string OllamaEndpoint { get; set; } = "http://localhost:11434";
+    [JsonPropertyName("apiEndpoint")]
+    public string ApiEndpoint { get; set; } = "https://api.avalai.ir/v1";
 
     /// <summary>
-    /// Model name to use. If not specified, will be inferred from the model path.
+    /// API Key for the provider.
+    /// </summary>
+    [JsonPropertyName("apiKey")]
+    public string? ApiKey { get; set; }
+
+    /// <summary>
+    /// Model name to use. If not specified, will use DefaultModel.
     /// </summary>
     [JsonPropertyName("modelName")]
     public string? ModelName { get; set; }
 
     /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
-    /// If specified, this will be used instead of pulling from Ollama registry.
     /// </summary>
     [JsonPropertyName("modelPath")]
     public string? ModelPath { get; set; }
@@ -137,25 +94,10 @@ public class ArdinCodeConfig
     public double Temperature { get; set; } = 0.7;
 
     /// <summary>
-    /// Maximum tokens for model responses. Default is 32k — large enough for
-    /// multi-file refactors on capable cloud models or 16 GB+ GPUs without forcing
-    /// users to think about it on first run. Lower it if local-model latency suffers.
+    /// Maximum tokens for model responses. Default is 32k.
     /// </summary>
     [JsonPropertyName("maxTokens")]
     public int MaxTokens { get; set; } = 32768;
-
-    /// <summary>
-    /// Context window (num_ctx / KV-cache size, in tokens) requested for LOCAL models via
-    /// the OLLAMA_CONTEXT_LENGTH environment variable when ArdinCode starts the Ollama
-    /// daemon itself. Ollama's own default (~4k) silently truncates the oldest prompt
-    /// content — system prompt and earlier file reads — once an agentic conversation
-    /// grows, which looks like the model "forgetting" its instructions. 0 = don't set it.
-    /// Only takes effect when ArdinCode launches the daemon; an already-running Ollama
-    /// keeps whatever it was started with. Cloud models manage context server-side and
-    /// ignore this. NOTE: KV-cache VRAM grows with this value — on small GPUs prefer 8k.
-    /// </summary>
-    [JsonPropertyName("contextLength")]
-    public int ContextLength { get; set; } = 8192;
 
     /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
@@ -451,17 +393,10 @@ public class ArdinCodeConfig
         MarkdownRenderTimeoutSeconds = Math.Clamp(MarkdownRenderTimeoutSeconds, MinMarkdownRenderTimeoutSeconds, MaxMarkdownRenderTimeoutSeconds);
         ModelResponseTimeoutSeconds = Math.Clamp(ModelResponseTimeoutSeconds, MinModelResponseTimeoutSeconds, MaxModelResponseTimeoutSeconds);
         RequestTimeoutMinutes = Math.Clamp(RequestTimeoutMinutes, MinRequestTimeoutMinutes, MaxRequestTimeoutMinutes);
-        // 0 stays 0 ("leave Ollama's default alone"); anything else clamps to the valid band.
-        if (ContextLength != 0)
-            ContextLength = Math.Clamp(ContextLength, MinContextLength, MaxContextLength);
         Music.Volume = Math.Clamp(Music.Volume, 0f, 1f);
 
-        if (string.IsNullOrWhiteSpace(OllamaEndpoint))
-            OllamaEndpoint = "http://localhost:11434";
-
-        // Note: we deliberately do NOT trim trailing slashes here — config preserves
-        // exactly what the user typed. Heal happens at probe time (OllamaSetupHelper)
-        // and only when the as-typed URL actually fails to reach the daemon.
+        if (string.IsNullOrWhiteSpace(ApiEndpoint))
+            ApiEndpoint = "https://api.avalai.ir/v1";
 
         // Normalize MCP server lookups to case-insensitive — otherwise InputStateMachine's
         // lowercasing of commands ("/mcp remove Solana" → "mcp remove solana") would miss
@@ -506,7 +441,7 @@ public class ArdinCodeConfig
         }
 
         // Final fallback to default model with tool support
-        return DefaultCloudModel;
+        return DefaultModel;
     }
 
     /// <summary>
@@ -533,11 +468,11 @@ public class ArdinCodeConfig
     {
         return new ArdinCodeConfig
         {
-            OllamaEndpoint = "http://localhost:11434",
-            ModelName = DefaultCloudModel,
+            ApiEndpoint = "https://api.avalai.ir/v1",
+            ApiKey = "",
+            ModelName = DefaultModel,
             Temperature = 0.7,
             MaxTokens = 32768,
-            ContextLength = 8192,
             RequestTimeoutMinutes = 15,
             ModelResponseTimeoutSeconds = 420,
             ToolResultCharBudget = 100_000,
@@ -554,19 +489,15 @@ public class ArdinCodeConfig
     public void Display()
     {
         Console.WriteLine("Current Configuration:");
-        Console.WriteLine($"  Ollama Endpoint: {OllamaEndpoint}");
-        var modelBase = GetEffectiveModelName().Split(':')[0];
-        var modelLink = FileLinkHelper.Hyperlink($"https://ollama.com/library/{modelBase}", GetEffectiveModelName());
-        Console.WriteLine($"  Model Name: {modelLink}");
+        Console.WriteLine($"  API Endpoint: {ApiEndpoint}");
+        Console.WriteLine($"  API Key     : {(string.IsNullOrWhiteSpace(ApiKey) ? "not set" : MaskApiKey(ApiKey))}");
+        Console.WriteLine($"  Model Name  : {GetEffectiveModelName()}");
         if (!string.IsNullOrWhiteSpace(ModelPath))
         {
             Console.WriteLine($"  Model Path: {ModelPath}");
         }
         Console.WriteLine($"  Temperature: {Temperature}");
         Console.WriteLine($"  Max Tokens: {MaxTokens} (max response length)");
-        Console.WriteLine(IsCloudModel(GetEffectiveModelName())
-            ? "  Context Length: managed by Ollama cloud (model default)"
-            : $"  Context Length: {(ContextLength == 0 ? "Ollama default" : $"{ContextLength:N0} tokens")} (local models, applied when ArdinCode starts the daemon)");
         Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
         Console.WriteLine($"  Model Response Timeout: {ModelResponseTimeoutSeconds}s (per model call — stall watchdog)");
         Console.WriteLine($"  Tool Result Budget: {ToolResultCharBudget:N0} chars (~{ToolResultCharBudget / 4:N0} tokens)");

@@ -16,7 +16,7 @@ public class RetryPolicyTests
     [InlineData("context_length_exceeded", true)]
     [InlineData("prompt is too long", true)]
     [InlineData("maximum context reached", true)]
-    // Transport-level rejections — Ollama's Go HTTP server, nginx, common proxies.
+    // Transport-level rejections — the AI provider's Go HTTP server, nginx, common proxies.
     // Recover the same way (compact + retry), so they're classified as overflow.
     [InlineData("http: request body too large", true)]
     [InlineData("Request Entity Too Large", true)]

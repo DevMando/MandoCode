@@ -43,76 +43,7 @@ public class ArdinCodeConfigTests
         Assert.Equal(100_000L, config.ToolResultCharBudget);
     }
 
-    [Theory]
-    [InlineData(0, true)]      // 0 = "leave Ollama's default alone"
-    [InlineData(2048, true)]
-    [InlineData(8192, true)]
-    [InlineData(262144, true)]
-    [InlineData(1, false)]
-    [InlineData(2047, false)]
-    [InlineData(262145, false)]
-    [InlineData(-1, false)]
-    public void IsValidContextLength_EnforcesBounds_AndAllowsZero(int value, bool expected)
-    {
-        Assert.Equal(expected, ArdinCodeConfig.IsValidContextLength(value));
-    }
 
-    [Fact]
-    public void ValidateAndClamp_PreservesZeroContextLength_ClampsOutOfRange()
-    {
-        var zero = new ArdinCodeConfig { ContextLength = 0 };
-        zero.ValidateAndClamp();
-        Assert.Equal(0, zero.ContextLength);
-
-        var tiny = new ArdinCodeConfig { ContextLength = 100 };
-        tiny.ValidateAndClamp();
-        Assert.Equal(ArdinCodeConfig.MinContextLength, tiny.ContextLength);
-
-        var huge = new ArdinCodeConfig { ContextLength = 999_999_999 };
-        huge.ValidateAndClamp();
-        Assert.Equal(ArdinCodeConfig.MaxContextLength, huge.ContextLength);
-    }
-
-    [Fact]
-    public void CreateDefault_SetsLocalContextWindow()
-    {
-        var config = ArdinCodeConfig.CreateDefault();
-        Assert.Equal(8192, config.ContextLength);
-    }
-
-    [Theory]
-    [InlineData("minimax-m2.7:cloud", true)]
-    [InlineData("kimi-k2.6:cloud", true)]
-    [InlineData("qwen3-coder:480b-cloud", true)]
-    [InlineData("QWEN3:480B-CLOUD", true)]   // case-insensitive
-    [InlineData("qwen3.5:9b", false)]
-    [InlineData("mistral", false)]
-    [InlineData("", false)]
-    [InlineData(null, false)]
-    public void IsCloudModel_DetectsCloudSuffix(string? tag, bool expected)
-    {
-        Assert.Equal(expected, ArdinCodeConfig.IsCloudModel(tag));
-    }
-
-    [Theory]
-    // Cloud → 0: context is managed server-side, leave local config alone.
-    [InlineData("minimax-m2.7:cloud", 0)]
-    [InlineData("qwen3-coder:480b-cloud", 0)]
-    // Local tiers: the tag's parameter count implies the user's hardware.
-    [InlineData("qwen3.5:0.8b", 8192)]
-    [InlineData("qwen3.5:2b", 8192)]
-    [InlineData("qwen3.5:4b", 16384)]
-    [InlineData("qwen3.5:9b", 32768)]
-    [InlineData("qwen2.5-coder:14b", 32768)]
-    [InlineData("qwen3:8b-q4_K_M", 32768)]   // size parses past the quant suffix
-    // Unparseable local tags get the safe floor.
-    [InlineData("mistral", 8192)]
-    [InlineData("llama3.1:latest", 8192)]
-    [InlineData(null, 8192)]
-    public void RecommendedContextLength_MapsTierToWindow(string? tag, int expected)
-    {
-        Assert.Equal(expected, ArdinCodeConfig.RecommendedContextLength(tag));
-    }
 
     [Theory]
     [InlineData(0, true)]

@@ -34,8 +34,8 @@ public class ConfigurationWizard
         AnsiConsole.Clear();
         DisplayWizardHeader();
 
-        // Step 1: Ollama Endpoint
-        config.OllamaEndpoint = await ConfigureOllamaEndpoint(config.OllamaEndpoint, promptTextVdom);
+        // Step 1: API Connection
+        (config.ApiEndpoint, config.ApiKey) = await ConfigureApiConnection(config.ApiEndpoint, config.ApiKey, promptTextVdom);
 
         // Step 2: Model Selection
         config = await ConfigureModel(config);
@@ -89,23 +89,20 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
     }
 
-    private static async Task<string> ConfigureOllamaEndpoint(
+    private static async Task<(string endpoint, string? apiKey)> ConfigureApiConnection(
         string currentEndpoint,
+        string? currentApiKey,
         Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]1. Ollama Connection[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]1. API Provider Connection[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        // Prefer the VDOM TextInput when wired in — Spectre's TextPrompt drops
-        // keystrokes when the VDOM render loop is active. Pre-fill the input with
-        // the current endpoint so the user can press Enter to keep it or edit in
-        // place rather than retyping.
         string endpoint;
         if (promptTextVdom != null)
         {
-            var entered = await promptTextVdom("Ollama endpoint URL (press Enter to keep current):", currentEndpoint, v =>
+            var entered = await promptTextVdom("API Provider Endpoint URL (press Enter to keep current):", currentEndpoint, v =>
             {
-                if (string.IsNullOrWhiteSpace(v)) return null; // empty → falls back to default
+                if (string.IsNullOrWhiteSpace(v)) return null;
                 return Uri.TryCreate(v, UriKind.Absolute, out _) ? null : "Invalid URL format";
             }, currentEndpoint);
             endpoint = string.IsNullOrWhiteSpace(entered) ? currentEndpoint : entered.Trim();
@@ -113,7 +110,7 @@ public class ConfigurationWizard
         else
         {
             endpoint = AnsiConsole.Prompt(
-                new TextPrompt<string>("[deepskyblue1]Ollama endpoint URL:[/]")
+                new TextPrompt<string>("[deepskyblue1]API Provider Endpoint URL:[/]")
                     .DefaultValue(currentEndpoint)
                     .ValidationErrorMessage("[red]Please enter a valid URL[/]")
                     .Validate(url =>
@@ -125,25 +122,62 @@ public class ConfigurationWizard
             );
         }
 
+        string? apiKey = null;
+        if (promptTextVdom != null)
+        {
+            var keyPlaceholder = string.IsNullOrWhiteSpace(currentApiKey) ? "" : ArdinCodeConfig.MaskApiKey(currentApiKey);
+            var entered = await promptTextVdom("API Key (press Enter to keep current, type 'clear' to clear):", keyPlaceholder, null, "");
+            if (string.IsNullOrWhiteSpace(entered))
+            {
+                apiKey = currentApiKey;
+            }
+            else if (entered.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase))
+            {
+                apiKey = null;
+            }
+            else
+            {
+                apiKey = entered.Trim();
+            }
+        }
+        else
+        {
+            var prompt = new TextPrompt<string>("[deepskyblue1]API Key (press Enter to keep current, type 'clear' to clear):[/]")
+                .AllowEmpty()
+                .Secret('*');
+            var entered = AnsiConsole.Prompt(prompt);
+            if (string.IsNullOrWhiteSpace(entered))
+            {
+                apiKey = currentApiKey;
+            }
+            else if (entered.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase))
+            {
+                apiKey = null;
+            }
+            else
+            {
+                apiKey = entered.Trim();
+            }
+        }
+
         // Test connection
         await AnsiConsole.Status()
             .Spinner(LoadingMessages.GetRandomSpinner())
-            .StartAsync("[yellow]Testing connection to Ollama...[/]", async ctx =>
+            .StartAsync("[yellow]Testing connection to API Provider...[/]", async ctx =>
             {
-                var isConnected = await TestOllamaConnection(endpoint);
-                if (isConnected)
+                var (ok, _, error) = await ApiProviderSetupHelper.ProbeAsync(endpoint, apiKey);
+                if (ok)
                 {
                     AnsiConsole.MarkupLine("[green]✓ Connected successfully![/]");
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine("[red]✗ Could not connect to Ollama[/]");
-                    AnsiConsole.MarkupLine("[yellow]Make sure Ollama is running: ollama serve[/]");
+                    AnsiConsole.MarkupLine($"[red]✗ Could not connect to API Provider: {error}[/]");
                 }
             });
 
         AnsiConsole.WriteLine();
-        return endpoint;
+        return (endpoint, apiKey);
     }
 
     private static async Task<ArdinCodeConfig> ConfigureModel(ArdinCodeConfig config)
@@ -157,7 +191,7 @@ public class ConfigurationWizard
                 .HighlightStyle(SelectionHighlight)
                 .AddChoices(new[]
                 {
-                    "Select from available Ollama models",
+                    "Select from available models",
                     "Enter model name manually",
                     "Specify local model path (GGUF)",
                     "Keep current setting"
@@ -166,8 +200,8 @@ public class ConfigurationWizard
 
         switch (modelChoice)
         {
-            case "Select from available Ollama models":
-                var availableModels = await GetAvailableOllamaModels(config.OllamaEndpoint);
+            case "Select from available models":
+                var availableModels = await ApiProviderSetupHelper.ListModelsAsync(config.ApiEndpoint, config.ApiKey);
                 if (availableModels.Any())
                 {
                     var selectedModel = AnsiConsole.Prompt(
@@ -183,15 +217,13 @@ public class ConfigurationWizard
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
-                    AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.7:cloud[/]");
-                    AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", "minimax-m2.7:cloud");
+                    AnsiConsole.MarkupLine("[yellow]No models returned by the provider. You may need to enter model name manually.[/]");
+                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? ArdinCodeConfig.DefaultModel);
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? "minimax-m2.7:cloud");
+                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? ArdinCodeConfig.DefaultModel);
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;
@@ -461,15 +493,6 @@ public class ConfigurationWizard
         return AnsiConsole.Confirm("[deepskyblue1]Save this configuration?[/]", true);
     }
 
-    private static async Task<bool> TestOllamaConnection(string endpoint)
-    {
-        var probe = await OllamaSetupHelper.ProbeAsync(endpoint);
-        return probe.Ok;
-    }
-
-    private static Task<List<string>> GetAvailableOllamaModels(string endpoint)
-        => OllamaSetupHelper.ListModelsAsync(endpoint);
-
     /// <summary>
     /// Shows a quick configuration summary.
     /// </summary>
@@ -484,7 +507,7 @@ public class ConfigurationWizard
         table.AddColumn("[bold]Setting[/]");
         table.AddColumn("[bold]Value[/]");
 
-        table.AddRow("Ollama Endpoint", config.OllamaEndpoint);
+        table.AddRow("API Endpoint", config.ApiEndpoint);
         table.AddRow("Model", config.GetEffectiveModelName());
         if (!string.IsNullOrEmpty(config.ModelPath))
         {

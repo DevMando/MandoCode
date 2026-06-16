@@ -41,9 +41,20 @@ public static class ConfigKeySetter
         switch (key.ToLowerInvariant())
         {
             case "endpoint":
-            case "ollamaendpoint":
-                config.OllamaEndpoint = value;
-                return new(true, $"✓ Set Ollama endpoint to: {value}", ApplyScope.KernelRebuild);
+            case "apiendpoint":
+            case "apiurl":
+                config.ApiEndpoint = value;
+                return new(true, $"✓ Set API endpoint to: {value}", ApplyScope.KernelRebuild);
+
+            case "apikey":
+            case "key":
+                if (string.IsNullOrWhiteSpace(value) || value.Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.ApiKey = null;
+                    return new(true, "✓ API Key cleared", ApplyScope.KernelRebuild);
+                }
+                config.ApiKey = value.Trim();
+                return new(true, $"✓ Set API Key to: {ArdinCodeConfig.MaskApiKey(value)}", ApplyScope.KernelRebuild);
 
             case "model":
             case "modelname":
@@ -69,19 +80,6 @@ public static class ConfigKeySetter
                     return new(true, $"✓ Set max response tokens to: {tokens}", ApplyScope.KernelRebuild);
                 }
                 return Fail($"Error: Max tokens must be between {ArdinCodeConfig.MinMaxTokens} and {ArdinCodeConfig.MaxMaxTokens}");
-
-            case "contextlength":
-            case "contextwindow":
-            case "numctx":
-                if (int.TryParse(value, out var ctxLen) && ArdinCodeConfig.IsValidContextLength(ctxLen))
-                {
-                    config.ContextLength = ctxLen;
-                    var msg = ctxLen == 0
-                        ? "✓ Context length cleared — Ollama's own default applies"
-                        : $"✓ Set local context window to: {ctxLen:N0} tokens";
-                    return new(true, msg + "\n  Applies when ArdinCode starts the Ollama daemon (restart Ollama for it to take effect). Desktop-app users: the app's Settings → Context length slider governs instead.", ApplyScope.DaemonRestart);
-                }
-                return Fail($"Error: Context length must be 0 (Ollama default) or between {ArdinCodeConfig.MinContextLength:N0} and {ArdinCodeConfig.MaxContextLength:N0} tokens");
 
             case "modelresponsetimeout":
             case "modelresponsetimeoutseconds":
@@ -221,10 +219,10 @@ public static class ConfigKeySetter
     public static string DescribeKeys(ArdinCodeConfig config) =>
         $"""
         model                {config.GetEffectiveModelName()}
-        endpoint             {config.OllamaEndpoint}
+        endpoint             {config.ApiEndpoint}
+        apikey               {(string.IsNullOrWhiteSpace(config.ApiKey) ? "not set" : ArdinCodeConfig.MaskApiKey(config.ApiKey))}
         temperature          {config.Temperature}  (0.0-1.0)
         maxTokens            {config.MaxTokens}  (max response length, {ArdinCodeConfig.MinMaxTokens}-{ArdinCodeConfig.MaxMaxTokens})
-        contextLength        {(config.ContextLength == 0 ? "Ollama default" : config.ContextLength.ToString())}  (local window, 0 or {ArdinCodeConfig.MinContextLength}-{ArdinCodeConfig.MaxContextLength}; applied when ArdinCode starts Ollama)
         modelResponseTimeout {config.ModelResponseTimeoutSeconds}s  (stall watchdog, {ArdinCodeConfig.MinModelResponseTimeoutSeconds}-{ArdinCodeConfig.MaxModelResponseTimeoutSeconds})
         timeout              {config.RequestTimeoutMinutes} min  (per-request ceiling, {ArdinCodeConfig.MinRequestTimeoutMinutes}-{ArdinCodeConfig.MaxRequestTimeoutMinutes})
         toolBudget           {config.ToolResultCharBudget:N0} chars  ({ArdinCodeConfig.MinToolResultCharBudget:N0}-{ArdinCodeConfig.MaxToolResultCharBudget:N0})

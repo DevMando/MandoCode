@@ -189,7 +189,7 @@ public class PostPlanMutationGateTests
             plan.Steps[0].Status = TaskStepStatus.Completed;
             plan.Steps[0].Result = "Scaffold done.";
             plan.Steps[1].Status = TaskStepStatus.Failed;
-            plan.Steps[1].ErrorMessage = "Connection to Ollama failed.";
+            plan.Steps[1].ErrorMessage = "Connection to AI provider failed.";
             return Task.FromResult("raw UI summary");
         };
 
@@ -200,7 +200,7 @@ public class PostPlanMutationGateTests
         Assert.True(handoff.LastPlanExecutedWork);
         Assert.Contains("1 of 2 steps completed", result);
         Assert.Contains("[FAILED] Step 2", result);
-        Assert.Contains("Connection to Ollama failed.", result);
+        Assert.Contains("Connection to AI provider failed.", result);
     }
 
     [Fact]

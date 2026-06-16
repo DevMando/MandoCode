@@ -37,7 +37,7 @@
 {
     <HomeView ProjectRoot="@ProjectRoot.ProjectRoot"
               RuntimeVersion="@Environment.Version.ToString()"
-              OllamaEndpoint="@Config.OllamaEndpoint"
+              ApiEndpoint="@Config.ApiEndpoint"
               ModelName="@Config.GetEffectiveModelName()"
               ConnectionChecked="@_connectionChecked"
               IsConnected="@_isConnected"
@@ -366,32 +366,20 @@
 
     private async Task InitializeConnectionAsync()
     {
-        // Probe with auto-heal — silently fixes a trailing slash on the configured URL
-        // (the most common config-time foot-gun) before any wizard or warning fires.
-        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
-        if (probe.WasHealed)
-        {
-            Config.OllamaEndpoint = probe.NormalizedUrl;
-            Config.Save();
-            AnsiConsole.MarkupLine($"[deepskyblue1]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
-        }
+        var probe = await ApiProviderSetupHelper.ProbeAsync(Config.ApiEndpoint, Config.ApiKey);
 
         // First-run or recovering-from-broken-state: launch the guided wizard. Once a
-        // user has completed (or explicitly skipped) onboarding, an unreachable Ollama
+        // user has completed (or explicitly skipped) onboarding, an unreachable connection
         // falls through to the static panel + /retry / /setup loop instead.
         var shouldOnboard = ArdinCodeConfig.IsFirstRun() || (!probe.Ok && !Config.HasCompletedOnboarding);
         if (shouldOnboard)
         {
-            // Suppress HomeView while the wizard runs — otherwise the VDOM render
-            // loop repaints over imperative AnsiConsole output (most importantly
-            // the `ollama signin` URL, which the user needs to be able to read
-            // and copy as a fallback if the browser auto-launch fails).
             _setupActive = true;
             await InvokeAsync(StateHasChanged);
             try
             {
                 await RunOnboardingFlowAsync();
-                probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+                probe = await ApiProviderSetupHelper.ProbeAsync(Config.ApiEndpoint, Config.ApiKey);
             }
             finally
             {
@@ -462,61 +450,45 @@
     /// </summary>
     private async Task HandleModelCommandAsync()
     {
-        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        var probe = await ApiProviderSetupHelper.ProbeAsync(Config.ApiEndpoint, Config.ApiKey);
         if (!probe.Ok)
         {
-            AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
+            AnsiConsole.MarkupLine($"[yellow]Can't reach API Provider at {Spectre.Console.Markup.Escape(Config.ApiEndpoint)}.[/]");
             AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
             return;
         }
 
-        var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
-        if (!fetched.Ok)
-        {
-            AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
-            AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
-            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
-            return;
-        }
-        if (fetched.Models.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
-            AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
-            return;
-        }
+        var models = await ApiProviderSetupHelper.ListModelsAsync(Config.ApiEndpoint, Config.ApiKey);
+        string modelTag;
 
-        // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
-        // alphabetical otherwise, badge after each tag, single-space split for
-        // the tag.
-        AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
-        AnsiConsole.WriteLine();
-        var labeled = fetched.Models
-            .OrderBy(m => ArdinCodeConfig.IsCloudModel(m) ? 0 : 1)
-            .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
-            .Select(m => ArdinCodeConfig.IsCloudModel(m)
-                ? $"{m}   (cloud)"
-                : $"{m}   (local)")
-            .ToArray();
+        if (models.Any())
+        {
+            AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
+            AnsiConsole.WriteLine();
 
-        var picked = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Select a model:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(labeled));
-        var modelTag = picked.Split(' ')[0];
+            var choices = models.Concat(new[] { "Enter model name manually" }).ToArray();
+            var picked = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[deepskyblue1]Select a model:[/]")
+                    .HighlightStyle(SelectionHighlight)
+                    .AddChoices(choices));
+
+            if (picked == "Enter model name manually")
+            {
+                modelTag = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", Config.ModelName ?? ArdinCodeConfig.DefaultModel);
+            }
+            else
+            {
+                modelTag = picked;
+            }
+        }
+        else
+        {
+            modelTag = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", Config.ModelName ?? ArdinCodeConfig.DefaultModel);
+        }
 
         Config.ModelName = modelTag;
         Config.ModelPath = null;
-
-        // /model is the QUICK switch — no settings quiz. Response length lives in /config.
-        // Local picks get a context window sized to the hardware tier the tag implies;
-        // cloud models manage context server-side (RecommendedContextLength returns 0).
-        var recommendedCtx = ArdinCodeConfig.RecommendedContextLength(modelTag);
-        if (recommendedCtx > 0 && recommendedCtx != Config.ContextLength)
-        {
-            Config.ContextLength = recommendedCtx;
-            AnsiConsole.MarkupLine($"[dim]Context window sized to {recommendedCtx / 1024}k tokens for this model tier (takes effect when ArdinCode starts Ollama).[/]");
-        }
 
         Config.Save();
         await AI.ReinitializeAsync(Config);
@@ -632,14 +604,14 @@
                 setStatus: SetOnboardingStatus,
                 promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
 
-            var signedIn = await flow.WalkThroughCloudSigninAsync(Config.OllamaEndpoint);
-            if (signedIn)
+            var result = await flow.RunAsync(Config);
+            if (result.Connected)
             {
-                // Reinitialize the kernel against the (now-authenticated) daemon so
+                // Reinitialize the kernel against the (now-authenticated) service so
                 // the next chat doesn't re-hit a stale connection.
                 await AI.ReinitializeAsync(Config);
                 AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[green]✓ Signed in. Re-send your message to try again.[/]");
+                AnsiConsole.MarkupLine("[green]✓ Connected successfully. Re-send your message to try again.[/]");
                 AnsiConsole.WriteLine();
             }
         }
@@ -821,14 +793,12 @@
         return functionName.StartsWith("FileSystem_", StringComparison.Ordinal);
     }
 
-    private async Task<bool> CheckOllamaConnectionAsync()
+    private async Task<bool> CheckConnectionAsync()
     {
-        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
-        if (probe.WasHealed)
+        var probe = await ApiProviderSetupHelper.ProbeAsync(Config.ApiEndpoint, Config.ApiKey);
+        if (probe.NormalizedUrl != Config.ApiEndpoint)
         {
-            // /retry hit the slash bug — heal silently here too so the user doesn't have
-            // to restart to clear the typo.
-            Config.OllamaEndpoint = probe.NormalizedUrl;
+            Config.ApiEndpoint = probe.NormalizedUrl;
             Config.Save();
         }
         return probe.Ok;
@@ -905,11 +875,11 @@
                     table.AddColumn("Command");
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
-                    table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
+                    table.AddRow("/setup", "Change API Provider configuration or select a model (guided wizard)");
                     table.AddRow("/model", "Quick switch — pick a different model");
                     table.AddRow("/config", "Adjust settings — guided wizard");
                     table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
-                    table.AddRow("/retry", "Retry Ollama connection");
+                    table.AddRow("/retry", "Retry API Provider connection");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
                     table.AddRow("/music-stop", "Stop music playback");
@@ -996,7 +966,7 @@
                     }
 
                     // Re-probe after the flow so /setup can also recover the connection state.
-                    var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+                    var probe = await ApiProviderSetupHelper.ProbeAsync(Config.ApiEndpoint, Config.ApiKey);
                     _isConnected = probe.Ok;
                     if (_isConnected)
                     {
@@ -1123,7 +1093,7 @@
             // Block AI requests when model is not available
             if (_modelError)
             {
-                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [deepskyblue1]/config[/] to select a model, or pull one with [deepskyblue1]ollama pull <model-name>[/].");
+                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [deepskyblue1]/config[/] to select a model, or check your API configuration.");
                 AnsiConsole.WriteLine();
                 continue;
             }
@@ -1525,10 +1495,10 @@
 
     private void ShowOfflineGuidance()
     {
-        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
+        var endpoint = Spectre.Console.Markup.Escape(Config.ApiEndpoint);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[yellow]ArdinCode can't reach Ollama at {endpoint}.[/]");
-        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect — or /setup to walk through setup again.[/]");
+        AnsiConsole.MarkupLine($"[yellow]ArdinCode can't reach the API Provider at {endpoint}.[/]");
+        AnsiConsole.MarkupLine("[dim]Make sure your endpoint is correct and check your internet connection, then type /retry to reconnect — or /setup to walk through setup again.[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -2933,22 +2903,22 @@
 
     private async Task HandleRetryCommandAsync()
     {
-        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
+        var endpoint = Spectre.Console.Markup.Escape(Config.ApiEndpoint);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Checking Ollama connection...[/]");
+        AnsiConsole.MarkupLine("[dim]Checking API Provider connection...[/]");
 
-        var connected = await CheckOllamaConnectionAsync();
+        var connected = await CheckConnectionAsync();
         _isConnected = connected;
 
         if (connected)
         {
-            AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
+            AnsiConsole.MarkupLine("[green]✓ Connected to API Provider![/]");
             await ValidateCurrentModelAsync();
         }
         else
         {
-            AnsiConsole.MarkupLine($"[red]Unable to reach Ollama at {endpoint}.[/]");
-            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry — or /setup to walk through setup again.[/]");
+            AnsiConsole.MarkupLine($"[red]Unable to reach API Provider at {endpoint}.[/]");
+            AnsiConsole.MarkupLine("[dim]Make sure your endpoint is correct, check your API Key and internet connection, then run /retry — or /setup to walk through setup again.[/]");
         }
 
         AnsiConsole.WriteLine();

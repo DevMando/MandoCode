@@ -11,17 +11,17 @@
 <Rows>
     <Markup Content="@($"Project Root: {ProjectRoot}")" Background="Color.Black" />
     <Markup Content="@($"Runtime: .NET {RuntimeVersion}")" />
-    <Markup Content="@($"Ollama Endpoint: {OllamaEndpoint}")" />
+    <Markup Content="@($"API Endpoint: {ApiEndpoint}")" />
     <Markup Content="@($"Model: {ModelName}")" />
 
     @if (!ConnectionChecked)
     {
-        <Markup Content="🔄 Connecting to Ollama..." />
+        <Markup Content="🔄 Connecting to AI Provider..." />
     }
     else if (!IsConnected)
     {
         <Rows>
-            <Markup Content="@($"Couldn't reach Ollama at {OllamaEndpoint}")" Foreground="Color.Yellow" />
+            <Markup Content="@($"Couldn't reach AI Provider at {ApiEndpoint}")" Foreground="Color.Yellow" />
             <Markup Content="Type /setup to retry onboarding, or /retry to reconnect." Foreground="Color.Grey" />
         </Rows>
     }
@@ -48,7 +48,7 @@
 @code {
     [Parameter] public string ProjectRoot { get; set; } = "";
     [Parameter] public string RuntimeVersion { get; set; } = "";
-    [Parameter] public string OllamaEndpoint { get; set; } = "";
+    [Parameter] public string ApiEndpoint { get; set; } = "";
     [Parameter] public string ModelName { get; set; } = "";
     [Parameter] public bool ConnectionChecked { get; set; }
     [Parameter] public bool IsConnected { get; set; }

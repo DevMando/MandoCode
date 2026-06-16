@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -15,11 +15,11 @@
     <!-- NuGet metadata -->
     <Version>0.12.0</Version>
     <Authors>Arardin Fernandez (DevArdin)</Authors>
-    <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
+    <Description>Your AI coding assistant — configure and run with any OpenAI-compatible AI Provider. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevArdin/ArdinCode</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevArdin/ArdinCode</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>ai;cli;coding-assistant;ollama;semantic-kernel;local-llm</PackageTags>
+    <PackageTags>ai;cli;coding-assistant;openai;semantic-kernel</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
@@ -49,7 +49,7 @@ Every fix is covered by automated tests — the suite grew to 449 checks to keep
     <PackageReference Include="Markdig" Version="1.0.0" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.3" />
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.72.0" />
-    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.72.0-alpha" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.72.0" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.5.2" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.5.2" />
     <PackageReference Include="ModelContextProtocol" Version="1.3.0" />

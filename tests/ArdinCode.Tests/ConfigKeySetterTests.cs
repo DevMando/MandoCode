@@ -69,7 +69,8 @@ public class ConfigKeySetterTests
     [InlineData("maxContinuations", "5", ConfigKeySetter.ApplyScope.Immediate)]
     [InlineData("renderTimeout", "60", ConfigKeySetter.ApplyScope.Immediate)]
     [InlineData("diffApprovals", "false", ConfigKeySetter.ApplyScope.AppRestart)]
-    [InlineData("contextLength", "16384", ConfigKeySetter.ApplyScope.DaemonRestart)]
+    [InlineData("endpoint", "https://api.example.com", ConfigKeySetter.ApplyScope.KernelRebuild)]
+    [InlineData("apikey", "my-secret-key", ConfigKeySetter.ApplyScope.KernelRebuild)]
     public void ApplyScope_ClassifiesWhereEachSettingTakesEffect(string key, string value, ConfigKeySetter.ApplyScope expected)
     {
         var config = new ArdinCodeConfig();
@@ -77,17 +78,6 @@ public class ConfigKeySetterTests
 
         Assert.True(result.Ok, result.Message);
         Assert.Equal(expected, result.Scope);
-    }
-
-    [Fact]
-    public void ContextLength_Zero_MeansOllamaDefault()
-    {
-        var config = new ArdinCodeConfig { ContextLength = 16384 };
-        var result = ConfigKeySetter.TrySet(config, "contextLength", "0");
-
-        Assert.True(result.Ok);
-        Assert.Equal(0, config.ContextLength);
-        Assert.Contains("Ollama's own default", result.Message);
     }
 
     [Fact]
@@ -164,7 +154,7 @@ public class ConfigKeySetterTests
         foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var key = line.TrimStart().Split(' ')[0];
-            if (key is "model" or "endpoint") continue; // free-text keys, trivially settable
+            if (key is "model" or "endpoint" or "apikey") continue; // free-text keys, trivially settable
             var probe = ConfigKeySetter.TrySet(new ArdinCodeConfig(), key, "true");
             Assert.DoesNotContain("Unknown configuration key", probe.Message);
         }
@@ -172,6 +162,7 @@ public class ConfigKeySetterTests
         Assert.Contains("qwen3.5:4b", listing);
         Assert.Contains("300s", listing);
         Assert.Contains("modelResponseTimeout", listing);
-        Assert.Contains("contextLength", listing);
+        Assert.Contains("endpoint", listing);
+        Assert.Contains("apikey", listing);
     }
 }

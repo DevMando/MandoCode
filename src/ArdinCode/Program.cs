@@ -59,13 +59,19 @@ class Program
             var config = ArdinCodeConfig.Load();
 
             // Override with environment variables if set
-            var envEndpoint = Environment.GetEnvironmentVariable("OLLAMA_ENDPOINT");
+            var envEndpoint = Environment.GetEnvironmentVariable("API_ENDPOINT") ?? Environment.GetEnvironmentVariable("OLLAMA_ENDPOINT");
             if (!string.IsNullOrEmpty(envEndpoint))
             {
-                config.OllamaEndpoint = envEndpoint;
+                config.ApiEndpoint = envEndpoint;
             }
 
-            var envModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL");
+            var envKey = Environment.GetEnvironmentVariable("API_KEY");
+            if (!string.IsNullOrEmpty(envKey))
+            {
+                config.ApiKey = envKey;
+            }
+
+            var envModel = Environment.GetEnvironmentVariable("API_MODEL") ?? Environment.GetEnvironmentVariable("OLLAMA_MODEL");
             if (!string.IsNullOrEmpty(envModel))
             {
                 config.ModelName = envModel;
@@ -214,28 +220,16 @@ class Program
         Console.WriteLine($"Config file     : {ArdinCodeConfig.GetDefaultConfigPath()}");
 
         var config = ArdinCodeConfig.Load();
-        Console.WriteLine($"Ollama endpoint : {config.OllamaEndpoint}");
+        Console.WriteLine($"API endpoint    : {config.ApiEndpoint}");
+        Console.WriteLine($"API Key         : {(string.IsNullOrWhiteSpace(config.ApiKey) ? "not set" : ArdinCodeConfig.MaskApiKey(config.ApiKey))}");
         Console.WriteLine($"Configured model: {config.GetEffectiveModelName()}");
 
-        var cli = OllamaSetupHelper.IsOllamaCliInstalled();
-        Console.WriteLine($"Ollama CLI      : {(cli ? "found" : "NOT FOUND on PATH")}");
-        if (!cli) problems++;
-
-        var probe = await OllamaSetupHelper.ProbeAsync(config.OllamaEndpoint);
+        var probe = await ApiProviderSetupHelper.ProbeAsync(config.ApiEndpoint, config.ApiKey);
         if (probe.Ok)
         {
-            Console.WriteLine($"Daemon          : reachable{(probe.WasHealed ? " (URL had trailing slash; auto-healed)" : "")}");
-        }
-        else
-        {
-            Console.WriteLine($"Daemon          : UNREACHABLE — {probe.Error ?? "(no detail)"}");
-            problems++;
-        }
-
-        if (probe.Ok)
-        {
-            var models = await OllamaSetupHelper.ListModelsAsync(probe.NormalizedUrl);
-            Console.WriteLine($"Models pulled   : {models.Count}");
+            Console.WriteLine("API Connection  : REACHABLE");
+            var models = await ApiProviderSetupHelper.ListModelsAsync(config.ApiEndpoint, config.ApiKey);
+            Console.WriteLine($"Available Models: {models.Count}");
             if (models.Count > 0)
             {
                 foreach (var m in models.Take(10))
@@ -243,8 +237,11 @@ class Program
                 if (models.Count > 10)
                     Console.WriteLine($"  …and {models.Count - 10} more");
             }
-            var auth = await OllamaSetupHelper.CheckCloudSignInAsync(probe.NormalizedUrl);
-            Console.WriteLine($"Cloud sign-in   : {auth}");
+        }
+        else
+        {
+            Console.WriteLine($"API Connection  : UNREACHABLE — {probe.Error ?? "(no detail)"}");
+            problems++;
         }
 
         Console.WriteLine();
@@ -310,12 +307,12 @@ class Program
         Console.WriteLine("  --config path              - Show configuration file location");
         Console.WriteLine();
         Console.WriteLine("Available Keys:");
-        Console.WriteLine("  • endpoint        - Ollama endpoint URL");
+        Console.WriteLine("  • endpoint        - AI Provider endpoint URL");
+        Console.WriteLine("  • apikey          - API Key for AI Provider");
         Console.WriteLine("  • model           - Model name to use");
         Console.WriteLine("  • modelPath       - Path to local model file");
         Console.WriteLine("  • temperature     - Temperature (0.0-1.0)");
         Console.WriteLine("  • maxTokens       - Maximum response tokens");
-        Console.WriteLine("  • contextLength   - Local model context window in tokens (2048-262144, 0 = Ollama default; applied when ArdinCode starts the daemon)");
         Console.WriteLine("  • modelResponseTimeout - Stall watchdog in seconds per model call (30-1800)");
         Console.WriteLine("  • timeout         - Per-request timeout in minutes (1-60)");
         Console.WriteLine("  • toolBudget      - Tool-result char budget per request (50k-4M)");
@@ -331,9 +328,9 @@ class Program
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  ardincode --config show");
-        Console.WriteLine("  ardincode --config set endpoint http://localhost:11434");
-        Console.WriteLine("  ardincode --config set model minimax-m2.7:cloud");
-        Console.WriteLine("  ardincode --config set temperature 0.5");
+        Console.WriteLine("  ardincode --config set endpoint https://api.avalai.ir/v1");
+        Console.WriteLine("  ardincode --config set apikey my-secret-key");
+        Console.WriteLine("  ardincode --config set model gpt-4o-mini");
     }
 
     static async Task SetConfigValueAsync(string key, string value)

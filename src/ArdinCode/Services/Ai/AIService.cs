@@ -1,13 +1,13 @@
 /**
  *  Author: DevArdin
  *  Date: 2025-12-10
- *  Description: AIService.cs - Manages AI interactions using Semantic Kernel with Ollama.
+ *  Description: AIService.cs - Manages AI interactions using Semantic Kernel.
  *  File: AIService.cs
  */
 
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Ollama;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using ArdinCode.Models;
 using ArdinCode.Plugins;
 using ModelContextProtocol.Client;
@@ -18,7 +18,7 @@ namespace ArdinCode.Services;
 
 
 /// <summary>
-/// Manages AI interactions using Semantic Kernel with Ollama.
+/// Manages AI interactions using Semantic Kernel.
 /// </summary>
 public class AIService
 {
@@ -32,7 +32,7 @@ public class AIService
     // truth about target paths — see ChatStreamAsync and BuildStepContext.
     private string? _currentTurnUserMessage;
     private ArdinCodeConfig _config;
-    private OllamaPromptExecutionSettings _settings;
+    private OpenAIPromptExecutionSettings _settings;
     private readonly ProjectRootAccessor _projectRootAccessor;
     private readonly FunctionCompletionTracker _completionTracker = new();
     private FunctionInvocationFilter _functionFilter;
@@ -226,15 +226,16 @@ public class AIService
         _settings = new()
         {
             Temperature = (float)_config.Temperature,
-            NumPredict = _config.MaxTokens,
+            MaxTokens = _config.MaxTokens,
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
         };
 
         var builder = Kernel.CreateBuilder();
 
-        builder.AddOllamaChatCompletion(
+        builder.AddOpenAIChatCompletion(
             modelId: _config.GetEffectiveModelName(),
-            endpoint: new Uri(_config.OllamaEndpoint)
+            apiKey: _config.ApiKey ?? "",
+            endpoint: new Uri(_config.ApiEndpoint)
         );
 
         var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner);
@@ -302,20 +303,43 @@ public class AIService
         try
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            var modelName = _config.GetEffectiveModelName();
-
-            // Check if model exists and get its info
-            using var response = await client.PostAsync(
-                OllamaSetupHelper.BuildUrl(_config.OllamaEndpoint, "api/show"),
-                new StringContent(JsonSerializer.Serialize(new { name = modelName }), System.Text.Encoding.UTF8, "application/json")
-            );
-
-            if (!response.IsSuccessStatusCode)
+            if (!string.IsNullOrWhiteSpace(_config.ApiKey))
             {
-                return (false, $"Model '{modelName}' not found. Run: ollama pull {modelName}");
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _config.ApiKey.Trim());
             }
 
-            // Model exists and is available — Ollama handles tool support at the API level
+            var modelName = _config.GetEffectiveModelName();
+            var url = _config.ApiEndpoint.TrimEnd('/') + "/models";
+            using var response = await client.GetAsync(url);
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                return (false, "Error: 401 Unauthorized. Please check your API key.");
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("data", out var dataProp) && dataProp.ValueKind == JsonValueKind.Array)
+                {
+                    var modelExists = false;
+                    foreach (var modelObj in dataProp.EnumerateArray())
+                    {
+                        if (modelObj.TryGetProperty("id", out var idProp) && 
+                            string.Equals(idProp.GetString(), modelName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            modelExists = true;
+                            break;
+                        }
+                    }
+                    if (!modelExists)
+                    {
+                        return (false, $"Model '{modelName}' was not found in the provider's list of models.");
+                    }
+                }
+            }
+
             return (true, null);
         }
         catch (Exception ex)
@@ -391,15 +415,33 @@ public class AIService
                 ? await _fallbackExecutor.ProcessAsync(rawResponse, _kernel, _config.GetEffectiveModelName())
                 : rawResponse;
 
-            if (result.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream doneStream
-                && string.Equals(doneStream.DoneReason, "length", StringComparison.OrdinalIgnoreCase))
+            var finishReason = "";
+            if (result.Metadata != null && result.Metadata.TryGetValue("FinishReason", out var reasonObj) && reasonObj != null)
             {
+                finishReason = reasonObj.ToString();
+            }
+
+            if (string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase))
+            {
+                var completionTokens = 0;
+                if (result.Metadata != null && result.Metadata.TryGetValue("Usage", out var usageObj) && usageObj != null)
+                {
+                    var type = usageObj.GetType();
+                    var completionProp = type.GetProperty("CompletionTokens") ?? type.GetProperty("OutputTokens") ?? type.GetProperty("CompletionTokenCount");
+                    if (completionProp != null)
+                    {
+                        var compVal = completionProp.GetValue(usageObj);
+                        if (compVal != null)
+                        {
+                            completionTokens = Convert.ToInt32(compVal);
+                        }
+                    }
+                }
+
                 response += BuildLengthCutoffNotice(
-                    doneStream.EvalCount,
+                    completionTokens,
                     _config.MaxTokens,
-                    _config.ContextLength,
-                    emptyContent: string.IsNullOrEmpty(result.Content),
-                    isCloudModel: ArdinCodeConfig.IsCloudModel(_config.GetEffectiveModelName()));
+                    emptyContent: string.IsNullOrEmpty(result.Content));
             }
 
             await _historyLock.WaitAsync();
@@ -484,17 +526,14 @@ public class AIService
     /// guidance is meaningless there — trimming history is the only lever.
     /// Static + public for direct unit testing without standing up the full service.
     /// </summary>
-    public static string BuildLengthCutoffNotice(long completionTokens, int maxTokens, int configuredContextLength, bool emptyContent, bool isCloudModel = false)
+    public static string BuildLengthCutoffNotice(long completionTokens, int maxTokens, bool emptyContent)
     {
         // Formatted as markdown — the response path renders through MarkdownHtmlRenderer,
         // so a bold headline + bullet list reads far better than the old wall of text.
-
-        // Ollama can stop a handful of tokens shy of the exact cap — treat anything
-        // within 90% of maxTokens (or an unreported count) as a genuine cap hit.
         if (completionTokens <= 0 || completionTokens >= maxTokens * 9L / 10)
         {
             var thinkingCapNote = emptyContent
-                ? "\n- Note: thinking models (qwen3, minimax) spend reasoning tokens from this same budget — " +
+                ? "\n- Note: thinking models spend reasoning tokens from this same budget — " +
                   "a small max tokens limit can be consumed entirely by internal reasoning before any visible answer."
                 : "";
             return "\n\n⚠ **Response cut off — hit the max response tokens limit.**\n" +
@@ -504,32 +543,16 @@ public class AIService
         }
 
         var thinkingNote = emptyContent
-            ? "\nNo visible answer was produced — likely a thinking model (e.g. qwen3, minimax) that spent it all on internal reasoning."
+            ? "\nNo visible answer was produced — likely spent all tokens on internal reasoning."
             : "";
 
-        var header = "\n\n⚠ **Response cut off — the model's CONTEXT WINDOW filled.**\n" +
-                     $"Only {completionTokens:N0} of your {maxTokens / 1024}k response budget was generated, " +
-                     "so raising max tokens won't help." +
-                     thinkingNote + "\n";
-
-        if (isCloudModel)
-        {
-            return header +
-                   "\nThe conversation filled the model's server-side context window. How to fix:\n" +
-                   "- /clear to trim the conversation history\n" +
-                   "- Break the request into smaller pieces";
-        }
-
-        var applyLine = configuredContextLength > 0
-            ? $"- No desktop app? Quit Ollama and run /setup → Start Ollama for me (applies your configured {configuredContextLength / 1024}k window)\n" +
-              "- Want a bigger window? /config set contextLength 32768 — more window uses more VRAM"
-            : "- No desktop app? Set a window first: /config set contextLength 16384 — then restart Ollama via /setup";
-
-        return header +
-               "\nThe Ollama daemon is likely running with a small window (Ollama's default is ~4k). How to fix:\n" +
-               "- Ollama desktop app: Settings → Context length — drag to 16k or higher\n" +
-               applyLine + "\n" +
-               "- /clear frees space right now by trimming history";
+        return "\n\n⚠ **Response cut off — the model's CONTEXT WINDOW filled.**\n" +
+               $"Only {completionTokens:N0} of your {maxTokens / 1024}k response budget was generated, " +
+               "so raising max tokens won't help." +
+               thinkingNote + "\n" +
+               "\nThe conversation filled the model's server-side context window. How to fix:\n" +
+               "- /clear to trim the conversation history\n" +
+               "- Break the request into smaller pieces";
     }
 
     /// <summary>
@@ -544,7 +567,7 @@ public class AIService
     /// </summary>
     private async Task<ChatMessageContent> ExecuteModelCallAsync(
         ChatHistory history,
-        OllamaPromptExecutionSettings settings,
+        OpenAIPromptExecutionSettings settings,
         string retryOperationName,
         string tokenLabel,
         string spinnerMessage,
@@ -697,16 +720,16 @@ public class AIService
     {
         if (IsUnauthorizedError(ex))
         {
-            // Brief — the auto-launched cloud sign-in walkthrough that fires right
-            // after this response covers all the "what to do" guidance inline.
-            return "<red>Error: Ollama returned 401 Unauthorized.</red>\n\n" +
-                   "You're using a cloud model but the local Ollama daemon isn't authenticated.";
+            return "<red>Error: API Provider returned 401 Unauthorized.</red>\n\n" +
+                   "Please make sure your API Key is correct.";
         }
 
-        return "Error: Connection to Ollama failed.\n\n" +
+        return "Error: Connection to AI Provider failed.\n\n" +
                $"Details: {ex.Message}\n\n" +
                "What to do:\n" +
-               "  • Make sure Ollama is running: ollama serve\n" +
+               "  • Check your internet connection.\n" +
+               "  • Verify the API Provider URL in config: " + _config.ApiEndpoint + "\n" +
+               "  • Verify your API Key.\n" +
                "  • Then type /retry to reconnect, OR\n" +
                "  • Run /setup to walk through setup again.";
     }
@@ -721,23 +744,18 @@ public class AIService
     /// </summary>
     private string FormatErrorMessage(Exception ex)
     {
-        // 401 surfaces here too when the plan-step path rethrows as a generic Exception.
         if (ex is HttpRequestException http && IsUnauthorizedError(http))
             return FormatHttpFailure(http);
         if (ex.Message.Contains("401")
             || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase))
         {
-            // Brief — App.razor auto-launches the sign-in walkthrough right after this.
-            return "<red>Error: Ollama returned 401 Unauthorized.</red>\n\n" +
-                   "You're using a cloud model but the local Ollama daemon isn't authenticated.";
+            return "<red>Error: API Provider returned 401 Unauthorized.</red>\n\n" +
+                   "Please make sure your API Key is correct.";
         }
 
-        // Request-too-big rejection — covers both context-window overflow and
-        // transport-level 413 / "request body too large". Actionable message,
-        // don't blame Ollama setup.
         if (IsContextOverflowError(ex))
         {
-            return $"Error: The model '{_config.GetEffectiveModelName()}' rejected the request because the payload was too large for its context window or transport limit.\n\n" +
+            return $"Error: The model '{_config.GetEffectiveModelName()}' rejected the request because the payload was too large for its context window.\n\n" +
                    $"Details: {ex.Message}\n\n" +
                    "What to do:\n" +
                    "  • Try /clear to start a fresh conversation, OR\n" +
@@ -746,25 +764,15 @@ public class AIService
                    "  • Switch to a model with a larger context window via /config.";
         }
 
-        // Check if the error is about tool support
         if (ex.Message.Contains("does not support tools") || ex.Message.Contains("does not support functions"))
         {
             return $"Error: The model '{_config.GetEffectiveModelName()}' does not support tool calling.\n\n" +
                    $"ArdinCode uses agentic tool calling to read, write, and manage files.\n" +
                    $"Your current model doesn't support this — you'll need to switch to a tool-enabled model.\n\n" +
-                   $"To change your model, run /config and select a model that supports tool use.\n\n" +
-                   $"Cloud models (no GPU required):\n" +
-                   $"  • kimi-k2.5:cloud\n" +
-                   $"  • minimax-m2.7:cloud\n" +
-                   $"  • qwen3-coder:480b-cloud\n\n" +
-                   $"Local models:\n" +
-                   $"  • qwen3:8b (recommended, runs on most hardware)\n" +
-                   $"  • qwen2.5-coder:7b\n" +
-                   $"  • mistral\n" +
-                   $"  • llama3.1";
+                   $"To change your model, run /config and select a model that supports tool use.";
         }
 
-        return $"Error communicating with AI: {ex.Message}\n\nMake sure Ollama is running and the model '{_config.GetEffectiveModelName()}' is installed.\nRun: ollama pull {_config.GetEffectiveModelName()}\n\nOr run /setup to walk through setup again.";
+        return $"Error communicating with AI: {ex.Message}\n\nMake sure your API Provider endpoint and API Key are valid.\nEndpoint: {_config.ApiEndpoint}\nModel: {_config.GetEffectiveModelName()}\n\nOr run /setup to walk through setup again.";
     }
 
     /// <summary>
@@ -831,7 +839,7 @@ public class AIService
         stepHistory.AddUserMessage($"Execute this step now: {stepInstruction}\n\nRemember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.");
 
         // Allow concurrent function invocation within a step for parallel file operations
-        var stepSettings = new OllamaPromptExecutionSettings
+        var stepSettings = new OpenAIPromptExecutionSettings
         {
             Temperature = (float)_config.Temperature,
             FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(
@@ -898,7 +906,7 @@ public class AIService
                 }
                 catch (HttpRequestException ex)
                 {
-                    throw new Exception($"Connection to Ollama failed: {ex.Message}");
+                    throw new Exception($"Connection to AI Provider failed: {ex.Message}");
                 }
 
                 // Decide whether to auto-continue (while scope is still live so BudgetExhausted reads correctly).
@@ -1090,18 +1098,25 @@ public class AIService
     {
         try
         {
-            if (response.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream done)
+            if (response.Metadata != null && response.Metadata.TryGetValue("Usage", out var usageObj) && usageObj != null)
             {
-                var promptTokens = done.PromptEvalCount;
-                var completionTokens = done.EvalCount;
-                if (promptTokens > 0 || completionTokens > 0)
+                var type = usageObj.GetType();
+                var promptProp = type.GetProperty("PromptTokens") ?? type.GetProperty("InputTokens") ?? type.GetProperty("PromptTokenCount");
+                var completionProp = type.GetProperty("CompletionTokens") ?? type.GetProperty("OutputTokens") ?? type.GetProperty("CompletionTokenCount");
+                
+                if (promptProp != null && completionProp != null)
                 {
-                    // EvalDuration is in nanoseconds — convert to seconds
-                    double? generationSeconds = done.EvalDuration > 0
-                        ? done.EvalDuration / 1_000_000_000.0
-                        : null;
-
-                    _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label, generationSeconds);
+                    var promptVal = promptProp.GetValue(usageObj);
+                    var completionVal = completionProp.GetValue(usageObj);
+                    if (promptVal != null && completionVal != null)
+                    {
+                        int promptTokens = Convert.ToInt32(promptVal);
+                        int completionTokens = Convert.ToInt32(completionVal);
+                        if (promptTokens > 0 || completionTokens > 0)
+                        {
+                            _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label, null);
+                        }
+                    }
                 }
             }
         }

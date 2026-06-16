@@ -8,22 +8,20 @@ public class ArdinCodeConfigOnboardingTests
     [Fact]
     public void ValidateAndClamp_BlankEndpointFallsBackToDefault()
     {
-        var config = new ArdinCodeConfig { OllamaEndpoint = "   " };
+        var config = new ArdinCodeConfig { ApiEndpoint = "   " };
         config.ValidateAndClamp();
-        Assert.Equal("http://localhost:11434", config.OllamaEndpoint);
+        Assert.Equal("https://api.avalai.ir/v1", config.ApiEndpoint);
     }
 
     [Theory]
-    [InlineData("http://localhost:11434/")]
-    [InlineData("http://localhost:11434//")]
-    [InlineData("http://10.0.0.5:11434/")]
+    [InlineData("https://api.example.com/")]
+    [InlineData("https://api.example.com//")]
+    [InlineData("https://api.avalai.ir/v1/")]
     public void ValidateAndClamp_PreservesUserTypedEndpoint(string input)
     {
-        // Config never silently mutates the user's URL. Heal happens at probe time
-        // and only when the as-typed URL actually fails.
-        var config = new ArdinCodeConfig { OllamaEndpoint = input };
+        var config = new ArdinCodeConfig { ApiEndpoint = input };
         config.ValidateAndClamp();
-        Assert.Equal(input, config.OllamaEndpoint);
+        Assert.Equal(input, config.ApiEndpoint);
     }
 
     [Fact]
@@ -31,13 +29,5 @@ public class ArdinCodeConfigOnboardingTests
     {
         var config = new ArdinCodeConfig();
         Assert.False(config.HasCompletedOnboarding);
-    }
-
-    [Fact]
-    public void DefaultCloudModel_HasExpectedTag()
-    {
-        // Pinned constant — onboarding auto-pulls this when a signed-in user has no
-        // models, so any change here changes the out-of-box experience.
-        Assert.Equal("minimax-m2.7:cloud", ArdinCodeConfig.DefaultCloudModel);
     }
 }
