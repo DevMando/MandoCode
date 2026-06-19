@@ -2,7 +2,7 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [0.13.0] - [Unreleased]
+## [0.13.0] - 2026-06-18
 
 This release is about one thing: **long sessions on big work no longer looking broken.** Building real
 projects with MandoCode surfaced a chain of failures where a perfectly healthy model — partway through

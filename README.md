@@ -280,7 +280,9 @@ Models with **tool/function calling** support work best with MandoCode. The firs
 
 | Model | Notes |
 |-------|-------|
-| `glm-5.2:cloud` | Default — auto-pulled by `/setup` when you pick Cloud |
+| `glm-5.2:cloud` | **Default** — auto-pulled by `/setup` when you pick Cloud |
+| `minimax-m3:cloud` | General-purpose alternative |
+| `kimi-k2.7-code:cloud` | Code-focused |
 
 **Local** (fully offline, runs on your hardware):
 

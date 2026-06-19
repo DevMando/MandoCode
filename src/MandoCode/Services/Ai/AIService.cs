@@ -789,9 +789,9 @@ public class AIService
                    $"Your current model doesn't support this — you'll need to switch to a tool-enabled model.\n\n" +
                    $"To change your model, run /config and select a model that supports tool use.\n\n" +
                    $"Cloud models (no GPU required):\n" +
-                   $"  • kimi-k2.5:cloud\n" +
                    $"  • glm-5.2:cloud\n" +
-                   $"  • qwen3-coder:480b-cloud\n\n" +
+                   $"  • minimax-m3:cloud\n" +
+                   $"  • kimi-k2.7-code:cloud\n\n" +
                    $"Local models:\n" +
                    $"  • qwen3:8b (recommended, runs on most hardware)\n" +
                    $"  • qwen2.5-coder:7b\n" +

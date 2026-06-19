@@ -188,7 +188,7 @@ You explain:
 - How Ollama works as a local model server
 - Cloud models on Ollama (no GPU) vs local models
 - Recommended models: qwen3:8b, qwen2.5-coder:7b, mistral, llama3.1
-- Cloud options: kimi-k2.5:cloud, glm-5.2:cloud, qwen3-coder:480b-cloud
+- Cloud options: glm-5.2:cloud, minimax-m3:cloud, kimi-k2.7-code:cloud
 
 Keep it beginner-friendly. Use analogies. When the user is ready, tell them to type /clear to return to normal assistant mode.";
 }
