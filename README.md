@@ -67,8 +67,15 @@ If you use **local models** and see responses cut off, the model "forgetting" ea
 There's no universally right slider position — it's a trade between *how much the model can see* and *fitting in your GPU's memory* (every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model):
 
 - **Too low** (the 4k default): the symptoms above — the model's own instructions silently fall out of the window and it stops behaving.
-- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung.
+- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung. *More window is not better* — sizing it to your GPU is what matters. (Seen in the wild: a **256k** slider on a small model dropped it from ~175 tok/s to ~11, because the giant KV cache no longer fit in VRAM and inference fell back to the CPU.)
 - **Starting points**: **16k** for most GPUs, **32k** with 8 GB+ VRAM. Only raise it if you're seeing the symptoms above; step back down a notch if generation slows badly after raising it.
+
+**Want to see the "too low" failure in under a minute?** On the 4k default, with any local model:
+
+1. `create a folder called Mandy` — ✅ it creates the folder.
+2. `write a poem about the sky in that folder` — ❌ *"Which folder are you referring to?"*
+
+The model didn't get dumber between turns. At 4k, MandoCode's system prompt alone fills the window — so turn 1, where "Mandy" was created, has already been pushed out by turn 2, and "that folder" refers to something the model can no longer see. Raise the window to **16k** and the *exact same two prompts* just work, because turn 1 is still in view.
 
 **If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
 
