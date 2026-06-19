@@ -141,6 +141,21 @@ public static class ConfigKeySetter
                 }
                 return Fail("Error: Value must be 'true' or 'false'");
 
+            case "streaming":
+            case "responsestreaming":
+                var streamMode = value.Trim().ToLowerInvariant();
+                // Friendly aliases for the old bool: true → all, false → off.
+                if (streamMode == "true") streamMode = "all";
+                else if (streamMode == "false") streamMode = "off";
+                if (streamMode is "off" or "cloud" or "all")
+                {
+                    config.ResponseStreaming = streamMode;
+                    // Read fresh per call in AIService.InvokeChatAsync — no rebuild needed.
+                    var streamDesc = streamMode switch { "all" => "all models", "cloud" => "cloud models only", _ => "disabled" };
+                    return new(true, $"✓ Response streaming: {streamMode} ({streamDesc})");
+                }
+                return Fail("Error: streaming must be 'off', 'cloud', or 'all'");
+
             case "diffapprovals":
             case "enablediffapprovals":
                 if (bool.TryParse(value, out var enableDiff))
@@ -226,6 +241,7 @@ public static class ConfigKeySetter
         maxTokens            {config.MaxTokens}  (max response length, {MandoCodeConfig.MinMaxTokens}-{MandoCodeConfig.MaxMaxTokens})
         contextLength        {(config.ContextLength == 0 ? "Ollama default" : config.ContextLength.ToString())}  (local window, 0 or {MandoCodeConfig.MinContextLength}-{MandoCodeConfig.MaxContextLength}; applied when MandoCode starts Ollama)
         modelResponseTimeout {config.ModelResponseTimeoutSeconds}s  (stall watchdog, {MandoCodeConfig.MinModelResponseTimeoutSeconds}-{MandoCodeConfig.MaxModelResponseTimeoutSeconds})
+        streaming            {config.ResponseStreaming}  (off / cloud / all — which models stream w/ watchdog heartbeat)
         timeout              {config.RequestTimeoutMinutes} min  (per-request ceiling, {MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes})
         toolBudget           {config.ToolResultCharBudget:N0} chars  ({MandoCodeConfig.MinToolResultCharBudget:N0}-{MandoCodeConfig.MaxToolResultCharBudget:N0})
         autoContinue         {config.EnableAutoContinuation}

@@ -67,8 +67,15 @@ If you use **local models** and see responses cut off, the model "forgetting" ea
 There's no universally right slider position — it's a trade between *how much the model can see* and *fitting in your GPU's memory* (every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model):
 
 - **Too low** (the 4k default): the symptoms above — the model's own instructions silently fall out of the window and it stops behaving.
-- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung.
+- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung. *More window is not better* — sizing it to your GPU is what matters. (Seen in the wild: a **256k** slider on a small model dropped it from ~175 tok/s to ~11, because the giant KV cache no longer fit in VRAM and inference fell back to the CPU.)
 - **Starting points**: **16k** for most GPUs, **32k** with 8 GB+ VRAM. Only raise it if you're seeing the symptoms above; step back down a notch if generation slows badly after raising it.
+
+**Want to see the "too low" failure in under a minute?** On the 4k default, with any local model:
+
+1. `create a folder called Mandy` — ✅ it creates the folder.
+2. `write a poem about the sky in that folder` — ❌ *"Which folder are you referring to?"*
+
+The model didn't get dumber between turns. At 4k, MandoCode's system prompt alone fills the window — so turn 1, where "Mandy" was created, has already been pushed out by turn 2, and "that folder" refers to something the model can no longer see. Raise the window to **16k** and the *exact same two prompts* just work, because turn 1 is still in view.
 
 **If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
 
@@ -176,7 +183,7 @@ If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare
 | **AI** | Project-aware assistant | Reads, writes, deletes, and searches your entire codebase |
 | **AI** | Web search & fetch | Web search and webpage reading — keyless via DuckDuckGo, or Tavily with a free API key |
 | **AI** | MCP server support | Connect to any Model Context Protocol server (stdio or remote HTTP) — Claude-Desktop-compatible config |
-| **AI** | Streaming responses | Real-time output with animated spinners |
+| **AI** | Streaming responses | Streams responses to keep long generations alive — no false "stalled" cutoffs |
 | **AI** | Task planner | Auto-detects complex requests and breaks them into steps |
 | **AI** | Fallback function parsing | Handles models that output tool calls as raw JSON |
 | **UI** | Diff approvals | Color-coded diffs with approve / deny / redirect |
@@ -243,7 +250,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 mandocode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
 mandocode --config show     # print current config
 mandocode --config init     # create a default config file
-mandocode --config set <key> <value>   # set a single value (e.g. set model qwen3.5:9b)
+mandocode --config set <key> <value>   # set a single value (e.g. set model qwen3:8b)
 mandocode --config path     # show config file location
 ```
 
@@ -280,16 +287,18 @@ Models with **tool/function calling** support work best with MandoCode. The firs
 
 | Model | Notes |
 |-------|-------|
-| `minimax-m2.7:cloud` | Default — auto-pulled by `/setup` when you pick Cloud |
+| `glm-5.2:cloud` | **Default** — auto-pulled by `/setup` when you pick Cloud |
+| `minimax-m3:cloud` | General-purpose alternative |
+| `kimi-k2.7-code:cloud` | Code-focused |
 
 **Local** (fully offline, runs on your hardware):
 
-| Model | Size | Hardware |
-|-------|------|----------|
-| `qwen3.5:0.8b` | ~1.0 GB | CPU-only / integrated GPU — fast on any laptop, light reasoning |
-| `qwen3.5:2b` | ~2.7 GB | Modern CPU or 4 GB+ GPU — quick Q&A, simple code edits |
-| `qwen3.5:4b` | ~3.4 GB | Mid-range GPU (4-6 GB VRAM) or 16 GB RAM — balanced day-to-day use |
-| `qwen3.5:9b` | ~6.6 GB | Dedicated GPU (8+ GB VRAM) — best local quality, multi-file refactors |
+| Model | Size | Notes |
+|-------|------|-------|
+| `qwen3:8b` | ~5.2 GB | **Recommended** — best balance of speed & quality (~6 GB VRAM) |
+| `qwen2.5-coder:7b` | ~4.7 GB | Code-focused (~5–6 GB VRAM) |
+| `mistral` | ~4.1 GB | Fast, general-purpose 7B (~5 GB VRAM) |
+| `llama3.1` | ~4.9 GB | Strong general reasoning, 8B (~6 GB VRAM) |
 
 MandoCode validates model compatibility on startup. Run `/learn` for a detailed guide on model sizes and hardware requirements, or `/setup` to switch between tiers any time.
 
@@ -305,16 +314,28 @@ Located at `~/.mandocode/config.json`
 ```json
 {
   "ollamaEndpoint": "http://localhost:11434",
-  "modelName": "minimax-m2.7:cloud",
+  "modelName": "glm-5.2:cloud",
   "modelPath": null,
   "temperature": 0.7,
-  "maxTokens": 4096,
+  "maxTokens": 32768,
+  "contextLength": 8192,
+  "requestTimeoutMinutes": 15,
+  "modelResponseTimeoutSeconds": 680,
+  "responseStreaming": "all",
+  "toolResultCharBudget": 100000,
+  "enableAutoContinuation": true,
+  "maxAutoContinuations": 3,
+  "markdownRenderTimeoutSeconds": 60,
   "ignoreDirectories": [],
   "enableDiffApprovals": true,
   "enableTaskPlanning": true,
   "enableTokenTracking": true,
   "enableThemeCustomization": true,
   "enableFallbackFunctionParsing": true,
+  "enableWebSearch": true,
+  "tavilyApiKey": null,
+  "enableMcp": true,
+  "mcpServers": {},
   "functionDeduplicationWindowSeconds": 5,
   "maxRetryAttempts": 2,
   "music": {
@@ -330,17 +351,27 @@ Located at `~/.mandocode/config.json`
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ollamaEndpoint` | `http://localhost:11434` | Ollama server URL |
-| `modelName` | `minimax-m2.7:cloud` | Model to use |
+| `modelName` | `glm-5.2:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |
 | `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when MandoCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
+| `requestTimeoutMinutes` | `15` | Per-turn ceiling for a single model call / plan step. Cancel anytime with Ctrl+C |
+| `modelResponseTimeoutSeconds` | `680` | Stall watchdog — max seconds a single model call may run before it's treated as stalled. With streaming on (the default), the per-chunk heartbeat makes this mostly a safety net |
+| `responseStreaming` | `all` | Which models stream (with a per-chunk stall-watchdog heartbeat): `all`, `cloud` (cloud only), or `off` (non-streaming everywhere). `true`/`false` are accepted as aliases for `all`/`off` |
+| `toolResultCharBudget` | `100000` | Total characters of tool results per turn/step before further tool calls are refused (≈25k tokens) — guards the context window |
+| `enableAutoContinuation` | `true` | When the tool-result budget is exhausted mid-task, auto-continue in a fresh scope instead of stopping |
+| `maxAutoContinuations` | `3` | Hard cap on auto-continuations per request (prevents runaway loops) |
+| `markdownRenderTimeoutSeconds` | `60` | Max seconds to render the final markdown before falling back to raw text |
 | `ignoreDirectories` | `[]` | Additional directories to exclude from file scanning |
 | `enableDiffApprovals` | `true` | Show diffs and prompt for approval before file writes/deletes |
 | `enableTaskPlanning` | `true` | Enable automatic task planning for complex requests |
 | `enableTokenTracking` | `true` | Show session token totals and per-response token costs |
 | `enableThemeCustomization` | `true` | Detect terminal theme and apply a curated ANSI palette |
 | `enableFallbackFunctionParsing` | `true` | Parse function calls from text output |
+| `enableWebSearch` | `true` | Enable web search & page fetch (DuckDuckGo keyless, or Tavily with a key) |
+| `tavilyApiKey` | `null` | Optional Tavily key for reliable AI-optimized search (or set the `TAVILY_API_KEY` env var) |
+| `enableMcp` | `true` | Enable MCP server integration (servers configured under `mcpServers`) |
 | `functionDeduplicationWindowSeconds` | `5` | Time window to prevent duplicate function calls |
 | `maxRetryAttempts` | `2` | Max retry attempts for transient errors |
 | `music.volume` | `0.5` | Music volume (0.0 - 1.0) |

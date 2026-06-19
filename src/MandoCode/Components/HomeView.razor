@@ -42,6 +42,15 @@
         <Markup Content="✅ MandoCode is ready!" />
         <HelpDisplay />
         <Markup Content="@("Tip: reference files inline, e.g. What does @Program.cs do?")" />
+        @if (!string.IsNullOrEmpty(UpdateNotice))
+        {
+            <Columns>
+                @* Gold message + green command — the app's existing palette (gold values, green hints).
+                   Markup escapes inline color tags, so two colors = two Markup elements side by side. *@
+                <Markup Content="@UpdateNotice" Foreground="@(new Color(255, 200, 80))" />
+                <Markup Content="@UpdateCommand" Foreground="Color.Green" />
+            </Columns>
+        }
     }
 </Rows>
 
@@ -54,4 +63,13 @@
     [Parameter] public bool IsConnected { get; set; }
     [Parameter] public string OnboardingStatus { get; set; } = "";
     [Parameter] public string? ModelWarning { get; set; }
+
+    /// <summary>
+    /// "A newer MandoCode is available" line (gold), set once the background update check
+    /// resolves. Empty/null until then (or when up to date / opted out) so nothing renders.
+    /// </summary>
+    [Parameter] public string? UpdateNotice { get; set; }
+
+    /// <summary>The upgrade command (`dotnet tool update -g MandoCode`), rendered green next to the notice.</summary>
+    [Parameter] public string? UpdateCommand { get; set; }
 }

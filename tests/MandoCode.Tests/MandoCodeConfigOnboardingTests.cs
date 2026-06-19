@@ -38,6 +38,6 @@ public class MandoCodeConfigOnboardingTests
     {
         // Pinned constant — onboarding auto-pulls this when a signed-in user has no
         // models, so any change here changes the out-of-box experience.
-        Assert.Equal("minimax-m2.7:cloud", MandoCodeConfig.DefaultCloudModel);
+        Assert.Equal("glm-5.2:cloud", MandoCodeConfig.DefaultCloudModel);
     }
 }

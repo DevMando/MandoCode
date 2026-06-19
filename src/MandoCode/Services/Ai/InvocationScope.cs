@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 
 namespace MandoCode.Services;
 
@@ -8,12 +9,18 @@ namespace MandoCode.Services;
 /// context window before the step finishes.
 ///
 /// Circuits:
-///   1. Duplicate-read detection — a second <c>read_file_contents</c> with the
-///      same args is short-circuited unless the path was written/edited since.
-///   2. Duplicate web-call detection — a second <c>search_web</c>/<c>fetch_webpage</c>
+///   1. Duplicate-read detection — a second <c>read_file_contents</c> is short-circuited
+///      (unless the path was written/edited since) when its args are byte-identical
+///      (<see cref="IsRedundantRead"/>) OR its range is already covered by what we've
+///      delivered (<see cref="IsReadRangeCovered"/>) — catching the "re-read the same
+///      unchanged file in a slightly different slice" loop while still allowing paging.
+///   2. No-progress read loop — too many delivered reads with no intervening mutation
+///      (<see cref="ReadLoopTripped"/>) is a stuck analysis loop; the filter then steers
+///      the model to act. Backstops shapes #1 can't prove redundant.
+///   3. Duplicate web-call detection — a second <c>search_web</c>/<c>fetch_webpage</c>
 ///      with the same normalized query/URL is short-circuited (no escape hatch — the
 ///      result is already in history and nothing in-scope changes it).
-///   3. Result-budget tracking — accumulated tool-result characters are capped
+///   4. Result-budget tracking — accumulated tool-result characters are capped
 ///      so we bail gracefully instead of blowing past the context window.
 ///
 /// A scope is cheap; spin one up per chat turn and per plan step.
@@ -32,8 +39,39 @@ public class InvocationScope : IDisposable
     // when the model keeps failing against the same path in an exploratory loop.
     private readonly HashSet<string> _editHintEmitted = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _editFailureCount = new(StringComparer.OrdinalIgnoreCase);
+    // Per-path record of which line ranges have actually been DELIVERED this scope, plus the
+    // file's known total line count. Drives interval-coverage read dedup: a re-read whose
+    // range is already covered by what we've delivered (and the file hasn't changed) returns
+    // nothing new, so it's refused — while a read of a genuinely NEW region (paging forward
+    // past a truncation point) is still allowed. The exact-key _readKeys set above only
+    // catches byte-identical args; this catches the "same unchanged file, different/overlapping
+    // slice" loop that re-reads from the top with a varying endLine.
+    private readonly Dictionary<string, ReadCoverage> _readCoverage = new(StringComparer.OrdinalIgnoreCase);
+    // Successful (delivered) reads since the last filesystem mutation in this scope. Backstops
+    // the no-progress read loop: a model that keeps reading without ever writing/editing is
+    // stuck. Refused reads never increment this (they short-circuit before recording), so it
+    // counts real content reads only — and interval-coverage refusals above keep it honest.
+    private int _readsSinceMutation;
     private readonly object _lock = new();
     private Action? _onDispose;
+
+    /// <summary>Tracks the delivered line ranges and known total for one file this scope.</summary>
+    private sealed class ReadCoverage
+    {
+        public readonly List<(int Start, int End)> Intervals = new();
+        public int Total;          // highest "of T" line count seen; 0 = unknown
+        public bool ReachedEof;    // true once a delivered range reached the last line
+    }
+
+    /// <summary>
+    /// After how many delivered reads with NO intervening write/edit/delete the no-progress
+    /// circuit refuses further reads and steers the model to produce output. Generous on
+    /// purpose: a well-formed step reads a handful of files then acts, so this only trips on
+    /// a genuine read loop. Interval-coverage dedup is the primary guard; this is the backstop
+    /// for shapes it can't prove redundant (unbounded re-reads of a truncated file, reads of
+    /// many distinct files, results with no parseable line header).
+    /// </summary>
+    public const int ReadLoopCircuitThreshold = 20;
 
     /// <summary>
     /// After how many failed edit_file attempts on the same path (without an intervening
@@ -79,7 +117,82 @@ public class InvocationScope : IDisposable
         {
             _readKeys.Add(readKey);
             _pathsModifiedSinceRead.Remove(path);
+            _readsSinceMutation++;
         }
+    }
+
+    /// <summary>
+    /// Records the line range a read actually DELIVERED (parsed from the result header),
+    /// plus the file's total line count when known. Call alongside <see cref="RecordRead"/>
+    /// whenever the delivered range is parseable; pass total=0 when unknown.
+    /// </summary>
+    public void RecordReadRange(string path, int start, int end, int total)
+    {
+        if (end < start) return;
+        lock (_lock)
+        {
+            if (!_readCoverage.TryGetValue(path, out var cov))
+                _readCoverage[path] = cov = new ReadCoverage();
+            cov.Intervals.Add((start, end));
+            if (total > cov.Total) cov.Total = total;
+            if (cov.Total > 0 && end >= cov.Total) cov.ReachedEof = true;
+        }
+    }
+
+    /// <summary>
+    /// True when re-reading <paramref name="path"/> over [<paramref name="reqStart"/>,
+    /// <paramref name="reqEnd"/>] would return only lines already delivered this scope and
+    /// the file hasn't changed since — i.e. the read is redundant. A null <paramref name="reqEnd"/>
+    /// means "to end of file"; that can only be judged redundant once we've delivered through
+    /// EOF (otherwise the re-read might reach new lines past a truncation point, so we allow it
+    /// and let the no-progress circuit catch a true loop). Reads of a genuinely new region
+    /// return false, preserving large-file paging.
+    /// </summary>
+    public bool IsReadRangeCovered(string path, int reqStart, int? reqEnd)
+    {
+        lock (_lock)
+        {
+            // A write/edit since the last read legitimately changes the content — allow.
+            if (_pathsModifiedSinceRead.Contains(path)) return false;
+            if (!_readCoverage.TryGetValue(path, out var cov) || cov.Intervals.Count == 0) return false;
+
+            var effectiveStart = Math.Max(1, reqStart);
+            int effectiveEnd;
+            if (reqEnd.HasValue)
+                effectiveEnd = reqEnd.Value;
+            else if (cov.Total > 0 && cov.ReachedEof)
+                effectiveEnd = cov.Total;          // unbounded read, but we've seen the whole file
+            else
+                return false;                      // unbounded read on a not-fully-seen file — can't prove redundant
+
+            if (cov.Total > 0) effectiveEnd = Math.Min(effectiveEnd, cov.Total);
+            if (effectiveStart > effectiveEnd) return false;
+
+            // Contiguous-coverage sweep from effectiveStart over the merged intervals.
+            var reach = effectiveStart - 1;
+            foreach (var (s, e) in cov.Intervals.OrderBy(i => i.Start))
+            {
+                if (s > reach + 1) break;          // gap at reach+1 that nothing later can fill (sorted by start)
+                if (e > reach) reach = e;
+                if (reach >= effectiveEnd) return true;
+            }
+            return reach >= effectiveEnd;
+        }
+    }
+
+    /// <summary>
+    /// True once <see cref="ReadLoopCircuitThreshold"/> delivered reads have happened with no
+    /// intervening write/edit/delete. The filter then refuses further reads and steers the
+    /// model to act on what it already has.
+    /// </summary>
+    public bool ReadLoopTripped
+    {
+        get { lock (_lock) return _readsSinceMutation >= ReadLoopCircuitThreshold; }
+    }
+
+    public int ReadsSinceMutation
+    {
+        get { lock (_lock) return _readsSinceMutation; }
     }
 
     /// <summary>
@@ -115,6 +228,10 @@ public class InvocationScope : IDisposable
             _pathsModifiedSinceRead.Add(path);
             _editHintEmitted.Remove(path);
             _editFailureCount.Remove(path);
+            // The file changed, so previously-delivered ranges no longer describe it.
+            _readCoverage.Remove(path);
+            // A mutation is progress — reset the no-progress read counter.
+            _readsSinceMutation = 0;
         }
     }
 

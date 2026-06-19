@@ -19,6 +19,17 @@ internal static class ConfigJsonOptions
     };
 }
 
+/// <summary>How model responses are streamed. See <see cref="MandoCodeConfig.ResponseStreaming"/>.</summary>
+public enum ResponseStreamingMode
+{
+    /// <summary>Never stream — force the non-streaming path for every model.</summary>
+    Off,
+    /// <summary>Stream only cloud models; local models stay non-streaming.</summary>
+    Cloud,
+    /// <summary>Stream every model (default).</summary>
+    All
+}
+
 /// <summary>
 /// Configuration for MandoCode.
 /// </summary>
@@ -39,11 +50,11 @@ public class MandoCodeConfig
     /// models yet. Tuned for the broadest "best out-of-box" experience on hardware-light
     /// setups; bump as Ollama publishes newer cloud-tier defaults.
     /// </summary>
-    public const string DefaultCloudModel = "minimax-m2.7:cloud";
+    public const string DefaultCloudModel = "glm-5.2:cloud";
 
     /// <summary>
     /// True when the tag names an Ollama cloud model. Cloud tags end in "cloud" with a
-    /// ':' or '-' separator — "minimax-m2.7:cloud" but also "qwen3-coder:480b-cloud"
+    /// ':' or '-' separator — "glm-5.2:cloud" but also "qwen3-coder:480b-cloud"
     /// (size variant + "-cloud"). The old scattered Contains(":cloud") checks missed the
     /// "-cloud" form and misclassified those models as local. Single source of truth for
     /// the pickers, onboarding flow, and config display.
@@ -82,6 +93,14 @@ public class MandoCodeConfig
         };
     }
 
+    /// <summary>
+    /// Current config schema version. Bump whenever you add a one-shot migration to
+    /// <see cref="Migrate"/>. Configs written before migrations existed lack the
+    /// <see cref="ConfigVersion"/> field and deserialize to 0, which triggers every
+    /// migration in order.
+    /// </summary>
+    public const int CurrentConfigVersion = 1;
+
     // ── Validation ranges (single source of truth) ──
     public const double MinTemperature = 0.0;
     public const double MaxTemperature = 1.0;
@@ -109,6 +128,15 @@ public class MandoCodeConfig
     public static bool IsValidMarkdownRenderTimeout(int value) => value >= MinMarkdownRenderTimeoutSeconds && value <= MaxMarkdownRenderTimeoutSeconds;
     // 0 is valid: "don't set it — leave Ollama's own default in place".
     public static bool IsValidContextLength(int value) => value == 0 || (value >= MinContextLength && value <= MaxContextLength);
+
+    /// <summary>
+    /// Schema version of this config, used to drive one-shot migrations in <see cref="Migrate"/>.
+    /// Absent in configs written before migrations existed → deserializes to 0, which triggers
+    /// the first migration. Fresh configs from <see cref="CreateDefault"/> are stamped with
+    /// <see cref="CurrentConfigVersion"/> so they skip migrations they already satisfy.
+    /// </summary>
+    [JsonPropertyName("configVersion")]
+    public int ConfigVersion { get; set; }
 
     /// <summary>
     /// Ollama endpoint URL.
@@ -170,17 +198,46 @@ public class MandoCodeConfig
     /// stalled and cancelled. Bounds the common "local model stops streaming once context
     /// grows" failure so a step recovers in a few minutes instead of waiting out the much
     /// longer <see cref="RequestTimeoutMinutes"/> ceiling. The whole turn (all continuations
-    /// and plan steps) is still capped by RequestTimeoutMinutes.
-    /// Default is 420s: model calls are non-streaming, so the watchdog gets NO signal
+    /// and plan steps) is still capped by RequestTimeoutMinutes — keep this default well
+    /// BELOW that ceiling (900s at the 15-min default) or the watchdog can never fire first.
+    /// Default is 680s: model calls are non-streaming, so the watchdog gets NO signal
     /// during generation and can't tell "healthily generating a long response" from
     /// "hung" — a several-thousand-token reply on a slow provider (~10 tok/s observed
-    /// on busy cloud models) legitimately runs past 3 minutes. Observed live at 180s:
-    /// a plan step composing a design doc was killed mid-generation. Lower this on fast
-    /// hardware for snappier stall detection; the real fix is streaming with per-chunk
-    /// watchdog resets. You can also cancel any call manually with Esc / Ctrl+C.
+    /// on busy cloud models) legitimately runs several minutes. Observed live: a plan
+    /// step composing a large file was killed mid-generation at 180s, and again near
+    /// 420s on a big three.js file from a cloud model. Lower this on fast hardware for
+    /// snappier stall detection; the real fix is streaming with per-chunk watchdog resets.
+    /// You can also cancel any call manually with Esc / Ctrl+C. Existing configs on a
+    /// prior shipped default (180 or 420) are migrated up to 680 once — see <see cref="Migrate"/>.
     /// </summary>
     [JsonPropertyName("modelResponseTimeoutSeconds")]
-    public int ModelResponseTimeoutSeconds { get; set; } = 420;
+    public int ModelResponseTimeoutSeconds { get; set; } = 680;
+
+    /// <summary>
+    /// Controls response streaming. Streaming + buffering resets the stall watchdog on every
+    /// chunk so a long-but-healthy generation never false-positives — then assembles a
+    /// non-streaming-shaped result so the fallback parser and token tracking are unaffected.
+    /// Values:
+    ///   - "all"   (default): stream every model. Verified across cloud (glm-5.2) and local —
+    ///             structured tool calls (qwen2.5) and text/fallback calls (gemma3) both survive
+    ///             streaming intact; see docs/KNOWN_EDGE_CASES.md.
+    ///   - "cloud": stream only cloud models (<see cref="IsCloudModel"/>); local stays non-streaming.
+    ///   - "off":   never stream — the kill switch, forces the non-streaming path everywhere.
+    /// Stored as a string and parsed leniently (<see cref="StreamingMode"/>) so a hand-edited or
+    /// unknown value heals to "all" instead of failing the whole config load.
+    /// </summary>
+    [JsonPropertyName("responseStreaming")]
+    public string ResponseStreaming { get; set; } = "all";
+
+    /// <summary>
+    /// Parsed form of <see cref="ResponseStreaming"/>. Unknown/empty values fall back to
+    /// <see cref="ResponseStreamingMode.All"/> so a typo can't break streaming routing.
+    /// </summary>
+    [JsonIgnore]
+    public ResponseStreamingMode StreamingMode =>
+        Enum.TryParse<ResponseStreamingMode>(ResponseStreaming, ignoreCase: true, out var mode)
+            ? mode
+            : ResponseStreamingMode.All;
 
     /// <summary>
     /// Total character budget for tool-call results within a single chat turn or plan step.
@@ -399,6 +456,11 @@ public class MandoCodeConfig
                 if (config != null)
                 {
                     config.ValidateAndClamp();
+                    // One-shot, version-gated migrations. Persist immediately if anything
+                    // changed so the upgrade (and the version stamp) survives even if the
+                    // session never otherwise saves.
+                    if (config.Migrate())
+                        config.Save(configPath);
                     return config;
                 }
                 return new MandoCodeConfig();
@@ -439,6 +501,34 @@ public class MandoCodeConfig
     }
 
     /// <summary>
+    /// One-shot, version-gated config migrations. Run from <see cref="Load"/> after
+    /// deserialization. Each step is guarded so it only touches values the user never
+    /// customized (i.e. values still equal to a previously-shipped default), then advances
+    /// <see cref="ConfigVersion"/> so it can never re-fire. Returns true if anything changed,
+    /// signalling the caller to persist the upgraded config.
+    /// </summary>
+    public bool Migrate()
+    {
+        var changed = false;
+
+        // v1: raise the stall-watchdog default. 180 (≤v0.11.0) and 420 (v0.12.0) were both
+        // too low for a non-streaming call to finish a large generation on a slow/cloud
+        // model — observed killing big file writes mid-stream. Only bump configs still
+        // sitting on one of those shipped defaults; a deliberately-chosen value (e.g. 300,
+        // 900) is left untouched. Whoever set exactly 180/420 by hand simply gets the safer
+        // default — an acceptable, upward-only nudge.
+        if (ConfigVersion < 1)
+        {
+            if (ModelResponseTimeoutSeconds is 180 or 420)
+                ModelResponseTimeoutSeconds = 680;
+            ConfigVersion = 1;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Validates and clamps numeric config values to safe ranges.
     /// Called after deserialization to guard against corrupted or hand-edited config files.
     /// </summary>
@@ -451,6 +541,13 @@ public class MandoCodeConfig
         MarkdownRenderTimeoutSeconds = Math.Clamp(MarkdownRenderTimeoutSeconds, MinMarkdownRenderTimeoutSeconds, MaxMarkdownRenderTimeoutSeconds);
         ModelResponseTimeoutSeconds = Math.Clamp(ModelResponseTimeoutSeconds, MinModelResponseTimeoutSeconds, MaxModelResponseTimeoutSeconds);
         RequestTimeoutMinutes = Math.Clamp(RequestTimeoutMinutes, MinRequestTimeoutMinutes, MaxRequestTimeoutMinutes);
+        // Heal the streaming token to a canonical value; an unknown/hand-edited entry → "all".
+        ResponseStreaming = StreamingMode switch
+        {
+            ResponseStreamingMode.Off => "off",
+            ResponseStreamingMode.Cloud => "cloud",
+            _ => "all"
+        };
         // 0 stays 0 ("leave Ollama's default alone"); anything else clamps to the valid band.
         if (ContextLength != 0)
             ContextLength = Math.Clamp(ContextLength, MinContextLength, MaxContextLength);
@@ -533,13 +630,15 @@ public class MandoCodeConfig
     {
         return new MandoCodeConfig
         {
+            ConfigVersion = CurrentConfigVersion,
             OllamaEndpoint = "http://localhost:11434",
             ModelName = DefaultCloudModel,
             Temperature = 0.7,
             MaxTokens = 32768,
             ContextLength = 8192,
             RequestTimeoutMinutes = 15,
-            ModelResponseTimeoutSeconds = 420,
+            ModelResponseTimeoutSeconds = 680,
+            ResponseStreaming = "all",
             ToolResultCharBudget = 100_000,
             EnableAutoContinuation = true,
             MaxAutoContinuations = 3,
@@ -569,6 +668,13 @@ public class MandoCodeConfig
             : $"  Context Length: {(ContextLength == 0 ? "Ollama default" : $"{ContextLength:N0} tokens")} (local models, applied when MandoCode starts the daemon)");
         Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
         Console.WriteLine($"  Model Response Timeout: {ModelResponseTimeoutSeconds}s (per model call — stall watchdog)");
+        var streamingDesc = StreamingMode switch
+        {
+            ResponseStreamingMode.All => "all models (buffered, watchdog heartbeat)",
+            ResponseStreamingMode.Cloud => "cloud models only (buffered, watchdog heartbeat)",
+            _ => "off (non-streaming everywhere)"
+        };
+        Console.WriteLine($"  Response Streaming: {streamingDesc}");
         Console.WriteLine($"  Tool Result Budget: {ToolResultCharBudget:N0} chars (~{ToolResultCharBudget / 4:N0} tokens)");
         Console.WriteLine($"  Auto-Continuation: {(EnableAutoContinuation ? $"Enabled (max {MaxAutoContinuations})" : "Disabled")}");
         Console.WriteLine($"  Markdown Render Timeout: {MarkdownRenderTimeoutSeconds}s");

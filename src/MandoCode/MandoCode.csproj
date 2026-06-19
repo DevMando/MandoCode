@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.12.0</Version>
+    <Version>0.13.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -24,23 +24,25 @@
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
     <PackageReleaseNotes>
-v0.12.0 — Long sessions that don't freeze
+v0.13.0 — It streams now (and stops giving up on big tasks)
 
-This release is all about reliability on long, real-world tasks. While building actual projects with MandoCode, I found several ways a long session could freeze, scramble its own output, or spin in circles instead of finishing — and I fixed every one. The hardest freezes were tracked down by inspecting the stuck app directly, so these address the real causes, not just the symptoms.
+This release is about long, heavy tasks no longer *looking* broken. Building real projects with MandoCode, I kept hitting the same thing: it would stop partway through writing a big file and announce that the model had "stalled" — when the model was actually working just fine. The root cause was that responses weren't streamed, so the safety timer meant to catch a genuinely-stuck model was flying blind. MandoCode now streams responses, which fixes it at the source — plus a couple of changes to make sure the fix actually reaches you.
+
+New:
+
+- It streams. Responses now arrive as they're written, instead of in one lump at the end. It feels snappier — but more importantly, MandoCode can finally tell "still working on a long answer" from "actually stuck," so it stops cancelling healthy work partway through. On by default for every model; turn it off anytime with /config set streaming off. Before flipping it on by default I validated it live against real models, both cloud and local.
+
+- It tells you when there's an update. MandoCode now checks for a newer version on startup and shows a one-line nudge with the exact command to update — so you're never quietly stuck on an old build without knowing one exists.
 
 Fixed:
 
-- No more freezing when you approve a change. Deep in a multi-step task — right as MandoCode started creating files and asking you to approve them — it could lock up with nothing on screen, leaving you no choice but to quit and lose your progress. The approval prompts could end up waiting forever for a keypress that never reached them; I rebuilt them so they always respond.
+- No more "stalled" on a big file. A large response — a whole game file, a long reasoned answer — used to get cancelled and mislabeled as a stall, every single time, with no way to retry past it. Fixed at the root by streaming, with a more generous safety margin as backup for everything else.
 
-- No more locking up while running a command. Some commands could make MandoCode hang on a single step and never come back. It was getting stuck while formatting the command for display — certain commands (long ones, or ones containing file paths) could send it into a loop that never finished. That can't happen now, and a safety cutoff stops anything that ever runs unusually long.
+- No more spinning on the same files. A step meant to create a file could instead re-read the files it already had, over and over, until it ran out of time without ever writing anything. It now notices it has already seen a file and gets on with the actual work.
 
-- No more garbled or duplicated text. On longer replies, a second, scrambled copy of the text could end up drawn over the first. I changed how responses are written to the screen so they show once, cleanly, every time.
+- Better defaults reach you, not just new installs. When I improve a default setting, your existing install now picks it up automatically instead of the change only helping people who install fresh.
 
-- No more wasting a session on repeated searches. While researching, MandoCode could run the same web search over and over without realizing it already had the answer — burning time and tokens for nothing. It now recognizes a repeated search and moves on with what it already found.
-
-- No more stalling when previewing your work. Asked to "test it in the browser," MandoCode used to try to start a local web server it couldn't keep running, and would just sit there waiting. Now it simply gives you the exact command and link to open it yourself.
-
-Every fix is covered by automated tests — the suite grew to 449 checks to keep these from coming back.
+Every change is covered by automated tests — the suite grew to 486 checks.
     </PackageReleaseNotes>
   </PropertyGroup>
 
