@@ -214,4 +214,147 @@ public class InvocationScopeTests
         // "tolerate a normal retry" and "catch a thrash loop fast."
         Assert.Equal(3, InvocationScope.EditFailureCircuitThreshold);
     }
+
+    // ────────────────────────────────────────────────
+    //  Interval-coverage read dedup
+    // ────────────────────────────────────────────────
+
+    [Fact]
+    public void IsReadRangeCovered_FalseWhenNothingRecorded()
+    {
+        var scope = new InvocationScope(400_000);
+        Assert.False(scope.IsReadRangeCovered("foo.cs", 1, 100));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_TrueForRangeContainedInDeliveredSlice()
+    {
+        // Delivered lines 1-200 of a 510-line file; a re-read of 1-100 returns nothing new.
+        // This is the exact loop that exact-key dedup misses (different endLine = new key).
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("style.css", 1, 200, 510);
+        Assert.True(scope.IsReadRangeCovered("style.css", 1, 100));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_FalseForRangeThatExtendsPastWhatWasSeen()
+    {
+        // Paging forward (1-200 seen, now asking through 311) reaches NEW content — must allow.
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("style.css", 1, 200, 510);
+        Assert.False(scope.IsReadRangeCovered("style.css", 1, 311));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_FalseForNewRegionPastTruncation()
+    {
+        // Classic large-file paging: saw 1-312, now reading from 313 onward — never redundant.
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("big.cs", 1, 312, 1051);
+        Assert.False(scope.IsReadRangeCovered("big.cs", 313, null));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_UnboundedReread_TrueOnceWholeFileSeen()
+    {
+        // A whole-file read (start=1, end=total) marks EOF reached; an unbounded re-read of
+        // the unchanged file can't return anything new, so it's redundant.
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("index.html", 1, 113, 113);
+        Assert.True(scope.IsReadRangeCovered("index.html", 1, null));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_UnboundedReread_FalseWhenFileNotFullySeen()
+    {
+        // Only a truncated prefix seen; an unbounded re-read might reach new lines, so allow it
+        // (the no-progress circuit catches a genuine loop instead).
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("big.cs", 1, 312, 1051);
+        Assert.False(scope.IsReadRangeCovered("big.cs", 1, null));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_FalseAfterWriteInvalidatesCoverage()
+    {
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("foo.cs", 1, 200, 200);
+        scope.RecordWrite("foo.cs");
+        // File changed — re-reading any range is legitimate again.
+        Assert.False(scope.IsReadRangeCovered("foo.cs", 1, 100));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_MergesAdjacentDeliveredRanges()
+    {
+        // 1-100 then 101-200 delivered separately; together they cover 1-200 contiguously.
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("foo.cs", 1, 100, 400);
+        scope.RecordReadRange("foo.cs", 101, 200, 400);
+        Assert.True(scope.IsReadRangeCovered("foo.cs", 1, 200));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_FalseWhenGapBetweenDeliveredRanges()
+    {
+        // 1-100 and 150-200 seen, with 101-149 never delivered — a read spanning the gap
+        // still reaches unseen lines.
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("foo.cs", 1, 100, 400);
+        scope.RecordReadRange("foo.cs", 150, 200, 400);
+        Assert.False(scope.IsReadRangeCovered("foo.cs", 1, 200));
+    }
+
+    [Fact]
+    public void IsReadRangeCovered_IsCaseInsensitive()
+    {
+        var scope = new InvocationScope(400_000);
+        scope.RecordReadRange("src/Foo.cs", 1, 200, 200);
+        Assert.True(scope.IsReadRangeCovered("SRC/FOO.CS", 1, 100));
+    }
+
+    // ────────────────────────────────────────────────
+    //  No-progress read loop circuit
+    // ────────────────────────────────────────────────
+
+    [Fact]
+    public void ReadLoopTripped_DefaultsToFalse()
+    {
+        var scope = new InvocationScope(400_000);
+        Assert.False(scope.ReadLoopTripped);
+        Assert.Equal(0, scope.ReadsSinceMutation);
+    }
+
+    [Fact]
+    public void ReadLoopTripped_TrueAtThreshold()
+    {
+        var scope = new InvocationScope(400_000);
+        for (var i = 0; i < InvocationScope.ReadLoopCircuitThreshold; i++)
+            scope.RecordRead($"read:f{i}.cs", $"f{i}.cs");
+
+        Assert.Equal(InvocationScope.ReadLoopCircuitThreshold, scope.ReadsSinceMutation);
+        Assert.True(scope.ReadLoopTripped);
+    }
+
+    [Fact]
+    public void ReadLoop_ResetsOnWrite()
+    {
+        var scope = new InvocationScope(400_000);
+        for (var i = 0; i < InvocationScope.ReadLoopCircuitThreshold; i++)
+            scope.RecordRead($"read:f{i}.cs", $"f{i}.cs");
+        Assert.True(scope.ReadLoopTripped);
+
+        // A mutation is forward progress — the counter resets.
+        scope.RecordWrite("game.js");
+        Assert.False(scope.ReadLoopTripped);
+        Assert.Equal(0, scope.ReadsSinceMutation);
+    }
+
+    [Fact]
+    public void ReadLoopCircuitThreshold_IsTwenty()
+    {
+        // Pins the constant so a change is visible in review — generous enough that a
+        // well-formed step (read a few files, then act) never trips it.
+        Assert.Equal(20, InvocationScope.ReadLoopCircuitThreshold);
+    }
 }

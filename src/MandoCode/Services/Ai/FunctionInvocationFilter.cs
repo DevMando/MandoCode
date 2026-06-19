@@ -213,12 +213,35 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
             {
                 var path = context.Arguments.TryGetValue("relativePath", out var pObj) ? pObj?.ToString() ?? "" : "";
                 var pathKey = NormalizePathKey(path);
-                var readKey = BuildReadKey(pathKey, context.Arguments);
-                if (!string.IsNullOrEmpty(path) && scope.IsRedundantRead(readKey, pathKey))
+
+                // No-progress circuit: too many reads with no write/edit/delete in between is a
+                // stuck "analysis loop" (observed live: a plan step re-read the same two files
+                // ~12+ times across 15 minutes and never wrote game.js, dying on the request
+                // ceiling). Refuse further reads and steer the model to produce output. Checked
+                // first so it fires even when a model evades range dedup by reading new files.
+                if (scope.ReadLoopTripped)
                 {
-                    var msg = $"You already read this range of '{path}' this turn and it hasn't changed. " +
-                              "Use the content you already have — do NOT re-read the same range. " +
-                              "To see a different part of the file, pass startLine/endLine.";
+                    var msg = $"You've made {scope.ReadsSinceMutation} reads in a row without writing or editing anything — " +
+                              "this is a no-progress loop. STOP reading and act now: write the file or make the edit the task " +
+                              "needs, using the content you already have. If you're certain you need more files, you've hit a " +
+                              "safety limit — produce your best output from what you've read.";
+                    context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
+                    return;
+                }
+
+                var readKey = BuildReadKey(pathKey, context.Arguments);
+                var reqStart = TryGetIntArg(context.Arguments, "startLine") ?? 1;
+                var reqEnd = TryGetIntArg(context.Arguments, "endLine");
+                // Exact-key dedup (byte-identical args) OR interval-coverage dedup (same
+                // unchanged file, a range we've already delivered — catches the "re-read from
+                // the top with a varying endLine" loop that exact-key misses). A read of a
+                // genuinely new region falls through both, so large-file paging still works.
+                if (!string.IsNullOrEmpty(path) &&
+                    (scope.IsRedundantRead(readKey, pathKey) || scope.IsReadRangeCovered(pathKey, reqStart, reqEnd)))
+                {
+                    var msg = $"You already read this part of '{path}' this turn and it hasn't changed. " +
+                              "Use the content you already have — do NOT re-read lines you've already seen. " +
+                              "To read further, pass a startLine past the last line you've read.";
                     context.Result = new Microsoft.SemanticKernel.FunctionResult(context.Function, msg);
                     return;
                 }
@@ -896,6 +919,47 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
     }
 
     /// <summary>
+    /// Parses a tool argument to an int, tolerating the int/long/string/JsonElement forms a
+    /// model's tool call can arrive as. Returns null when absent or unparseable.
+    /// </summary>
+    private static int? TryGetIntArg(IReadOnlyDictionary<string, object?> arguments, string name)
+    {
+        if (!arguments.TryGetValue(name, out var raw) || raw is null) return null;
+        if (raw is int i) return i;
+        if (raw is long l) return (int)l;
+        return int.TryParse(raw.ToString(), out var parsed) ? parsed : null;
+    }
+
+    /// <summary>
+    /// Extracts the line range a read_file_contents result actually delivered, from its header:
+    /// "(lines 401-800 of 1051)" for ranged/truncated reads, or "(42 lines)" for a whole-file
+    /// read (start=1, end=total=42). Returns false when no header is present (range unknown).
+    /// </summary>
+    private static bool TryParseDeliveredRange(string resultStr, out int start, out int end, out int total)
+    {
+        start = end = total = 0;
+        if (string.IsNullOrEmpty(resultStr)) return false;
+
+        var ranged = Regex.Match(resultStr, @"\(lines (\d+)-(\d+) of (\d+)\)");
+        if (ranged.Success)
+        {
+            start = int.Parse(ranged.Groups[1].Value);
+            end = int.Parse(ranged.Groups[2].Value);
+            total = int.Parse(ranged.Groups[3].Value);
+            return true;
+        }
+
+        var whole = Regex.Match(resultStr, @"\((\d+) lines?\)");
+        if (whole.Success)
+        {
+            start = 1;
+            end = total = int.Parse(whole.Groups[1].Value);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Builds the per-scope dedup key for a web call. <c>search_web</c> keys on the
     /// normalized query + result count, <c>fetch_webpage</c> on the normalized URL + char
     /// count — including the count param mirrors <see cref="BuildReadKey"/>'s "include the
@@ -1144,6 +1208,10 @@ public class FunctionInvocationFilter : IFunctionInvocationFilter
                 {
                     var pathKey = NormalizePathKey(path);
                     scope.RecordRead(BuildReadKey(pathKey, context.Arguments), pathKey);
+                    // Record the range actually DELIVERED (from the result header) so
+                    // interval-coverage dedup can recognize an already-seen slice on re-read.
+                    if (TryParseDeliveredRange(resultStr, out var ds, out var de, out var dt))
+                        scope.RecordReadRange(pathKey, ds, de, dt);
                 }
                 break;
             }

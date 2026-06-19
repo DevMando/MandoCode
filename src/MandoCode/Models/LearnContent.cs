@@ -86,7 +86,7 @@ public static class LearnContent
                 new Markup("Ollama supports [bold]two types[/] of models:"),
                 new Markup(""),
                 new Markup("  [green]Cloud models[/]  Run remotely — [bold]no GPU needed[/] on your machine."),
-                new Markup("                 Examples: kimi-k2.5:cloud, minimax-m2.7:cloud, qwen3-coder:480b-cloud"),
+                new Markup("                 Examples: kimi-k2.5:cloud, glm-5.2:cloud, qwen3-coder:480b-cloud"),
                 new Markup(""),
                 new Markup("  [yellow]Local models[/]  Run on your hardware — fully offline and private."),
                 new Markup("                 Requires enough VRAM for the model size (see above).")
@@ -110,7 +110,7 @@ public static class LearnContent
         table.AddColumn(new TableColumn("[bold]Notes[/]"));
 
         table.AddRow("[green]Cloud[/]", "kimi-k2.5:cloud", "No GPU required");
-        table.AddRow("[green]Cloud[/]", "minimax-m2.7:cloud", "No GPU required");
+        table.AddRow("[green]Cloud[/]", "glm-5.2:cloud", "No GPU required");
         table.AddRow("[green]Cloud[/]", "qwen3-coder:480b-cloud", "No GPU required, code-focused");
         table.AddRow("[yellow]Local[/]", "[bold]qwen3:8b[/]", "Recommended — good balance of speed & quality");
         table.AddRow("[yellow]Local[/]", "qwen2.5-coder:7b", "Code-focused, ~5-6 GB VRAM");

@@ -80,6 +80,9 @@ class Program
             // Register SpinnerService as singleton
             services.AddSingleton<SpinnerService>();
 
+            // Register UpdateCheckService — background NuGet "newer version available" nag
+            services.AddSingleton<UpdateCheckService>();
+
             // Register OperationDisplayRenderer as singleton
             services.AddSingleton<OperationDisplayRenderer>();
 
@@ -332,7 +335,7 @@ class Program
         Console.WriteLine("Examples:");
         Console.WriteLine("  mandocode --config show");
         Console.WriteLine("  mandocode --config set endpoint http://localhost:11434");
-        Console.WriteLine("  mandocode --config set model minimax-m2.7:cloud");
+        Console.WriteLine("  mandocode --config set model glm-5.2:cloud");
         Console.WriteLine("  mandocode --config set temperature 0.5");
     }
 

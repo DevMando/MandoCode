@@ -24,6 +24,7 @@
 @inject McpClientManager McpManager
 @inject McpApprovalGate McpGate
 @inject ApprovalPromptGate PromptGate
+@inject UpdateCheckService UpdateCheck
 @implements IDisposable
 
 <Banner />
@@ -42,7 +43,9 @@
               ConnectionChecked="@_connectionChecked"
               IsConnected="@_isConnected"
               OnboardingStatus="@_onboardingStatus"
-              ModelWarning="@_modelWarning" />
+              ModelWarning="@_modelWarning"
+              UpdateNotice="@_updateNotice"
+              UpdateCommand="@_updateCommand" />
 }
 
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
@@ -122,6 +125,11 @@
     private bool _hasRendered = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
+
+    // "A newer MandoCode is on NuGet" line, set by the background update check after the
+    // connection is established. Null/empty until then (or when up to date / opted out).
+    private string? _updateNotice = null;
+    private string? _updateCommand = null;
 
     // Onboarding live status — set by OnboardingFlow during preflight / serve start /
     // pull progress so the user sees a heartbeat instead of a frozen line. Empty hides
@@ -411,6 +419,35 @@
 
         // Re-render so the VDOM updates from /learn content to the ready state
         await InvokeAsync(StateHasChanged);
+
+        // Fire-and-forget the update check — never block the ready state on the network.
+        // It self-throttles to once/24h and fails silent; the notice appears on the next
+        // render once it resolves.
+        _ = CheckForUpdatesAsync();
+    }
+
+    /// <summary>
+    /// Background NuGet "newer version available" check. Sets <see cref="_updateNotice"/>
+    /// and re-renders if an update exists; otherwise leaves the UI untouched. Swallows
+    /// everything — an update nag must never disrupt the session.
+    /// </summary>
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            var update = await UpdateCheck.CheckForUpdateAsync();
+            if (update is null) return;
+
+            // Split so the banner can render the message in gold and the command in green
+            // (Markup escapes inline color tags, so two-color text = two Markup elements).
+            _updateNotice = $"✨ MandoCode {update.LatestVersion} is available (you have {update.CurrentVersion}) — update:";
+            _updateCommand = update.UpdateCommand;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Ignore — see method summary.
+        }
     }
 
     /// <summary>

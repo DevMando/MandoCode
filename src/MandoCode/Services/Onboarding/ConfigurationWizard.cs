@@ -184,14 +184,14 @@ public class ConfigurationWizard
                 else
                 {
                     AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
-                    AnsiConsole.MarkupLine("[dim]  ollama pull minimax-m2.7:cloud[/]");
+                    AnsiConsole.MarkupLine("[dim]  ollama pull glm-5.2:cloud[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", "minimax-m2.7:cloud");
+                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", "glm-5.2:cloud");
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? "minimax-m2.7:cloud");
+                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? "glm-5.2:cloud");
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;

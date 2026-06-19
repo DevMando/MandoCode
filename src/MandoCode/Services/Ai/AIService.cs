@@ -575,12 +575,7 @@ public class AIService
         try
         {
             var result = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await _chatService.GetChatMessageContentAsync(
-                    history,
-                    settings,
-                    _kernel,
-                    linkedCts.Token
-                ),
+                async () => await InvokeChatAsync(history, settings, responseCts, linkedCts.Token),
                 _config.MaxRetryAttempts,
                 retryOperationName,
                 linkedCts.Token
@@ -601,6 +596,46 @@ public class AIService
         {
             throw new ModelCallTimeoutException();
         }
+    }
+
+    /// <summary>
+    /// Routes a single model call to either the non-streaming API or a buffered streaming path,
+    /// per <see cref="MandoCodeConfig.StreamingMode"/>: <c>All</c> streams every model, <c>Cloud</c>
+    /// streams only cloud models (<see cref="MandoCodeConfig.IsCloudModel"/>), <c>Off</c> never
+    /// streams. The buffered path resets the stall watchdog on every chunk — so a long-but-healthy
+    /// generation never trips the watchdog — then returns a non-streaming-shaped result so the
+    /// fallback parser, token recording, and every caller behave identically (the assembled text is
+    /// the same either way, so a text-emitted tool call still reaches <see cref="FallbackFunctionCallExecutor"/>
+    /// intact). Verified against the live Ollama connector before defaulting to <c>All</c> (the
+    /// streaming spikes): structured auto-invoke (qwen2.5/glm-5.2), filter events, token metadata,
+    /// and a text-emitted call surviving the stream intact (gemma3) all checked.
+    /// </summary>
+    private async Task<ChatMessageContent> InvokeChatAsync(
+        ChatHistory history,
+        OllamaPromptExecutionSettings settings,
+        CancellationTokenSource responseCts,
+        CancellationToken linkedToken)
+    {
+        var useStreaming = _config.StreamingMode switch
+        {
+            ResponseStreamingMode.All => true,
+            ResponseStreamingMode.Cloud => MandoCodeConfig.IsCloudModel(_config.GetEffectiveModelName()),
+            _ => false // Off
+        };
+
+        if (!useStreaming)
+            return await _chatService.GetChatMessageContentAsync(history, settings, _kernel, linkedToken);
+
+        // HEARTBEAT: each streamed chunk pushes the stall watchdog forward by the full budget,
+        // so it can only fire on a genuine gap (no chunk for ModelResponseTimeoutSeconds). A tool
+        // call mid-stream pauses the watchdog via the filter's OnFunctionStarted; the next content
+        // chunk resumes the same budget, so the two compose. CancelAfter is thread-safe and a
+        // no-op once disposed.
+        var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
+        return await StreamBuffering.BufferAsync(
+            _chatService.GetStreamingChatMessageContentsAsync(history, settings, _kernel, linkedToken),
+            onChunk: () => { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } },
+            linkedToken);
     }
 
     /// <summary>The stall watchdog fired: the model went silent (no tokens, no tool activity) past the per-call budget.</summary>
@@ -755,7 +790,7 @@ public class AIService
                    $"To change your model, run /config and select a model that supports tool use.\n\n" +
                    $"Cloud models (no GPU required):\n" +
                    $"  • kimi-k2.5:cloud\n" +
-                   $"  • minimax-m2.7:cloud\n" +
+                   $"  • glm-5.2:cloud\n" +
                    $"  • qwen3-coder:480b-cloud\n\n" +
                    $"Local models:\n" +
                    $"  • qwen3:8b (recommended, runs on most hardware)\n" +

@@ -146,13 +146,107 @@ public class MandoCodeConfigTests
     }
 
     [Fact]
-    public void CreateDefault_UsesSevenMinuteStallWatchdog()
+    public void CreateDefault_UsesGenerousStallWatchdog()
     {
-        // 420s, not 180: calls are non-streaming, so the watchdog gets no signal during
+        // 680s, not 180/420: calls are non-streaming, so the watchdog gets no signal during
         // generation — a long reply on a slow provider (~10 tok/s observed) legitimately
-        // runs past 3 minutes and was killed mid-generation at the old default.
+        // runs many minutes and was killed mid-generation at both older defaults. Stays
+        // well below the 900s (15-min) request ceiling so the watchdog can still fire first.
         var config = MandoCodeConfig.CreateDefault();
-        Assert.Equal(420, config.ModelResponseTimeoutSeconds);
+        Assert.Equal(680, config.ModelResponseTimeoutSeconds);
+    }
+
+    [Fact]
+    public void CreateDefault_StampsCurrentConfigVersion()
+    {
+        var config = MandoCodeConfig.CreateDefault();
+        Assert.Equal(MandoCodeConfig.CurrentConfigVersion, config.ConfigVersion);
+    }
+
+    [Fact]
+    public void CreateDefault_StreamsAllModels()
+    {
+        // Default is "all" — stream every model (cloud + local), verified via the streaming spikes.
+        var config = MandoCodeConfig.CreateDefault();
+        Assert.Equal("all", config.ResponseStreaming);
+        Assert.Equal(ResponseStreamingMode.All, config.StreamingMode);
+    }
+
+    [Fact]
+    public void StreamingMode_DefaultsToAll_WhenAbsentFromConfigJson()
+    {
+        // Configs that predate the field leave the initializer intact → streaming "all".
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>("{}");
+        Assert.NotNull(loaded);
+        Assert.Equal(ResponseStreamingMode.All, loaded!.StreamingMode);
+    }
+
+    [Theory]
+    [InlineData("off", ResponseStreamingMode.Off)]
+    [InlineData("cloud", ResponseStreamingMode.Cloud)]
+    [InlineData("all", ResponseStreamingMode.All)]
+    [InlineData("CLOUD", ResponseStreamingMode.Cloud)]   // case-insensitive
+    [InlineData("All", ResponseStreamingMode.All)]
+    [InlineData("garbage", ResponseStreamingMode.All)]   // unknown heals to All
+    [InlineData("", ResponseStreamingMode.All)]
+    public void StreamingMode_ParsesLeniently(string raw, ResponseStreamingMode expected)
+    {
+        var config = new MandoCodeConfig { ResponseStreaming = raw };
+        Assert.Equal(expected, config.StreamingMode);
+    }
+
+    [Theory]
+    [InlineData("CLOUD", "cloud")]
+    [InlineData("All", "all")]
+    [InlineData("nonsense", "all")]   // unknown heals to the default token
+    [InlineData("off", "off")]
+    public void ValidateAndClamp_NormalizesStreamingToken(string raw, string expected)
+    {
+        var config = new MandoCodeConfig { ResponseStreaming = raw };
+        config.ValidateAndClamp();
+        Assert.Equal(expected, config.ResponseStreaming);
+    }
+
+    [Theory]
+    [InlineData(180)]   // ≤ v0.11.0 default
+    [InlineData(420)]   // v0.12.0 default
+    public void Migrate_BumpsOldDefaultStallWatchdog_AndStampsVersion(int oldDefault)
+    {
+        // Simulates a config written by an older version: the field carries an old default
+        // and ConfigVersion is absent (0).
+        var config = new MandoCodeConfig { ModelResponseTimeoutSeconds = oldDefault, ConfigVersion = 0 };
+
+        var changed = config.Migrate();
+
+        Assert.True(changed);
+        Assert.Equal(680, config.ModelResponseTimeoutSeconds);
+        Assert.Equal(MandoCodeConfig.CurrentConfigVersion, config.ConfigVersion);
+    }
+
+    [Fact]
+    public void Migrate_LeavesDeliberatelyCustomizedValue_ButStillStampsVersion()
+    {
+        // A value that was never a shipped default → the user chose it; don't touch it.
+        var config = new MandoCodeConfig { ModelResponseTimeoutSeconds = 300, ConfigVersion = 0 };
+
+        var changed = config.Migrate();
+
+        Assert.True(changed);                                  // version stamp still advances
+        Assert.Equal(300, config.ModelResponseTimeoutSeconds); // value preserved
+        Assert.Equal(MandoCodeConfig.CurrentConfigVersion, config.ConfigVersion);
+    }
+
+    [Fact]
+    public void Migrate_IsIdempotent_OnceStamped()
+    {
+        var config = new MandoCodeConfig { ModelResponseTimeoutSeconds = 420, ConfigVersion = 0 };
+        Assert.True(config.Migrate());      // first run bumps 420 → 680
+        Assert.Equal(680, config.ModelResponseTimeoutSeconds);
+
+        // A subsequent run is a no-op: nothing changed, value untouched even if it now
+        // happens to differ from any default.
+        Assert.False(config.Migrate());
+        Assert.Equal(680, config.ModelResponseTimeoutSeconds);
     }
 
     [Theory]

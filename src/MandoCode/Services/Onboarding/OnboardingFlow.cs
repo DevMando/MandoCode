@@ -605,25 +605,25 @@ public sealed class OnboardingFlow
         AnsiConsole.MarkupLine("[dim]Bigger models give better answers, but use more memory and run slower without a GPU.[/]");
         AnsiConsole.MarkupLine("[dim]Rough guide for what to expect:[/]");
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]  0.8b   ~1.0 GB   CPU-only / integrated GPU — fast on any laptop, short replies, light reasoning[/]");
-        AnsiConsole.MarkupLine("[dim]  2b     ~2.7 GB   Modern CPU or 4 GB+ GPU — quick Q&A, simple code edits[/]");
-        AnsiConsole.MarkupLine("[dim]  4b     ~3.4 GB   Mid-range GPU (4-6 GB VRAM) or 16 GB RAM — balanced day-to-day use[/]");
-        AnsiConsole.MarkupLine("[dim]  9b     ~6.6 GB   Dedicated GPU (8+ GB VRAM) — best local quality, multi-file refactors[/]");
+        AnsiConsole.MarkupLine("[dim]  qwen2.5:1.5b      ~1.0 GB   CPU / integrated GPU — fast on any laptop, light reasoning[/]");
+        AnsiConsole.MarkupLine("[dim]  qwen3:4b          ~2.6 GB   4-6 GB VRAM or 16 GB RAM — balanced day-to-day use[/]");
+        AnsiConsole.MarkupLine("[dim]  qwen2.5-coder:7b  ~4.7 GB   6 GB+ VRAM — code-focused[/]");
+        AnsiConsole.MarkupLine("[dim]  qwen3:8b          ~5.2 GB   8 GB+ VRAM — best local quality, multi-file refactors[/]");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[dim]Cloud tip: [white]{MandoCodeConfig.DefaultCloudModel}[/] outperforms all of these and needs no GPU (free with [deepskyblue1]ollama signin[/]).[/]");
         AnsiConsole.WriteLine();
 
         var localChoice = Select("Pick a starter model to install:",
-            "qwen3.5:0.8b   (~1.0 GB)",
-            "qwen3.5:2b     (~2.7 GB)",
-            "qwen3.5:4b     (~3.4 GB)",
-            "qwen3.5:9b     (~6.6 GB)",
+            "qwen2.5:1.5b      (~1.0 GB)",
+            "qwen3:4b          (~2.6 GB)",
+            "qwen2.5-coder:7b  (~4.7 GB)",
+            "qwen3:8b          (~5.2 GB)",
             "Skip — I'll pull one myself");
 
         if (localChoice.StartsWith("Skip"))
         {
             AnsiConsole.MarkupLine("[dim]Pull a model and run /setup again. Suggestions:[/]");
-            AnsiConsole.MarkupLine("[dim]  ollama pull qwen3.5:4b[/]");
+            AnsiConsole.MarkupLine("[dim]  ollama pull qwen3:8b[/]");
             AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
 
             if (Confirm("Open ollama.com/library in your browser?", true))
