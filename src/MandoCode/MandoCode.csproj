@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.13.0</Version>
+    <Version>0.14.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
