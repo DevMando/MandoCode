@@ -2,6 +2,60 @@
 
 All notable changes to MandoCode will be documented in this file.
 
+## [0.14.0] - 2026-07-22
+
+**MandoCode remembers.** Close the terminal mid-task, come back tomorrow, run `mandocode --continue` —
+and the conversation picks up exactly where it left off. The restore is full fidelity: the model
+genuinely remembers what it read, said, and did (tool calls included), not a summary of it. This
+release also anchors the model to today's date, ending a class of confusion where genuine current
+events were dismissed as fiction.
+
+### Why this matters (plain-language summary)
+- **"I lost everything when I closed the terminal."** The CLI's biggest day-to-day friction: every
+  session started from zero. Now every conversation saves itself automatically at the end of each
+  turn — nothing to configure, no save command to remember, and even a crash loses nothing already
+  said. `--continue` (or `-c`) brings it back.
+- **"The model called real news fake."** Models ship with training data that ends months in the
+  past, and nothing told them today's date. Result, observed live: an assistant read genuine search
+  results about a recently announced product, decided the dates were "in the future," and concluded
+  its own search tool was fabricating content. The system prompt now carries the current date, so
+  current events read as current events.
+- **Cost/risk: low and additive.** Saving is best-effort and isolated — a failed write or an
+  unreadable session file can never break the chat; the worst case is starting fresh. Users who
+  never pass `--continue` see no behavior change beyond the dated prompt.
+
+### Added
+- **Session resume — `mandocode --continue` / `-c`** — restores the current folder's most recent
+  conversation at startup, with a confirmation line showing how many messages came back (or an
+  honest "starting fresh" when there's nothing to restore). Sessions save automatically at the end
+  of every turn — including cancelled ones — to `~/.mandocode/sessions/<folder>-<hash>.json`, one
+  file per project root (path-hashed, so two folders named `api` can't collide). Writes are
+  write-then-rename, so a crash mid-save can't tear a previously good session. `/clear` deletes the
+  stored session along with the live one — cleared means cleared. The per-project layout
+  deliberately leaves room for a future `--resume`-style picker (choosing among several past
+  conversations, not just the latest). Flag parsing now distinguishes flags from the project-folder
+  argument in **both** places arguments are read (Program.cs and the console app's own re-parse) —
+  without that, `mandocode --continue` would have set the project root to a folder named
+  `--continue`.
+- **Conversation export/import API** — `AIService.ExportHistoryJson()` /
+  `TryRestoreHistoryJson()`: full-fidelity serialization of the conversation (everything except the
+  system prompt) via Semantic Kernel's own polymorphic content serialization, so assistant turns
+  carrying function calls and tool results round-trip intact. This is the mechanism behind
+  `--continue`, and it's shared: MandoCode.Desktop uses the same API for its session restore and
+  its "keep memory across a model switch" feature — one tested mechanism, two applications.
+- **Date grounding in the system prompt** — the prompt now states the current date with explicit
+  guidance: results dated up to today are real current events; only dates after today are the
+  future. Refreshed on every session build and settings change.
+- **`--continue` launch profile** — a second Visual Studio debug profile so the resume path can be
+  exercised under the debugger.
+
+### Test coverage
+486/486 passing (unchanged — the suite confirms no existing behavior moved). The resume path was
+validated live end-to-end rather than unit-mocked: CLI restore across process restarts, and —
+through the same API — MandoCode.Desktop's session restore and cross-model memory carry, including
+histories containing tool calls moving between different cloud providers. Dedicated unit tests for
+`SessionResumeStore` (path hashing, atomic save, delete-on-clear) are a sensible follow-up.
+
 ## [0.13.0] - 2026-06-18
 
 This release is about one thing: **long sessions on big work no longer looking broken.** Building real

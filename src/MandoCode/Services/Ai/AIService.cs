@@ -151,6 +151,16 @@ public class AIService
         {
             _systemPrompt += "\n\n" + skillIndex;
         }
+
+        // Date grounding. A model's training data often ends months before "now"; without an
+        // anchor it misreads current events in search results as fabricated "future" content
+        // (a session once accused its own search tool of generating fiction over a real
+        // announcement dated after its cutoff). Day-level staleness is acceptable — the
+        // failure mode this prevents is being off by a year, not an afternoon. The prompt is
+        // rebuilt on every settings change and session (re)build, which refreshes the date.
+        _systemPrompt += $"\n\nCurrent date: {DateTime.Now:dddd, MMMM d, yyyy}. Your training data may predate this. " +
+            "Treat web results, news, and file timestamps dated up to today as real current events — " +
+            "not speculation, leaks, or simulated content. Only dates AFTER today are actually the future.";
     }
 
     /// <summary>
@@ -1083,6 +1093,61 @@ public class AIService
     /// last user message. Used when a direct chat turn hits a provider context-window
     /// rejection — we compact the conversation so the next retry fits.
     /// </summary>
+    // ============================================================
+    // History persistence — full-fidelity session export/restore
+    // ============================================================
+    // Consumed by hosts that persist sessions across process restarts (MandoCode.Desktop's
+    // session restore; a future CLI --continue). Uses Semantic Kernel's own polymorphic
+    // content serialization, so assistant turns that carried function calls/results
+    // round-trip too — a restored model genuinely remembers what it read and did, rather
+    // than being briefed about it.
+
+    /// <summary>
+    /// Serializes the conversation — everything except the system prompt — to JSON.
+    /// Null when there is nothing beyond the system prompt or serialization fails;
+    /// callers treat null as "nothing to persist".
+    /// </summary>
+    public string? ExportHistoryJson()
+    {
+        try
+        {
+            var messages = _chatHistory.Where(m => m.Role != AuthorRole.System).ToList();
+            return messages.Count == 0 ? null : JsonSerializer.Serialize(messages);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Restores a previously exported conversation into the live history, after the current
+    /// system prompt. Intended for a FRESH session right after construction — it appends,
+    /// never replaces. Returns the number of messages restored; 0 means nothing usable
+    /// (corrupt/foreign JSON), and callers should fall back to lighter re-brief mechanisms.
+    /// </summary>
+    public int TryRestoreHistoryJson(string json)
+    {
+        try
+        {
+            var messages = JsonSerializer.Deserialize<List<ChatMessageContent>>(json);
+            if (messages == null) return 0;
+
+            var restored = 0;
+            foreach (var message in messages)
+            {
+                if (message?.Role is null || message.Role == AuthorRole.System) continue;
+                _chatHistory.Add(message);
+                restored++;
+            }
+            return restored;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private async Task CompactChatHistoryAsync()
     {
         await _historyLock.WaitAsync();

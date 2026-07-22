@@ -183,6 +183,7 @@ If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare
 | **AI** | Project-aware assistant | Reads, writes, deletes, and searches your entire codebase |
 | **AI** | Web search & fetch | Web search and webpage reading — keyless via DuckDuckGo, or Tavily with a free API key |
 | **AI** | MCP server support | Connect to any Model Context Protocol server (stdio or remote HTTP) — Claude-Desktop-compatible config |
+| **AI** | Session resume | `--continue` / `-c` reloads your last conversation for the folder — full memory, tool calls included |
 | **AI** | Streaming responses | Streams responses to keep long generations alive — no false "stalled" cutoffs |
 | **AI** | Task planner | Auto-detects complex requests and breaks them into steps |
 | **AI** | Fallback function parsing | Handles models that output tool calls as raw JSON |
@@ -247,6 +248,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 ### CLI flags (outside the chat loop)
 
 ```bash
+mandocode --continue        # resume this folder's most recent conversation (alias: -c)
 mandocode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
 mandocode --config show     # print current config
 mandocode --config init     # create a default config file
@@ -255,6 +257,10 @@ mandocode --config path     # show config file location
 ```
 
 Run `mandocode --doctor` any time chat is misbehaving — exits 0 if everything's green, 1 if anything's missing, with a clear summary of what's wrong.
+
+Conversations save themselves automatically at the end of every turn (per project folder, under
+`~/.mandocode/sessions/`), so `mandocode --continue` picks up exactly where you left off — the model
+remembers what it read, said, and did, tools included. `/clear` deletes the saved session too.
 
 ---
 

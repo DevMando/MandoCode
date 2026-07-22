@@ -47,8 +47,11 @@ class Program
             return;
         }
 
-        // Get project root from args or use current directory
-        var projectRoot = args.Length > 0 ? args[0] : Environment.CurrentDirectory;
+        // Get project root from the first POSITIONAL arg (flags like --continue/-c are not
+        // folder names) or use the current directory. App.razor applies the same filtering
+        // when it re-reads the raw command line.
+        var positional = args.Where(a => !a.StartsWith('-')).ToArray();
+        var projectRoot = positional.Length > 0 ? positional[0] : Environment.CurrentDirectory;
 
         var hostBuilder = Host.CreateDefaultBuilder(args)
             .UseRazorConsole<App>();

@@ -2,6 +2,10 @@
   "profiles": {
     "MandoCode": {
       "commandName": "Project"
+    },
+    "MandoCode --continue": {
+      "commandName": "Project",
+      "commandLineArgs": "--continue"
     }
   }
 }
