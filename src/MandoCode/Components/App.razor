@@ -123,6 +123,10 @@
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
+
+    /// <summary>`mandocode --continue` (or -c): restore this folder's most recent
+    /// conversation once the connection is up — see OnAfterRenderAsync.</summary>
+    private bool _continueRequested = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
 
@@ -292,11 +296,15 @@
 
     protected override void OnInitialized()
     {
-        // Get project root from command line args if available
+        // Get project root from command line args if available. Flags (--continue/-c, and
+        // anything future starting with '-') are not folder names — same filtering as
+        // Program.cs, or `mandocode --continue` would set the project root to "--continue".
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-        if (args.Length > 0 && !args[0].StartsWith("config"))
+        _continueRequested = args.Any(a => a is "--continue" or "-c");
+        var positional = args.Where(a => !a.StartsWith('-')).ToArray();
+        if (positional.Length > 0 && !positional[0].StartsWith("config"))
         {
-            ProjectRoot.ProjectRoot = args[0];
+            ProjectRoot.ProjectRoot = positional[0];
         }
 
         // Subscribe to function invocation events for UI feedback.
@@ -362,6 +370,19 @@
         if (_connectionChecked && !_hasRendered)
         {
             _hasRendered = true;
+
+            // --continue: reload the most recent conversation for this project folder,
+            // full fidelity (tool calls included). Failure degrades to a fresh start with
+            // an honest note — never an error.
+            if (_continueRequested)
+            {
+                var savedJson = SessionResumeStore.Load(ProjectRoot.ProjectRoot);
+                var restoredCount = savedJson == null ? 0 : AI.TryRestoreHistoryJson(savedJson);
+                AnsiConsole.MarkupLine(restoredCount > 0
+                    ? $"[green]Conversation restored ({restoredCount} messages) — continuing where you left off.[/]"
+                    : "[dim]No previous session to continue for this folder — starting fresh.[/]");
+                AnsiConsole.WriteLine();
+            }
 
             // Initialize imperative input with the shared state machine
             CommandAutocomplete.Initialize(StateMachine);
@@ -926,6 +947,7 @@
                 {
                     await AI.ClearHistoryAsync();
                     StateMachine.ClearHistory();
+                    SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
                     Console.Clear();
                     AnsiConsole.WriteLine("Conversation cleared.");
                     continue;
@@ -1783,6 +1805,11 @@
             StopCancelKeyListener();
             var oldCts = Interlocked.Exchange(ref _requestCts, null);
             oldCts?.Dispose();
+
+            // Persist the conversation as of this turn for `mandocode --continue`.
+            // Runs on cancel too — whatever the history holds now is what "continue" means.
+            try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+            catch { /* persistence must never break the chat */ }
         }
     }
 
