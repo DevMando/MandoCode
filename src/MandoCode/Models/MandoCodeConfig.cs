@@ -151,6 +151,16 @@ public class MandoCodeConfig
     public string? ModelName { get; set; }
 
     /// <summary>
+    /// Optional display identity for this AI instance — "Blazor" instead of "MandoCode" in the
+    /// system prompt. Runtime-only ([JsonIgnore]): it names ONE session, so persisting it to
+    /// config.json would wrongly hand every future session the same name. Null (the CLI, and
+    /// any host that doesn't set it) keeps the classic MandoCode identity untouched.
+    /// Hosts with multiple agents (MandoCode.Desktop tabs) set it on their per-agent clone.
+    /// </summary>
+    [JsonIgnore]
+    public string? AgentName { get; set; }
+
+    /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
     /// If specified, this will be used instead of pulling from Ollama registry.
     /// </summary>

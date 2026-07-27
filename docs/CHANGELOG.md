@@ -4,6 +4,14 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Optional agent identity in the system prompt.** `MandoCodeConfig.AgentName` (runtime-only,
+  never serialized) lets a host name an AI instance: set, the system prompt opens "You are
+  {name}, a local AI coding assistant running on MandoCode…" with a clarifying line that
+  MandoCode is the app, not the speaker. Null — the CLI, and any host that doesn't set it —
+  keeps the classic "You are MandoCode" identity byte-for-byte. Built for MandoCode.Desktop's
+  named agent tabs, where "the app" and "the voice in this tab" are different things.
+
 ### Fixed
 - **Music actually plays through a playlist now.** Since the feature shipped, a track played
   once and then went silent forever — while the player still reported "playing" and the

@@ -146,7 +146,7 @@ public class AIService
     private void RebuildSystemPrompt()
     {
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
-        _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch) + "\n\n" + ShellEnvironment.SystemPromptRules;
+        _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch, _config.AgentName) + "\n\n" + ShellEnvironment.SystemPromptRules;
         if (!string.IsNullOrEmpty(skillIndex))
         {
             _systemPrompt += "\n\n" + skillIndex;
