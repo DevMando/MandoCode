@@ -16,7 +16,6 @@ public class MusicPlayerService : IDisposable
     private readonly object _lock = new();
 
     private WaveOutEvent? _waveOut;
-    private LoopStream? _loopStream;
     private MemoryStream? _resourceStream;
     private Mp3FileReader? _mp3Reader;
     private WaveChannel32? _volumeChannel;
@@ -206,10 +205,16 @@ public class MusicPlayerService : IDisposable
 
                 _volumeChannel = new WaveChannel32(_mp3Reader);
                 _volumeChannel.Volume = _config.Music.Volume;
-                _loopStream = new LoopStream(_volumeChannel);
+                // NAudio's default PadWithZeroes=true never reports end-of-stream: after the
+                // last sample, playback "continues" as infinite silence, so track-end was
+                // invisible — the old LoopStream never saw the end it was waiting for, and a
+                // playlist stalled silently after one song. False lets the stream truly end,
+                // which is what makes PlaybackStopped fire.
+                _volumeChannel.PadWithZeroes = false;
 
                 _waveOut = new WaveOutEvent();
-                _waveOut.Init(_loopStream);
+                _waveOut.PlaybackStopped += OnPlaybackStopped;
+                _waveOut.Init(_volumeChannel);
                 _waveOut.Play();
 
                 CurrentTrack = track;
@@ -255,15 +260,16 @@ public class MusicPlayerService : IDisposable
         // if the device vanished mid-playback) doesn't skip the rest of the chain.
         static void Quietly(Action action) { try { action(); } catch { /* swallow disposal errors */ } }
 
+        // Unsubscribe FIRST: WaveOutEvent raises PlaybackStopped from Stop()/Dispose() too,
+        // and a deliberate stop or track switch must not auto-advance to another song.
+        Quietly(() => { if (_waveOut != null) _waveOut.PlaybackStopped -= OnPlaybackStopped; });
         Quietly(() => _waveOut?.Stop());
         Quietly(() => _waveOut?.Dispose());
-        Quietly(() => _loopStream?.Dispose());
         Quietly(() => _volumeChannel?.Dispose());
         Quietly(() => _mp3Reader?.Dispose());
         Quietly(() => _resourceStream?.Dispose());
 
         _waveOut = null;
-        _loopStream = null;
         _volumeChannel = null;
         _mp3Reader = null;
         _resourceStream = null;
@@ -291,6 +297,34 @@ public class MusicPlayerService : IDisposable
                 IsPlaying = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Fires when a track runs out on its own — deliberate stops and track switches
+    /// unsubscribe before tearing the device down (see StopInternal), so reaching here means
+    /// the song genuinely ended. Advances to a random next track in the current genre, which
+    /// makes a folder of MP3s behave like a playlist; a genre with one track simply repeats.
+    /// This replaces the old LoopStream looping, which never engaged: WaveChannel32 padded
+    /// silence forever, so the stream end LoopStream was waiting for never arrived.
+    /// </summary>
+    private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
+    {
+        if (_disposed) return;
+
+        if (e.Exception != null)
+        {
+            AudioAvailable = false;
+            AudioError = $"Audio playback failed: {e.Exception.Message}";
+            IsPlaying = false;
+            IsPaused = false;
+            return;
+        }
+
+        // A Stop() racing this callback has already flipped IsPlaying — don't resurrect
+        // music the user just turned off.
+        if (!IsPlaying || IsPaused) return;
+
+        Play(_config.Music.Genre);
     }
 
     /// <summary>

@@ -2,6 +2,20 @@
 
 All notable changes to MandoCode will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Music actually plays through a playlist now.** Since the feature shipped, a track played
+  once and then went silent forever — while the player still reported "playing" and the
+  title-bar equalizer kept animating over dead air. Root cause: NAudio's `WaveChannel32`
+  defaults to `PadWithZeroes=true`, which never reports end-of-stream — it pads infinite
+  silence — so the `LoopStream` wrapper that was supposed to repeat the track never saw the
+  end it was waiting for. The volume channel now ends honestly, and when a track finishes the
+  player advances to a random next track in the current genre (a genre with a single track
+  simply repeats). Deliberate stops and manual skips never trigger an auto-advance, and a
+  playback device failure surfaces in `AudioError` instead of silently looking like playback.
+  `LoopStream` is no longer used by the player but remains available.
+
 ## [0.14.0] - 2026-07-22
 
 **MandoCode remembers.** Close the terminal mid-task, come back tomorrow, run `mandocode --continue` —
