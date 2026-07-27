@@ -47,8 +47,17 @@ public static class SystemPrompts
     /// advertising tools that aren't registered, so the model doesn't promise searches
     /// it can't run.
     /// </summary>
-    public static string BuildMandoCodeAssistant(bool webSearchEnabled)
+    public static string BuildMandoCodeAssistant(bool webSearchEnabled, string? agentName = null)
     {
+        // Null agentName (the CLI, always) keeps the classic identity byte-for-byte. A named
+        // agent is a character running ON MandoCode — the platform stays the platform, which
+        // also stops small models from having to reason about being both the app and the voice.
+        var identity = string.IsNullOrWhiteSpace(agentName)
+            ? "You are MandoCode, a local AI coding assistant powered by Ollama & Microsoft's Semantic Kernel."
+            : $"You are {agentName}, a local AI coding assistant running on MandoCode, powered by Ollama & Microsoft's " +
+              $"Semantic Kernel. MandoCode is the app you run in — when the user says \"MandoCode\" they usually mean " +
+              $"the app, not you. Your name is {agentName}.";
+
         var webCapabilities = webSearchEnabled
             ? @"
 - You can search the web using the search_web function to find current information, docs, and tutorials
@@ -79,7 +88,7 @@ Web search is currently disabled in settings, so you cannot search the web or fe
 pages. If the user asks for live or current information, say that web search is
 turned off and that they can enable it with: /config set websearch true";
 
-        return $@"You are MandoCode, a local AI coding assistant powered by Ollama & Microsoft's Semantic Kernel.
+        return $@"{identity}
 
 Your capabilities:
 - You have access to filesystem operations via the FileSystem plugin
