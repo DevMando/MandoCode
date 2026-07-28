@@ -529,16 +529,22 @@ public class AIService
     private const int CharsPerTokenEstimate = 4;
 
     /// <summary>
-    /// True when an estimated prompt would leave less than a safe generation reserve inside
-    /// the context window. The reserve is 1/8 of the window clamped to [512, 2048] tokens:
-    /// thinking models (qwen3, minimax) spend output tokens on internal reasoning before any
-    /// visible text, so a prompt that technically "fits" with no headroom still yields an
-    /// empty response. Static + public for direct unit testing.
+    /// True when an estimated prompt would leave less than a safe reserve inside the context
+    /// window. The reserve is 1/4 of the window clamped to [1024, 4096] tokens, and must cover
+    /// TWO things the pre-flight estimate cannot see:
+    ///   • Intra-turn tool growth — the check runs once at turn start, but SK's auto-invoke
+    ///     loop re-sends the prompt after each tool call with the results appended. Observed
+    ///     live: a turn that started ~1k under an 8k window died mid-turn when one web search
+    ///     added ~1.2k tokens. A single tool round-trip has to fit inside the reserve.
+    ///   • Generation headroom — thinking models (qwen3, minimax) spend output tokens on
+    ///     internal reasoning before any visible text, so a prompt that technically "fits"
+    ///     with no headroom still yields an empty response.
+    /// Static + public for direct unit testing.
     /// </summary>
     public static bool ExceedsContextBudget(long estimatedPromptTokens, int contextLength)
     {
         if (contextLength <= 0) return false;
-        var reserve = Math.Clamp(contextLength / 8, 512, 2048);
+        var reserve = Math.Clamp(contextLength / 4, 1024, 4096);
         return estimatedPromptTokens > contextLength - reserve;
     }
 

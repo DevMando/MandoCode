@@ -26,7 +26,9 @@ MandoCode Desktop) are documented here.
   the end of a tool-heavy turn on a small model, and the existing overflow recovery (built for
   provider *rejections*) could never fire. Before each send, the engine now estimates the
   outgoing prompt — history plus every tool schema riding along, MCP servers included — and when
-  it comes within a generation reserve of the window, folds older history into a recap first and
-  says so in the reply. The reserve (an eighth of the window, clamped to 512–2048 tokens) exists
-  because thinking models spend output tokens reasoning before any visible text: a prompt that
-  technically "fits" with no headroom still yields an empty answer.
+  it comes within a safety reserve of the window, folds older history into a recap first and
+  says so in the reply. The reserve (a quarter of the window, clamped to 1024–4096 tokens) has
+  to cover two things the turn-start estimate cannot see: tool results appended mid-turn — a
+  single web search re-sends the prompt with ~1k+ tokens added — and the output tokens thinking
+  models spend reasoning before any visible text; a prompt that technically "fits" with no
+  headroom still yields an empty answer.
