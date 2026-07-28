@@ -48,42 +48,23 @@ mandocode --doctor
 
 Prints your runtime version, Ollama status, models pulled, and cloud sign-in state.
 
-### ⚠️ Local models: check your Ollama context window (the #1 gotcha)
+### Local models: the context window is managed for you
 
 > **Using cloud models (`:cloud` tags)? Skip this section.** Cloud model context is managed on Ollama's servers and set to the model's maximum by default — nothing on your machine affects it, including the desktop app's slider.
 
-If you use **local models** and see responses cut off, the model "forgetting" earlier conversation, edits failing repeatedly on files it just wrote, or this message:
+The **context window** is how much conversation + code the model can see at once. Left to its own devices, Ollama defaults it to ~4k tokens — which an agentic session fills almost immediately — and never errors on overflow: it silently drops the oldest content (including the system prompt, the model's instructions!), which looks like the model suddenly getting dumber mid-conversation. MandoCode handles all of this:
 
-> ⚠ Response was cut off because the model's CONTEXT WINDOW filled …
+- **Auto-sized per model** — picking a local model in `/setup` or `/model` sizes the window to its hardware tier: **8k** under 3B, **16k** for 3–7B, **32k** for 7B+ (bigger models imply bigger GPUs, which also cover the larger KV cache).
+- **Enforced on every request** — the window is sent as `num_ctx` with each chat call, which outranks the Ollama desktop app's slider, `OLLAMA_CONTEXT_LENGTH`, and the ~4k default. Changes apply from your next message; no daemon restarts.
+- **Overflow protection** — if a long conversation nears the window anyway, MandoCode compacts older history into a recap *before* sending, instead of letting Ollama truncate silently.
 
-…your Ollama **context window** is almost certainly too small. The context window is how much conversation + code the model can see at once — and **Ollama defaults it to ~4k tokens**, which an agentic session fills almost immediately. When it overflows, the oldest content (including the system prompt — the model's instructions!) is silently dropped.
+**When to tune it yourself** (`mandocode --config set contextLength 16384`, live from the next message):
 
-**If you use the Ollama desktop app** (the tray icon), the app's **Settings → Context length** slider controls this — and it overrides everything else, including MandoCode's config:
+- **Generation got slow after switching models** — the auto-picked window may not fit your GPU. Every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model; when the KV cache spills out of VRAM, tokens/sec craters. (Seen in the wild: a **256k** window dropped a small model from ~175 tok/s to ~11.) *More window is not better* — step it down a notch.
+- **Long sessions with lots of tools** (MCP servers, web search) on a small model — tool definitions ride on every request, so an under-3B model's 8k tier can run tight. Step up to 16k if you have the memory.
+- **You'd rather manage it from Ollama** — set it to `0` and the daemon's own setting governs (desktop app: **Settings → Context length**).
 
-<p align="center">
-  <img src="docs/images/ollama-context-slider.png" alt="Ollama desktop app — Settings → Context length slider" width="600">
-</p>
-
-There's no universally right slider position — it's a trade between *how much the model can see* and *fitting in your GPU's memory* (every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model):
-
-- **Too low** (the 4k default): the symptoms above — the model's own instructions silently fall out of the window and it stops behaving.
-- **Too high for your GPU**: the model spills into system RAM, tokens/sec craters, and turns crawl or look hung. *More window is not better* — sizing it to your GPU is what matters. (Seen in the wild: a **256k** slider on a small model dropped it from ~175 tok/s to ~11, because the giant KV cache no longer fit in VRAM and inference fell back to the CPU.)
-- **Starting points**: **16k** for most GPUs, **32k** with 8 GB+ VRAM. Only raise it if you're seeing the symptoms above; step back down a notch if generation slows badly after raising it.
-
-**Want to see the "too low" failure in under a minute?** On the 4k default, with any local model:
-
-1. `create a folder called Mandy` — ✅ it creates the folder.
-2. `write a poem about the sky in that folder` — ❌ *"Which folder are you referring to?"*
-
-The model didn't get dumber between turns. At 4k, MandoCode's system prompt alone fills the window — so turn 1, where "Mandy" was created, has already been pushed out by turn 2, and "that folder" refers to something the model can no longer see. Raise the window to **16k** and the *exact same two prompts* just work, because turn 1 is still in view.
-
-**If you run `ollama serve` yourself** (no desktop app), MandoCode handles it: it sets `OLLAMA_CONTEXT_LENGTH` from your `contextLength` config when it starts the daemon, and auto-sizes it to the hardware tier of the model you pick in `/setup` or `/model`. Tune it manually with:
-
-```bash
-mandocode --config set contextLength 16384
-```
-
-Verify what your daemon is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside MandoCode for a friendly explainer.
+Verify what a loaded model is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside MandoCode for a friendly explainer.
 
 ### ⚠️ All models: check your response cap (the #2 gotcha)
 
@@ -361,7 +342,7 @@ Located at `~/.mandocode/config.json`
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |
-| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models, set via `OLLAMA_CONTEXT_LENGTH` when MandoCode starts the Ollama daemon. `0` = leave Ollama's default (~4k). Bigger window = more VRAM. Cloud models manage context server-side |
+| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models — sent with every request, so it overrides the Ollama desktop app's slider and the daemon's ~4k default; auto-sized to the model's hardware tier by `/setup` and `/model`. `0` = defer to the daemon's own setting. Bigger window = more VRAM. Cloud models manage context server-side |
 | `requestTimeoutMinutes` | `15` | Per-turn ceiling for a single model call / plan step. Cancel anytime with Ctrl+C |
 | `modelResponseTimeoutSeconds` | `680` | Stall watchdog — max seconds a single model call may run before it's treated as stalled. With streaming on (the default), the per-chunk heartbeat makes this mostly a safety net |
 | `responseStreaming` | `all` | Which models stream (with a per-chunk stall-watchdog heartbeat): `all`, `cloud` (cloud only), or `off` (non-streaming everywhere). `true`/`false` are accepted as aliases for `all`/`off` |

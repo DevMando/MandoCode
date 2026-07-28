@@ -183,14 +183,17 @@ public class MandoCodeConfig
     public int MaxTokens { get; set; } = 32768;
 
     /// <summary>
-    /// Context window (num_ctx / KV-cache size, in tokens) requested for LOCAL models via
-    /// the OLLAMA_CONTEXT_LENGTH environment variable when MandoCode starts the Ollama
-    /// daemon itself. Ollama's own default (~4k) silently truncates the oldest prompt
-    /// content — system prompt and earlier file reads — once an agentic conversation
-    /// grows, which looks like the model "forgetting" its instructions. 0 = don't set it.
-    /// Only takes effect when MandoCode launches the daemon; an already-running Ollama
-    /// keeps whatever it was started with. Cloud models manage context server-side and
-    /// ignore this. NOTE: KV-cache VRAM grows with this value — on small GPUs prefer 8k.
+    /// Context window (num_ctx / KV-cache size, in tokens) for LOCAL models. Stamped onto
+    /// every chat request as options.num_ctx by <c>NumCtxHttpHandler</c>, which outranks
+    /// both OLLAMA_CONTEXT_LENGTH and the daemon's own default — it applies from the next
+    /// message no matter who started the daemon. (Also still exported as
+    /// OLLAMA_CONTEXT_LENGTH when MandoCode launches the daemon itself, so non-MandoCode
+    /// clients of that daemon get a sane window too.) Ollama's bare default (~4k) silently
+    /// truncates the oldest prompt content — system prompt and earlier file reads — once an
+    /// agentic conversation grows, which looks like the model "forgetting" its instructions.
+    /// 0 = don't set it; the daemon's own setting governs. Cloud models manage context
+    /// server-side and ignore this. NOTE: KV-cache VRAM grows with this value — on small
+    /// GPUs prefer 8k.
     /// </summary>
     [JsonPropertyName("contextLength")]
     public int ContextLength { get; set; } = 8192;
