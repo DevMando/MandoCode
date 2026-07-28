@@ -242,9 +242,22 @@ public class AIService
 
         var builder = Kernel.CreateBuilder();
 
+        // Route Ollama traffic through NumCtxHttpHandler so the configured context window
+        // rides on every request instead of depending on how the daemon was started.
+        // Timeout is infinite on purpose: model calls are bounded by MandoCode's own stall
+        // watchdog and request-timeout ceiling, and a fixed HttpClient timeout underneath
+        // them would surface as a bogus transport error on slow local generations.
+        // The old client (like the old kernel it served) is left for GC rather than
+        // disposed — a rebuild can race a call still in flight on the discarded kernel.
+        var ollamaHttpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
+        {
+            BaseAddress = new Uri(_config.OllamaEndpoint),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
+        };
+
         builder.AddOllamaChatCompletion(
             modelId: _config.GetEffectiveModelName(),
-            endpoint: new Uri(_config.OllamaEndpoint)
+            httpClient: ollamaHttpClient
         );
 
         var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner);
@@ -303,6 +316,18 @@ public class AIService
 
         _kernel.FunctionInvocationFilters.Add(_functionFilter);
     }
+
+    /// <summary>
+    /// The num_ctx stamped on outgoing chat requests: the configured context length for
+    /// local models, 0 (leave the request untouched) for cloud models — their context
+    /// lives server-side at the model's full window, so a local KV-cache size is
+    /// meaningless there. Re-read per request via <see cref="NumCtxHttpHandler"/>, so
+    /// /config changes apply from the next message.
+    /// </summary>
+    private int EffectiveNumCtx()
+        => MandoCodeConfig.IsCloudModel(_config.GetEffectiveModelName())
+            ? 0
+            : Math.Max(0, _config.ContextLength);
 
     /// <summary>
     /// Validates that the configured model supports function calling (tools).
@@ -378,6 +403,23 @@ public class AIService
     {
         string response;
         bool needsContinuation = false;
+
+        // Pre-flight overflow check. Local Ollama never REJECTS an oversized prompt — it
+        // silently drops the oldest tokens, which chops the system prompt and tool
+        // definitions first and surfaces as an empty or incoherent response. The reactive
+        // IsContextOverflowError recovery below never fires for that, so the only working
+        // moment to compact is BEFORE the send. Cloud models skip this: their providers do
+        // reject oversized prompts, which routes to the existing reactive recovery.
+        var preflightNote = "";
+        if (_config.ContextLength > 0 && !MandoCodeConfig.IsCloudModel(_config.GetEffectiveModelName()))
+        {
+            long estimatedPromptTokens = (await EstimateHistoryCharsAsync() + EstimateToolSchemaChars()) / CharsPerTokenEstimate;
+            if (ExceedsContextBudget(estimatedPromptTokens, _config.ContextLength))
+            {
+                await CompactChatHistoryAsync();
+                preflightNote = "⚠ Conversation neared the context window — older history was compacted into a recap so the model has room to answer.\n\n";
+            }
+        }
 
         try
         {
@@ -476,7 +518,94 @@ public class AIService
             response = FormatErrorMessage(ex);
         }
 
+        if (preflightNote.Length > 0)
+            response = preflightNote + response;
+
         return (response, needsContinuation);
+    }
+
+    /// <summary>Rough chars-per-token divisor for pre-flight prompt sizing. Deliberately
+    /// conservative for English-plus-JSON payloads (real ratios run ~3.5-4.5).</summary>
+    private const int CharsPerTokenEstimate = 4;
+
+    /// <summary>
+    /// True when an estimated prompt would leave less than a safe generation reserve inside
+    /// the context window. The reserve is 1/8 of the window clamped to [512, 2048] tokens:
+    /// thinking models (qwen3, minimax) spend output tokens on internal reasoning before any
+    /// visible text, so a prompt that technically "fits" with no headroom still yields an
+    /// empty response. Static + public for direct unit testing.
+    /// </summary>
+    public static bool ExceedsContextBudget(long estimatedPromptTokens, int contextLength)
+    {
+        if (contextLength <= 0) return false;
+        var reserve = Math.Clamp(contextLength / 8, 512, 2048);
+        return estimatedPromptTokens > contextLength - reserve;
+    }
+
+    /// <summary>
+    /// Rough serialized size of the live history in characters. When a message carries
+    /// Items (SK's auto-invoke loop puts function calls/results there), the items are
+    /// counted INSTEAD of Content — ChatMessageContent.Content mirrors the first
+    /// TextContent item, so counting both would double-count assistant turns.
+    /// </summary>
+    private async Task<long> EstimateHistoryCharsAsync()
+    {
+        await _historyLock.WaitAsync();
+        try
+        {
+            long chars = 0;
+            foreach (var msg in _chatHistory)
+            {
+                if (msg.Items == null || msg.Items.Count == 0)
+                {
+                    chars += msg.Content?.Length ?? 0;
+                    continue;
+                }
+
+                foreach (var item in msg.Items)
+                {
+                    switch (item)
+                    {
+                        case Microsoft.SemanticKernel.FunctionCallContent fc:
+                            chars += fc.FunctionName?.Length ?? 0;
+                            if (fc.Arguments != null)
+                                foreach (var kv in fc.Arguments)
+                                    chars += kv.Key.Length + (kv.Value?.ToString()?.Length ?? 0);
+                            break;
+                        case Microsoft.SemanticKernel.FunctionResultContent fr:
+                            chars += fr.Result?.ToString()?.Length ?? 0;
+                            break;
+                        case Microsoft.SemanticKernel.TextContent tc:
+                            chars += tc.Text?.Length ?? 0;
+                            break;
+                    }
+                }
+            }
+            return chars;
+        }
+        finally { _historyLock.Release(); }
+    }
+
+    /// <summary>
+    /// Rough size of the tool definitions the connector serializes into EVERY request —
+    /// they're not in the chat history, but with MCP servers attached they can be most of
+    /// a small model's window, so a pre-flight estimate that ignores them undercounts badly.
+    /// </summary>
+    private long EstimateToolSchemaChars()
+    {
+        long chars = 0;
+        foreach (var plugin in _kernel.Plugins)
+        {
+            foreach (var function in plugin)
+            {
+                var md = function.Metadata;
+                chars += (md.Name?.Length ?? 0) + (md.Description?.Length ?? 0) + 40;
+                foreach (var p in md.Parameters)
+                    chars += (p.Name?.Length ?? 0) + (p.Description?.Length ?? 0)
+                           + (p.Schema?.ToString()?.Length ?? 0) + 20;
+            }
+        }
+        return chars;
     }
 
     /// <summary>
@@ -530,14 +659,17 @@ public class AIService
                    "- Break the request into smaller pieces";
         }
 
+        // MandoCode stamps contextLength onto every request as num_ctx, so a configured
+        // window IS the window that filled — the fix is a bigger value (or /clear), never
+        // a daemon restart. Only contextLength 0 defers to the daemon's own default.
         var applyLine = configuredContextLength > 0
-            ? $"- No desktop app? Quit Ollama and run /setup → Start Ollama for me (applies your configured {configuredContextLength / 1024}k window)\n" +
-              "- Want a bigger window? /config set contextLength 32768 — more window uses more VRAM"
-            : "- No desktop app? Set a window first: /config set contextLength 16384 — then restart Ollama via /setup";
+            ? $"- Your configured {configuredContextLength / 1024}k window applies to every request — raise it: " +
+              "/config set contextLength 32768 (applies from your next message; more window uses more VRAM)"
+            : "- No window configured (contextLength 0 = daemon default, often ~4k) — set one: /config set contextLength 16384 " +
+              "(applies from your next message; Ollama desktop app users can instead drag Settings → Context length)";
 
         return header +
-               "\nThe Ollama daemon is likely running with a small window (Ollama's default is ~4k). How to fix:\n" +
-               "- Ollama desktop app: Settings → Context length — drag to 16k or higher\n" +
+               "\nThe context window filled mid-generation. How to fix:\n" +
                applyLine + "\n" +
                "- /clear frees space right now by trimming history";
     }

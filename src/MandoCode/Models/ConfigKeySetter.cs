@@ -22,7 +22,8 @@ public static class ConfigKeySetter
         KernelRebuild,
         /// <summary>Wired at app startup — needs a MandoCode restart.</summary>
         AppRestart,
-        /// <summary>Applied via OLLAMA_CONTEXT_LENGTH when MandoCode starts the Ollama daemon.</summary>
+        /// <summary>Applied when MandoCode (re)starts the Ollama daemon. No key uses this
+        /// since contextLength moved to per-request num_ctx; kept for hosts that switch on it.</summary>
         DaemonRestart
     }
 
@@ -79,7 +80,7 @@ public static class ConfigKeySetter
                     var msg = ctxLen == 0
                         ? "✓ Context length cleared — Ollama's own default applies"
                         : $"✓ Set local context window to: {ctxLen:N0} tokens";
-                    return new(true, msg + "\n  Applies when MandoCode starts the Ollama daemon (restart Ollama for it to take effect). Desktop-app users: the app's Settings → Context length slider governs instead.", ApplyScope.DaemonRestart);
+                    return new(true, msg + "\n  Sent with every request as num_ctx — applies from your next message, no restart needed.", ApplyScope.Immediate);
                 }
                 return Fail($"Error: Context length must be 0 (Ollama default) or between {MandoCodeConfig.MinContextLength:N0} and {MandoCodeConfig.MaxContextLength:N0} tokens");
 

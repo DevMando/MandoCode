@@ -69,7 +69,9 @@ public class ConfigKeySetterTests
     [InlineData("maxContinuations", "5", ConfigKeySetter.ApplyScope.Immediate)]
     [InlineData("renderTimeout", "60", ConfigKeySetter.ApplyScope.Immediate)]
     [InlineData("diffApprovals", "false", ConfigKeySetter.ApplyScope.AppRestart)]
-    [InlineData("contextLength", "16384", ConfigKeySetter.ApplyScope.DaemonRestart)]
+    // contextLength rides on every request as num_ctx (NumCtxHttpHandler re-reads config),
+    // so it's live immediately — no daemon restart involved anymore.
+    [InlineData("contextLength", "16384", ConfigKeySetter.ApplyScope.Immediate)]
     public void ApplyScope_ClassifiesWhereEachSettingTakesEffect(string key, string value, ConfigKeySetter.ApplyScope expected)
     {
         var config = new MandoCodeConfig();

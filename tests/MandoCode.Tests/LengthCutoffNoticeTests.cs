@@ -35,9 +35,11 @@ public class LengthCutoffNoticeTests
         Assert.Contains("CONTEXT WINDOW", notice);
         Assert.Contains("raising max tokens won't help", notice);
         Assert.Contains("1,300", notice);
-        // Configured window exists → steer to restarting the daemon so it applies.
+        // Configured window exists → it rides on every request as num_ctx, so the fix
+        // is a bigger value, never a daemon restart.
         Assert.Contains("16k window", notice);
-        Assert.Contains("/setup", notice);
+        Assert.Contains("contextLength 32768", notice);
+        Assert.DoesNotContain("/setup", notice);
     }
 
     [Fact]
@@ -54,6 +56,7 @@ public class LengthCutoffNoticeTests
         var notice = AIService.BuildLengthCutoffNotice(1300, 32768, configuredContextLength: 0, emptyContent: false);
 
         Assert.Contains("contextLength", notice);
+        Assert.Contains("daemon default", notice);
         Assert.DoesNotContain("tray app", notice);
     }
 
