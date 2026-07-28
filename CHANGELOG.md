@@ -3,7 +3,11 @@
 All notable changes to MandoCode (the CLI and the shared engine that also powers
 MandoCode Desktop) are documented here.
 
-## [Unreleased]
+## [0.14.3] - 2026-07-28
+
+First release with a changelog. Also includes, since 0.14.0: track auto-advance in the
+music player no longer stalls at the end of a song (#67), and an optional agent identity
+(name) can be woven into the system prompt (#68).
 
 ### Fixed
 - **`contextLength` now actually reaches the model.** It was exported as
