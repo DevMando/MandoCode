@@ -305,7 +305,7 @@ Located at `~/.mandocode/config.json`
   "modelPath": null,
   "temperature": 0.7,
   "maxTokens": 32768,
-  "contextLength": 8192,
+  "contextLength": 16384,
   "requestTimeoutMinutes": 15,
   "modelResponseTimeoutSeconds": 680,
   "responseStreaming": "all",
