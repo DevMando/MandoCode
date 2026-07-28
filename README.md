@@ -54,14 +54,14 @@ Prints your runtime version, Ollama status, models pulled, and cloud sign-in sta
 
 The **context window** is how much conversation + code the model can see at once. Left to its own devices, Ollama defaults it to ~4k tokens — which an agentic session fills almost immediately — and never errors on overflow: it silently drops the oldest content (including the system prompt, the model's instructions!), which looks like the model suddenly getting dumber mid-conversation. MandoCode handles all of this:
 
-- **Auto-sized per model** — picking a local model in `/setup` or `/model` sizes the window to its hardware tier: **8k** under 3B, **16k** for 3–7B, **32k** for 7B+ (bigger models imply bigger GPUs, which also cover the larger KV cache).
+- **Auto-sized per model** — picking a local model in `/setup` or `/model` sizes the window to its hardware tier: **16k** under 7B, **32k** for 7B+ (bigger models imply bigger GPUs, which also cover the larger KV cache). The floor is 16k because MandoCode's system prompt and tool definitions consume most of an 8k window before the conversation even starts.
 - **Enforced on every request** — the window is sent as `num_ctx` with each chat call, which outranks the Ollama desktop app's slider, `OLLAMA_CONTEXT_LENGTH`, and the ~4k default. Changes apply from your next message; no daemon restarts.
 - **Overflow protection** — if a long conversation nears the window anyway, MandoCode compacts older history into a recap *before* sending, instead of letting Ollama truncate silently.
 
 **When to tune it yourself** (`mandocode --config set contextLength 16384`, live from the next message):
 
 - **Generation got slow after switching models** — the auto-picked window may not fit your GPU. Every 8k of window costs roughly 0.5–1.5 GB of VRAM depending on the model; when the KV cache spills out of VRAM, tokens/sec craters. (Seen in the wild: a **256k** window dropped a small model from ~175 tok/s to ~11.) *More window is not better* — step it down a notch.
-- **Long sessions with lots of tools** (MCP servers, web search) on a small model — tool definitions ride on every request, so an under-3B model's 8k tier can run tight. Step up to 16k if you have the memory.
+- **Long sessions with lots of tools** (MCP servers, web search) — tool definitions ride on every request and can crowd even a 16k window. Step up to 32k if you have the memory.
 - **You'd rather manage it from Ollama** — set it to `0` and the daemon's own setting governs (desktop app: **Settings → Context length**).
 
 Verify what a loaded model is actually using with `ollama ps` (look at the CONTEXT column). Run `/learn` inside MandoCode for a friendly explainer.
@@ -342,7 +342,7 @@ Located at `~/.mandocode/config.json`
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |
-| `contextLength` | `8192` | Context window (`num_ctx` / KV-cache size) for **local** models — sent with every request, so it overrides the Ollama desktop app's slider and the daemon's ~4k default; auto-sized to the model's hardware tier by `/setup` and `/model`. `0` = defer to the daemon's own setting. Bigger window = more VRAM. Cloud models manage context server-side |
+| `contextLength` | `16384` | Context window (`num_ctx` / KV-cache size) for **local** models — sent with every request, so it overrides the Ollama desktop app's slider and the daemon's ~4k default; auto-sized to the model's hardware tier by `/setup` and `/model`. `0` = defer to the daemon's own setting. Bigger window = more VRAM. Cloud models manage context server-side |
 | `requestTimeoutMinutes` | `15` | Per-turn ceiling for a single model call / plan step. Cancel anytime with Ctrl+C |
 | `modelResponseTimeoutSeconds` | `680` | Stall watchdog — max seconds a single model call may run before it's treated as stalled. With streaming on (the default), the per-chunk heartbeat makes this mostly a safety net |
 | `responseStreaming` | `all` | Which models stream (with a per-chunk stall-watchdog heartbeat): `all`, `cloud` (cloud only), or `off` (non-streaming everywhere). `true`/`false` are accepted as aliases for `all`/`off` |

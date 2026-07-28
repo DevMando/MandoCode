@@ -75,20 +75,23 @@ public class MandoCodeConfig
     public static int RecommendedContextLength(string? modelTag)
     {
         if (IsCloudModel(modelTag)) return 0;
-        if (string.IsNullOrEmpty(modelTag)) return 8192;
+        if (string.IsNullOrEmpty(modelTag)) return 16384;
 
         // Parse the parameter count from the tag: "qwen3.5:0.8b" → 0.8, "qwen2.5-coder:14b" → 14.
         var afterColon = modelTag.Contains(':') ? modelTag[(modelTag.IndexOf(':') + 1)..] : modelTag;
         var match = System.Text.RegularExpressions.Regex.Match(afterColon, @"^(\d+(?:\.\d+)?)b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (!match.Success || !double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var billions))
-            return 8192;
+            return 16384;
 
         // KV-cache VRAM grows with both window size and model size; bigger picks imply
-        // bigger GPUs, which also covers the larger cache.
+        // bigger GPUs, which also covers the larger cache. The floor is 16k, not 8k:
+        // sub-3B models have SMALL KV caches (16k costs them well under 1 GB), and 8k
+        // proved unusable in practice — the system prompt + tool schemas alone left
+        // ~1.5k of conversational room after the compaction reserve, so small models
+        // lived in a permanent recap cycle and confabulated the gaps.
         return billions switch
         {
-            < 3 => 8192,   // CPU / iGPU / 4 GB tier
-            < 7 => 16384,  // 4-6 GB VRAM tier
+            < 7 => 16384,  // CPU / iGPU through 4-6 GB VRAM tier
             _   => 32768   // 8 GB+ VRAM tier
         };
     }
@@ -192,11 +195,12 @@ public class MandoCodeConfig
     /// truncates the oldest prompt content — system prompt and earlier file reads — once an
     /// agentic conversation grows, which looks like the model "forgetting" its instructions.
     /// 0 = don't set it; the daemon's own setting governs. Cloud models manage context
-    /// server-side and ignore this. NOTE: KV-cache VRAM grows with this value — on small
-    /// GPUs prefer 8k.
+    /// server-side and ignore this. NOTE: KV-cache VRAM grows with this value, but going
+    /// below 16k starves the conversation — the system prompt + tool schemas consume most
+    /// of an 8k window before any chat happens.
     /// </summary>
     [JsonPropertyName("contextLength")]
-    public int ContextLength { get; set; } = 8192;
+    public int ContextLength { get; set; } = 16384;
 
     /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
@@ -648,7 +652,7 @@ public class MandoCodeConfig
             ModelName = DefaultCloudModel,
             Temperature = 0.7,
             MaxTokens = 32768,
-            ContextLength = 8192,
+            ContextLength = 16384,
             RequestTimeoutMinutes = 15,
             ModelResponseTimeoutSeconds = 680,
             ResponseStreaming = "all",
@@ -678,7 +682,7 @@ public class MandoCodeConfig
         Console.WriteLine($"  Max Tokens: {MaxTokens} (max response length)");
         Console.WriteLine(IsCloudModel(GetEffectiveModelName())
             ? "  Context Length: managed by Ollama cloud (model default)"
-            : $"  Context Length: {(ContextLength == 0 ? "Ollama default" : $"{ContextLength:N0} tokens")} (local models, applied when MandoCode starts the daemon)");
+            : $"  Context Length: {(ContextLength == 0 ? "Ollama default" : $"{ContextLength:N0} tokens")} (local models, sent with every request)");
         Console.WriteLine($"  Request Timeout: {RequestTimeoutMinutes} min");
         Console.WriteLine($"  Model Response Timeout: {ModelResponseTimeoutSeconds}s (per model call — stall watchdog)");
         var streamingDesc = StreamingMode switch

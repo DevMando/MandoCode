@@ -76,8 +76,10 @@ public class MandoCodeConfigTests
     [Fact]
     public void CreateDefault_SetsLocalContextWindow()
     {
+        // 16k floor: 8k proved unusable in practice — baseline prompt + tool schemas +
+        // compaction reserve left ~1.5k of conversational room on small models.
         var config = MandoCodeConfig.CreateDefault();
-        Assert.Equal(8192, config.ContextLength);
+        Assert.Equal(16384, config.ContextLength);
     }
 
     [Theory]
@@ -98,17 +100,19 @@ public class MandoCodeConfigTests
     // Cloud → 0: context is managed server-side, leave local config alone.
     [InlineData("minimax-m2.7:cloud", 0)]
     [InlineData("qwen3-coder:480b-cloud", 0)]
-    // Local tiers: the tag's parameter count implies the user's hardware.
-    [InlineData("qwen3.5:0.8b", 8192)]
-    [InlineData("qwen3.5:2b", 8192)]
+    // Local tiers: the tag's parameter count implies the user's hardware. The floor is
+    // 16k even for sub-3B models — their KV caches are small, and 8k left them living
+    // in a permanent compaction cycle.
+    [InlineData("qwen3.5:0.8b", 16384)]
+    [InlineData("qwen3.5:2b", 16384)]
     [InlineData("qwen3.5:4b", 16384)]
     [InlineData("qwen3.5:9b", 32768)]
     [InlineData("qwen2.5-coder:14b", 32768)]
     [InlineData("qwen3:8b-q4_K_M", 32768)]   // size parses past the quant suffix
     // Unparseable local tags get the safe floor.
-    [InlineData("mistral", 8192)]
-    [InlineData("llama3.1:latest", 8192)]
-    [InlineData(null, 8192)]
+    [InlineData("mistral", 16384)]
+    [InlineData("llama3.1:latest", 16384)]
+    [InlineData(null, 16384)]
     public void RecommendedContextLength_MapsTierToWindow(string? tag, int expected)
     {
         Assert.Equal(expected, MandoCodeConfig.RecommendedContextLength(tag));

@@ -20,6 +20,15 @@ MandoCode Desktop) are documented here.
   env-var mechanism. All three now describe the per-request behavior: raise `contextLength`
   (or `/clear`), no restarts involved.
 
+### Changed
+- **The context-window floor is now 16k** (default and the auto-sizing tier for local models
+  under 7B; 7B+ stays at 32k). Live testing showed 8k is unusable in practice: MandoCode's
+  system prompt and tool definitions consume most of it before the conversation starts, so
+  small models lived in a permanent compaction cycle — summarizing cost more room than it
+  freed — and filled the gaps by making things up. Sub-3B models have small KV caches, so
+  16k costs them well under 1 GB of memory. Users who need a smaller window on very tight
+  hardware can still set one explicitly.
+
 ### Added
 - **Pre-flight context compaction.** Local Ollama never rejects an oversized prompt — it
   silently drops the oldest tokens, system prompt first, which surfaced as an empty response at
