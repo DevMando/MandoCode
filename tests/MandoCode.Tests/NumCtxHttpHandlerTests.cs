@@ -114,15 +114,23 @@ public class NumCtxHttpHandlerTests
 /// </summary>
 public class ContextBudgetTests
 {
+    // Reserve is window/4 clamped to [1024, 4096] — sized to absorb one tool round-trip's
+    // results mid-turn plus thinking-model generation headroom. Regression: a turn that
+    // started ~1k under an 8k window (old window/8 reserve let it through) died mid-turn
+    // when a single web search added ~1.2k tokens.
     [Theory]
     [InlineData(1000, 8192, false)]  // comfortable fit
-    [InlineData(7200, 8192, true)]   // inside the reserve band (reserve = 1024)
-    [InlineData(7168, 8192, false)]  // exactly at the boundary — not over
+    [InlineData(6144, 8192, false)]  // exactly at the boundary (reserve = 2048) — not over
+    [InlineData(6200, 8192, true)]   // inside the reserve band
+    [InlineData(7000, 8192, true)]   // the observed live failure: ~7k prompt + one search = dead at 8k
     [InlineData(9000, 8192, true)]   // outright overflow
-    [InlineData(13500, 16384, false)] // 16k window, reserve 2048 → boundary 14336
-    [InlineData(14500, 16384, true)]
+    [InlineData(12000, 16384, false)] // 16k window, reserve 4096 → boundary 12288
+    [InlineData(12500, 16384, true)]
+    [InlineData(28000, 32768, false)] // 32k window, reserve clamps down to 4096 → boundary 28672
+    [InlineData(29000, 32768, true)]
     [InlineData(5000, 0, false)]     // unknown window — never trip
-    [InlineData(3700, 4096, true)]   // small window, reserve clamps to 512 → boundary 3584
+    [InlineData(3000, 4096, false)]  // small window, reserve clamps up to 1024 → boundary 3072
+    [InlineData(3100, 4096, true)]
     public void ExceedsContextBudget_Trips_Inside_Reserve(long promptTokens, int contextLength, bool expected)
     {
         Assert.Equal(expected, AIService.ExceedsContextBudget(promptTokens, contextLength));

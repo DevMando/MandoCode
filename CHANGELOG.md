@@ -3,7 +3,11 @@
 All notable changes to MandoCode (the CLI and the shared engine that also powers
 MandoCode Desktop) are documented here.
 
-## [Unreleased]
+## [0.14.3] - 2026-07-28
+
+First release with a changelog. Also includes, since 0.14.0: track auto-advance in the
+music player no longer stalls at the end of a song (#67), and an optional agent identity
+(name) can be woven into the system prompt (#68).
 
 ### Fixed
 - **`contextLength` now actually reaches the model.** It was exported as
@@ -20,13 +24,24 @@ MandoCode Desktop) are documented here.
   env-var mechanism. All three now describe the per-request behavior: raise `contextLength`
   (or `/clear`), no restarts involved.
 
+### Changed
+- **The context-window floor is now 16k** (default and the auto-sizing tier for local models
+  under 7B; 7B+ stays at 32k). Live testing showed 8k is unusable in practice: MandoCode's
+  system prompt and tool definitions consume most of it before the conversation starts, so
+  small models lived in a permanent compaction cycle — summarizing cost more room than it
+  freed — and filled the gaps by making things up. Sub-3B models have small KV caches, so
+  16k costs them well under 1 GB of memory. Users who need a smaller window on very tight
+  hardware can still set one explicitly.
+
 ### Added
 - **Pre-flight context compaction.** Local Ollama never rejects an oversized prompt — it
   silently drops the oldest tokens, system prompt first, which surfaced as an empty response at
   the end of a tool-heavy turn on a small model, and the existing overflow recovery (built for
   provider *rejections*) could never fire. Before each send, the engine now estimates the
   outgoing prompt — history plus every tool schema riding along, MCP servers included — and when
-  it comes within a generation reserve of the window, folds older history into a recap first and
-  says so in the reply. The reserve (an eighth of the window, clamped to 512–2048 tokens) exists
-  because thinking models spend output tokens reasoning before any visible text: a prompt that
-  technically "fits" with no headroom still yields an empty answer.
+  it comes within a safety reserve of the window, folds older history into a recap first and
+  says so in the reply. The reserve (a quarter of the window, clamped to 1024–4096 tokens) has
+  to cover two things the turn-start estimate cannot see: tool results appended mid-turn — a
+  single web search re-sends the prompt with ~1k+ tokens added — and the output tokens thinking
+  models spend reasoning before any visible text; a prompt that technically "fits" with no
+  headroom still yields an empty answer.
