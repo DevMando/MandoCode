@@ -2,17 +2,62 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [Unreleased]
+## [0.14.3] - 2026-07-28
 
-### Added
-- **Optional agent identity in the system prompt.** `MandoCodeConfig.AgentName` (runtime-only,
-  never serialized) lets a host name an AI instance: set, the system prompt opens "You are
-  {name}, a local AI coding assistant running on MandoCode…" with a clarifying line that
-  MandoCode is the app, not the speaker. Null — the CLI, and any host that doesn't set it —
-  keeps the classic "You are MandoCode" identity byte-for-byte. Built for MandoCode.Desktop's
-  named agent tabs, where "the app" and "the voice in this tab" are different things.
+**The context window is now real.** 0.11.0 gave `contextLength` its best available mechanism —
+`OLLAMA_CONTEXT_LENGTH` on daemon spawn — and honestly documented the limitation: it only applied
+when MandoCode launched the daemon itself. This release removes the limitation. The window now
+rides on **every chat request** as `num_ctx`, which outranks the Ollama desktop app's slider, the
+env var, and Ollama's ~4k default — so the setting works no matter who started the daemon, applies
+from the next message with no restarts, and (in MandoCode.Desktop) can differ per agent tab.
+Live testing on small models then drove two calibrations: conversations now compact *before* the
+window overflows instead of after, and the window floor moved to 16k because 8k left almost no
+room to converse.
+
+### Why this matters (plain-language summary)
+- **"The setting worked on my machine but not on theirs."** The context window — how much
+  conversation and code the model can see at once — is MandoCode's most important reliability
+  setting, and until now it only took effect if MandoCode started the Ollama engine itself.
+  Most users run the Ollama desktop app, whose already-running engine ignored the setting
+  entirely: they saw the confirmation messages, but were actually running on whatever the
+  app's own slider said. This release makes the setting real in **every** setup, applied on
+  the user's next message with no restarts of anything.
+- **"The model just returned nothing."** When a conversation outgrew the window, Ollama gave
+  no error — it silently discarded the oldest content, *including the model's own
+  instructions*, producing empty or confused replies that looked like the model breaking.
+  MandoCode now measures each outgoing request first and, when it's close to the limit,
+  summarizes older history into a recap and says so in the reply — a visible, graceful
+  degradation instead of a silent failure.
+- **"Small models seemed dumb — they were actually blind."** At the old 8k floor, MandoCode's
+  own instructions and tool definitions consumed most of the window before the conversation
+  started, leaving roughly 1.5k tokens of working memory. Small local models compensated by
+  inventing details. The 16k floor gives them ~6× the usable memory for well under 1 GB of
+  extra RAM/VRAM on the models it applies to.
+- **Cost/risk: low.** The per-request mechanism is a standard Ollama option and fails open —
+  an unparseable request is sent unmodified rather than erroring. Cloud models are untouched
+  (their context is managed server-side). Existing users' configs update automatically on
+  their next model switch; anyone needing a smaller window on tight hardware can still set
+  one explicitly. Full suite green at 505 tests, and the failure scenarios above were
+  reproduced live before the fix and confirmed resolved after.
 
 ### Fixed
+- **`contextLength` now actually reaches the model.** The env-var mechanism was silently a no-op
+  for anyone whose daemon was already running — most commonly the Ollama desktop app's tray
+  daemon — so the config value, the "context window sized to Nk tokens" message, and the
+  per-model auto-sizing were all cosmetic in that setup. A new `NumCtxHttpHandler` stamps
+  `options.num_ctx` onto every outgoing `/api/chat` request (re-reading config per request, so
+  `/config set contextLength` is live from the next message — its apply scope moved from
+  daemon-restart to immediate). Cloud models pass through untouched (context is server-side),
+  a malformed request body passes through unmodified rather than failing the call, and the env
+  var is still set when MandoCode launches the daemon so non-MandoCode clients get a sane window
+  too. The Ollama HttpClient also moved to an infinite timeout: MandoCode's own stall watchdog
+  and request ceiling govern model calls, and the default 100s HTTP timeout could undercut them
+  on slow local generations.
+- **Context-window guidance pointed at the wrong knob.** The in-chat "context window filled"
+  notice steered users to restart the daemon via `/setup`, and `/learn`, `--config show`, and
+  the README taught that the desktop app's slider "overrides everything" — all true only of the
+  old mechanism. Every surface now describes the per-request behavior: raise `contextLength`
+  (or `/clear`); no restarts involved.
 - **Music actually plays through a playlist now.** Since the feature shipped, a track played
   once and then went silent forever — while the player still reported "playing" and the
   title-bar equalizer kept animating over dead air. Root cause: NAudio's `WaveChannel32`
@@ -23,6 +68,43 @@ All notable changes to MandoCode will be documented in this file.
   simply repeats). Deliberate stops and manual skips never trigger an auto-advance, and a
   playback device failure surfaces in `AudioError` instead of silently looking like playback.
   `LoopStream` is no longer used by the player but remains available.
+
+### Changed
+- **The context-window floor is now 16k** (default and the auto-sizing tier for local models
+  under 7B; 7B+ stays at 32k). Live testing showed 8k is unusable in practice: the system
+  prompt and tool definitions consume most of it before the conversation starts, so small
+  models lived in a permanent compaction cycle — summarizing cost more room than it freed —
+  and filled the gaps by confabulating. Sub-3B models have small KV caches, so 16k costs them
+  well under 1 GB. Existing configs keep their stored value until the next local model switch
+  auto-sizes it; a smaller window can still be set explicitly.
+
+### Added
+- **Pre-flight context compaction.** Local Ollama never rejects an oversized prompt — it
+  silently drops the oldest tokens, system prompt first, which surfaced as an empty response
+  at the end of a tool-heavy turn, and the existing overflow recovery (built for provider
+  *rejections*) could never fire. Before each send on a local model, the engine now estimates
+  the outgoing prompt — chat history plus every tool schema riding along, MCP servers
+  included — and when it comes within a safety reserve of the window, collapses older history
+  into a recap first and says so in the reply. The reserve (a quarter of the window, clamped
+  to 1024–4096 tokens) has to cover two things the turn-start estimate cannot see: tool
+  results appended mid-turn — observed live, a single web search re-sent the prompt with
+  ~1.2k tokens added and killed a turn that had started under the limit — and the output
+  tokens thinking models (qwen3, minimax) spend reasoning before any visible text.
+- **Optional agent identity in the system prompt.** `MandoCodeConfig.AgentName` (runtime-only,
+  never serialized) lets a host name an AI instance: set, the system prompt opens "You are
+  {name}, a local AI coding assistant running on MandoCode…" with a clarifying line that
+  MandoCode is the app, not the speaker. Null — the CLI, and any host that doesn't set it —
+  keeps the classic "You are MandoCode" identity byte-for-byte. Built for MandoCode.Desktop's
+  named agent tabs, where "the app" and "the voice in this tab" are different things.
+
+### Test coverage
+505/505 passing (was 486). New `NumCtxHttpHandlerTests` (num_ctx injected into `/api/chat`,
+existing options preserved, an already-present num_ctx overridden, cloud/zero passes the body
+through byte-identical, non-chat endpoints and malformed bodies untouched, path-prefix match) and
+`ContextBudgetTests` (reserve boundaries at 4k/8k/16k/32k including a regression case with the
+exact numbers from the live mid-turn overflow). Updated `LengthCutoffNoticeTests` (window-filled
+advice steers to `contextLength`, never `/setup`), `ConfigKeySetterTests` (contextLength scope is
+now Immediate), and `MandoCodeConfigTests` (16k default and tier rows).
 
 ## [0.14.0] - 2026-07-22
 
