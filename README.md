@@ -24,6 +24,11 @@ MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/R
 
 Run locally or connect to Ollama cloud — no API keys required for anything, including web search (an optional free [Tavily](https://www.tavily.com/) key upgrades search reliability). It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
+> **Prefer a native app?** **[MandoCode Desktop](https://github.com/DevMando/MandoCode.Desktop)** is now
+> available — the exact same engine (Ollama + Semantic Kernel, same brains) with a native Windows
+> interface instead of the terminal: multiple agents side by side, a real integrated shell, a
+> git-aware file explorer, and 16 built-in themes. Same CLI underneath; WinUI 3 on top.
+
 ---
 
 ## Prerequisites
