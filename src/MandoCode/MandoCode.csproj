@@ -13,13 +13,13 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.14.3</Version>
+    <Version>0.14.4</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevMando/MandoCode</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>ai;cli;coding-assistant;ollama;semantic-kernel;local-llm</PackageTags>
+    <PackageTags>ai;cli;coding-assistant;ollama;semantic-kernel;local-llm;dotnet10;dotnet8</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>

@@ -71,7 +71,7 @@ deliberately-deferred follow-ups.
 
 ## Dev environment (minor)
 
-### EC-9 — Running via Visual Studio F5 sets the working directory to `bin/Debug/net8.0`
-- **Observed:** during testing, `@StarFox/` resolved to `…/bin/Debug/net8.0/StarFox`, and `**/*` searches picked up `MandoCode.dll` and unrelated build-output files (e.g. a leftover "SOLANA GAME" stylesheet).
+### EC-9 — Running via Visual Studio F5 sets the working directory to `bin/Debug/net10.0`
+- **Observed:** during testing, `@StarFox/` resolved to `…/bin/Debug/net10.0/StarFox`, and `**/*` searches picked up `MandoCode.dll` and unrelated build-output files (e.g. a leftover "SOLANA GAME" stylesheet).
 - **Impact:** file ops land in the build output (wiped by Clean), and searches are polluted by binaries/other artifacts.
 - **Direction:** none needed in product — just a testing note. To test against a real project dir, pass a project root arg or `cd` before launching rather than F5-ing from the project.
