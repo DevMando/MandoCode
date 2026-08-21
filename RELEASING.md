@@ -24,7 +24,9 @@ dotnet tool install MandoCode --version X.Y.Z --tool-path %TEMP%\mc-smoke --add-
 dotnet tool uninstall MandoCode --tool-path %TEMP%\mc-smoke
 ```
 
-`--doctor` must report the new version and a healthy environment.
+`--doctor` must report the new version, a healthy environment, and a **.NET 10** runtime. The
+package carries a net8.0 build too; seeing 8.x here on a machine with the .NET 10 SDK means the
+net10.0 asset did not make it into the package.
 
 ## 3. Tag and publish on GitHub
 

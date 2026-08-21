@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://www.nuget.org/packages/MandoCode"><img src="https://img.shields.io/nuget/v/MandoCode?logo=nuget&color=blue" alt="NuGet"></a>
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
-  <img src="https://img.shields.io/badge/.NET-8.0-blueviolet?logo=dotnet" alt=".NET 8.0">
+  <img src="https://img.shields.io/badge/.NET-10.0-blueviolet?logo=dotnet" alt=".NET 10.0">
   <img src="https://img.shields.io/badge/Ollama-Local%20LLM-black?logo=ollama" alt="Ollama">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/Made%20with%20%3C3%20by-Mando-red" alt="Made with <3 by Mando">
@@ -33,8 +33,13 @@ Run locally or connect to Ollama cloud — no API keys required for anything, in
 
 ## Prerequisites
 
-- **.NET 8 SDK** — [dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) *(SDK includes the runtime — install only the SDK)*
-- **Ollama** — [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
+- **.NET 10 SDK**: [dotnet.microsoft.com/download/dotnet/10.0](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) *(the SDK includes the runtime, so install only the SDK)*
+- **Ollama**: [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
+
+> **Already on .NET 8?** You're not blocked. MandoCode ships a .NET 8 build alongside the .NET 10
+> one, and `dotnet tool install -g MandoCode` picks the right one for your machine automatically.
+> That fallback goes away when .NET 8 reaches end of support in November 2026, so grab .NET 10 when
+> it's convenient. Run `mandocode --doctor` to see which runtime you're on.
 
 ## Install
 

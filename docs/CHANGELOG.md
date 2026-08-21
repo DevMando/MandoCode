@@ -2,6 +2,36 @@
 
 All notable changes to MandoCode will be documented in this file.
 
+## [0.14.4] - 2026-08-20
+
+**Runs on .NET 10, still runs on .NET 8.** MandoCode now ships both builds in one package. The
+same `dotnet tool install -g MandoCode` gives a .NET 10 machine the .NET 10 build and a .NET 8
+machine the .NET 8 build, with nothing to choose and nothing to configure. Dependencies moved to
+current releases in the same pass.
+
+### Why this matters (plain-language summary)
+- **There is nothing for you to do.** Existing installs keep working exactly as they did. If you
+  update .NET later, the next `dotnet tool update -g MandoCode` quietly moves you onto the newer
+  build. `mandocode --doctor` reports which runtime you're on if you're curious.
+- **.NET 8 stops getting security fixes in November 2026.** Rather than cut anyone off on a
+  release they didn't expect, MandoCode carries both builds through that window and drops the
+  .NET 8 one after it. The README says so now, so the removal is announced well ahead of time.
+- **Cost/risk: low.** No feature or behavior changed. The full suite runs against both builds
+  independently, so a difference between them fails the build rather than reaching you.
+
+### Changed
+- **Targets .NET 8 and .NET 10.** The published package carries both, and NuGet selects the match
+  for your machine at install time. `net10.0` is listed first, so it is the default target for
+  Visual Studio F5 and for `dotnet run -f`.
+- **Dependencies updated to current releases**, including Semantic Kernel 1.80.0, Model Context
+  Protocol 2.2.0, and YamlDotNet 18.1.0. NAudio stays on 2.2.1: version 3 raised its floor to
+  .NET 9 and would have dropped .NET 8 users.
+- **README prerequisites now ask for the .NET 10 SDK**, with a note that the .NET 8 fallback
+  exists and when it goes away.
+
+### Test coverage
+The full suite runs twice, once per build. 505 tests green on .NET 8 and 505 green on .NET 10.
+
 ## [0.14.3] - 2026-07-28
 
 **The context window is now real.** 0.11.0 gave `contextLength` its best available mechanism —
