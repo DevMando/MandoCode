@@ -20,6 +20,17 @@ namespace MandoCode.Services;
 /// plain text. Some local models (especially smaller qwen and mistral variants) emit function
 /// calls as JSON in the response body instead of using the tool-call protocol. Only active
 /// when <see cref="MandoCodeConfig.EnableFallbackFunctionParsing"/> is on.
+///
+/// Phase 5 (feat/agent-framework-migration) note: deliberately NOT ported/redesigned to drop
+/// the raw <see cref="Kernel"/> parameter. Two reasons: (1) it's still the SK-only live path —
+/// <c>_agent</c> isn't wired into live chat yet, so there's no MAF-side caller to serve; (2) the
+/// Phase 0 spike ran this exact failure mode against 4 real Ollama models, including the
+/// smallest (qwen2.5:1.5b), and NONE of them needed the fallback under MAF's own invocation
+/// loop — real tool calls came through natively every time. That's encouraging but not
+/// conclusive (one prompt, one run each) — re-test against prompts that have actually triggered
+/// this class historically before deciding whether MAF needs an equivalent at all. Redesigning
+/// its signature now, before that question is answered, risks building a Kernel-free port of
+/// something that turns out to be unnecessary.
 /// </summary>
 public class FallbackFunctionCallExecutor
 {

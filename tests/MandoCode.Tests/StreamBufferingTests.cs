@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using MandoCode.Services;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Xunit;
@@ -95,6 +97,72 @@ public class StreamBufferingTests
             await StreamBuffering.BufferAsync(
                 CancelAwareStream(),
                 onChunk: () => cts.Cancel(),   // cancel after the first chunk
+                cts.Token));
+    }
+
+    // ============================================================
+    // MAF-side overload (feat/agent-framework-migration, Phase 5) — same heartbeat contract,
+    // but accumulation itself is MAF's own AgentResponseExtensions.ToAgentResponseAsync, not
+    // hand-rolled here. These tests cover the heartbeat wrapper and cancellation propagation;
+    // they deliberately don't re-verify the framework's own accumulation behavior.
+    // ============================================================
+
+    private static AgentResponseUpdate MeaiChunk(string? text) => new(ChatRole.Assistant, text);
+
+    private static async IAsyncEnumerable<AgentResponseUpdate> ToMeaiStream(params AgentResponseUpdate[] items)
+    {
+        foreach (var item in items)
+            yield return item;
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task BufferAsync_Meai_ConcatenatesTextInOrder()
+    {
+        var result = await StreamBuffering.BufferAsync(
+            ToMeaiStream(MeaiChunk("The "), MeaiChunk("secret "), MeaiChunk("number "), MeaiChunk("is 42")),
+            onChunk: () => { });
+
+        Assert.Equal("The secret number is 42", result.Text);
+    }
+
+    [Fact]
+    public async Task BufferAsync_Meai_FiresHeartbeatOncePerChunk_IncludingEmptyOnes()
+    {
+        var beats = 0;
+        var result = await StreamBuffering.BufferAsync(
+            ToMeaiStream(MeaiChunk("a"), MeaiChunk(""), MeaiChunk(null), MeaiChunk("b")),
+            onChunk: () => beats++);
+
+        Assert.Equal(4, beats);
+        Assert.Equal("ab", result.Text);
+    }
+
+    [Fact]
+    public async Task BufferAsync_Meai_EmptyStream_ReturnsEmptyText()
+    {
+        var result = await StreamBuffering.BufferAsync(ToMeaiStream(), onChunk: () => { });
+        Assert.True(string.IsNullOrEmpty(result.Text));
+    }
+
+    [Fact]
+    public async Task BufferAsync_Meai_PropagatesCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+
+        static async IAsyncEnumerable<AgentResponseUpdate> CancelAwareStream(
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new AgentResponseUpdate(ChatRole.Assistant, "first");
+            ct.ThrowIfCancellationRequested();
+            yield return new AgentResponseUpdate(ChatRole.Assistant, "second");
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await StreamBuffering.BufferAsync(
+                CancelAwareStream(),
+                onChunk: () => cts.Cancel(),
                 cts.Token));
     }
 }

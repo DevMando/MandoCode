@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Agents.AI;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 
@@ -50,5 +52,33 @@ public static class StreamBuffering
             Metadata = last?.Metadata,
             InnerContent = last?.InnerContent
         };
+    }
+
+    /// <summary>
+    /// MAF-side sibling for the SK -> Agent Framework migration (feat/agent-framework-migration,
+    /// Phase 5). Same heartbeat contract as the SK overload above — <paramref name="onChunk"/>
+    /// fires once per update, before accumulation, so the stall watchdog resets on proof of
+    /// life even for an empty/metadata-only chunk. Unlike the SK overload, this does NOT
+    /// hand-roll the accumulation: <see cref="AgentResponseExtensions.ToAgentResponseAsync"/> is
+    /// MAF's own built-in stream-to-response accumulator, so this is a thin heartbeat wrapper
+    /// around it rather than a duplicate of framework logic. Not yet called by anything — ready
+    /// for whenever the live chat path switches from _chatService's streaming to _agent's.
+    /// </summary>
+    public static Task<AgentResponse> BufferAsync(
+        IAsyncEnumerable<AgentResponseUpdate> stream,
+        Action onChunk,
+        CancellationToken cancellationToken = default) =>
+        WithHeartbeat(stream, onChunk, cancellationToken).ToAgentResponseAsync(cancellationToken);
+
+    private static async IAsyncEnumerable<AgentResponseUpdate> WithHeartbeat(
+        IAsyncEnumerable<AgentResponseUpdate> stream,
+        Action onChunk,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var update in stream.WithCancellation(cancellationToken))
+        {
+            onChunk();
+            yield return update;
+        }
     }
 }
