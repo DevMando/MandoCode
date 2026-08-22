@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.14.4</Version>
+    <Version>0.15.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -50,10 +50,15 @@ Every change is covered by automated tests — the suite grew to 486 checks.
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageReference Include="Markdig" Version="1.3.2" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.11" />
+    <!-- Being migrated off in favor of Microsoft.Agents.AI + Microsoft.Extensions.AI below —
+         see feat/agent-framework-migration / memory agent-framework-migration.md. Kept until
+         the plugin/filter phases land so the app stays functional throughout the migration. -->
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.80.0" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.80.0-alpha" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.9.0" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
+    <PackageReference Include="OllamaSharp" Version="5.4.30" />
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
     <!-- Held at 2.x on purpose: NAudio 3.x raised its floor to net9.0, which would drop the
          net8.0 build entirely. Revisit when net8.0 is dropped (November 2026). -->

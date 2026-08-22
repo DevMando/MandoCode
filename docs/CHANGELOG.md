@@ -2,7 +2,7 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [0.14.4] - 2026-08-20
+## [Unreleased]
 
 **Runs on .NET 10, still runs on .NET 8.** MandoCode now ships both builds in one package. The
 same `dotnet tool install -g MandoCode` gives a .NET 10 machine the .NET 10 build and a .NET 8
@@ -31,6 +31,12 @@ current releases in the same pass.
 
 ### Test coverage
 The full suite runs twice, once per build. 505 tests green on .NET 8 and 505 green on .NET 10.
+
+### Internal
+- **Migrating the AI orchestration layer off Semantic Kernel, onto Microsoft's newer Agent
+  Framework.** In progress, on its own branch — no user-visible change yet. I'm building the new
+  path alongside the current one rather than swapping in one big step, so nothing about how
+  MandoCode behaves changes until the switch is fully verified and I turn it on.
 
 ## [0.14.3] - 2026-07-28
 
