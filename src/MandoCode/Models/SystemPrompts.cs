@@ -53,9 +53,9 @@ public static class SystemPrompts
         // agent is a character running ON MandoCode — the platform stays the platform, which
         // also stops small models from having to reason about being both the app and the voice.
         var identity = string.IsNullOrWhiteSpace(agentName)
-            ? "You are MandoCode, a local AI coding assistant powered by Ollama & Microsoft's Semantic Kernel."
+            ? "You are MandoCode, a local AI coding assistant powered by Ollama & Microsoft's Agent Framework."
             : $"You are {agentName}, a local AI coding assistant running on MandoCode, powered by Ollama & Microsoft's " +
-              $"Semantic Kernel. MandoCode is the app you run in — when the user says \"MandoCode\" they usually mean " +
+              $"Agent Framework. MandoCode is the app you run in — when the user says \"MandoCode\" they usually mean " +
               $"the app, not you. Your name is {agentName}.";
 
         var webCapabilities = webSearchEnabled

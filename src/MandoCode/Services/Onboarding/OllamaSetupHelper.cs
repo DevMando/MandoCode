@@ -283,10 +283,11 @@ public static class OllamaSetupHelper
     /// <paramref name="contextLength"/> > 0 sets OLLAMA_CONTEXT_LENGTH on the daemon so
     /// LOCAL models get a real context window instead of Ollama's ~4k default — the
     /// default silently truncates the oldest prompt content (system prompt, earlier file
-    /// reads) as an agentic conversation grows. The Semantic Kernel Ollama connector
-    /// exposes no num_ctx setting, so the daemon's environment is the only lever we
-    /// control. Older Ollama versions without OLLAMA_CONTEXT_LENGTH ignore it harmlessly.
-    /// Only applies when WE start the daemon; an already-running Ollama is untouched.
+    /// reads) as an agentic conversation grows. This is a fallback lever for when MandoCode
+    /// doesn't start the daemon itself (see NumCtxHttpHandler for the per-request path that
+    /// covers the common case). Older Ollama versions without OLLAMA_CONTEXT_LENGTH ignore
+    /// it harmlessly. Only applies when WE start the daemon; an already-running Ollama is
+    /// untouched.
     /// </summary>
     public static bool TryStartOllamaProcess(int contextLength = 0)
     {

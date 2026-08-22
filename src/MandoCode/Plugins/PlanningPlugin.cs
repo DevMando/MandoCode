@@ -1,17 +1,15 @@
 using System.ComponentModel;
-using Microsoft.SemanticKernel;
 
 namespace MandoCode.Plugins;
 
 /// <summary>
 /// Exposes the propose_plan function so the model can self-classify multi-step
-/// requests mid-conversation. The call is intercepted by FunctionInvocationFilter
+/// requests mid-conversation. The call is intercepted by AgentFunctionMiddleware
 /// and handed off to the UI via PlanHandoff — the body here is never the real
 /// execution path and just returns a sentinel if interception is bypassed.
 /// </summary>
 public class PlanningPlugin
 {
-    [KernelFunction("propose_plan")]
     [Description(
         "Propose a multi-step plan for the user's request. Call this ONLY when the request " +
         "clearly requires multiple distinct file or code operations that depend on each other " +

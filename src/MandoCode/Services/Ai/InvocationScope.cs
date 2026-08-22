@@ -4,7 +4,7 @@ using System.Linq;
 namespace MandoCode.Services;
 
 /// <summary>
-/// Per-chat/per-step bookkeeping used by <see cref="FunctionInvocationFilter"/>
+/// Per-chat/per-step bookkeeping used by <c>AgentFunctionMiddleware</c>
 /// to catch pathological tool-call loops that would otherwise fill the model's
 /// context window before the step finishes.
 ///
@@ -15,7 +15,7 @@ namespace MandoCode.Services;
 ///      delivered (<see cref="IsReadRangeCovered"/>) — catching the "re-read the same
 ///      unchanged file in a slightly different slice" loop while still allowing paging.
 ///   2. No-progress read loop — too many delivered reads with no intervening mutation
-///      (<see cref="ReadLoopTripped"/>) is a stuck analysis loop; the filter then steers
+///      (<see cref="ReadLoopTripped"/>) is a stuck analysis loop; the middleware then steers
 ///      the model to act. Backstops shapes #1 can't prove redundant.
 ///   3. Duplicate web-call detection — a second <c>search_web</c>/<c>fetch_webpage</c>
 ///      with the same normalized query/URL is short-circuited (no escape hatch — the
@@ -238,7 +238,7 @@ public class InvocationScope : IDisposable
     /// <summary>
     /// True once an edit_file failure on this path has already returned the full
     /// content-hint to the model this scope. Subsequent failures for the same path
-    /// should emit a short pointer instead — see FunctionInvocationFilter.BuildEditPreview.
+    /// should emit a short pointer instead — see AgentFunctionMiddleware.BuildEditPreview.
     /// Cleared by <see cref="RecordWrite"/>.
     /// </summary>
     public bool HasEmittedEditHint(string path)

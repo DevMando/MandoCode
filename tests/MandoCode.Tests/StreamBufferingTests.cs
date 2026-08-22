@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using MandoCode.Services;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Xunit;
 
 namespace MandoCode.Tests;
@@ -9,15 +9,20 @@ namespace MandoCode.Tests;
 /// <summary>
 /// Deterministic coverage for the streaming → buffered-result layer (the watchdog-heartbeat
 /// path). Feeds canned streams through <see cref="StreamBuffering.BufferAsync"/> — no live model,
-/// no kernel — to lock in the behavior the live spike proved against the real connector.
+/// no agent — to lock in the behavior the live spike proved against the real connector.
+///
+/// This used to also cover an SK-side overload (<c>IAsyncEnumerable&lt;StreamingChatMessageContent&gt;</c>)
+/// alongside this one; that overload was deleted in the final SK cleanup
+/// (feat/agent-framework-migration) once its only caller (the also-deleted <c>InvokeChatAsync</c>)
+/// was gone. MAF's own <see cref="AgentResponseExtensions.ToAgentResponseAsync"/> does the actual
+/// accumulation now, so these tests cover the heartbeat wrapper and cancellation propagation;
+/// they deliberately don't re-verify the framework's own accumulation behavior.
 /// </summary>
 public class StreamBufferingTests
 {
-    private static StreamingChatMessageContent Chunk(string? content, object? innerContent = null, string? modelId = null)
-        => new(AuthorRole.Assistant, content, innerContent: innerContent, modelId: modelId);
+    private static AgentResponseUpdate Chunk(string? text) => new(ChatRole.Assistant, text);
 
-    private static async IAsyncEnumerable<StreamingChatMessageContent> ToStream(
-        params StreamingChatMessageContent[] items)
+    private static async IAsyncEnumerable<AgentResponseUpdate> ToStream(params AgentResponseUpdate[] items)
     {
         foreach (var item in items)
             yield return item;
@@ -25,14 +30,13 @@ public class StreamBufferingTests
     }
 
     [Fact]
-    public async Task BufferAsync_ConcatenatesContentInOrder()
+    public async Task BufferAsync_ConcatenatesTextInOrder()
     {
         var result = await StreamBuffering.BufferAsync(
             ToStream(Chunk("The "), Chunk("secret "), Chunk("number "), Chunk("is 42")),
             onChunk: () => { });
 
-        Assert.Equal("The secret number is 42", result.Content);
-        Assert.Equal(AuthorRole.Assistant, result.Role);
+        Assert.Equal("The secret number is 42", result.Text);
     }
 
     [Fact]
@@ -47,32 +51,14 @@ public class StreamBufferingTests
             onChunk: () => beats++);
 
         Assert.Equal(4, beats);
-        Assert.Equal("ab", result.Content);
+        Assert.Equal("ab", result.Text);
     }
 
     [Fact]
-    public async Task BufferAsync_CarriesFinalChunkMetadataForTokenTracking()
-    {
-        // ExtractAndRecordTokens reads InnerContent (the Ollama ChatDoneResponseStream) off the
-        // result. The LAST chunk carries it, so buffering must surface the final chunk's
-        // InnerContent/ModelId — or streaming would silently break token tracking.
-        var doneMarker = new object();
-        var result = await StreamBuffering.BufferAsync(
-            ToStream(
-                Chunk("Hello ", modelId: "glm-5.2:cloud"),
-                Chunk("world", innerContent: doneMarker, modelId: "glm-5.2:cloud")),
-            onChunk: () => { });
-
-        Assert.Equal("Hello world", result.Content);
-        Assert.Same(doneMarker, result.InnerContent);
-        Assert.Equal("glm-5.2:cloud", result.ModelId);
-    }
-
-    [Fact]
-    public async Task BufferAsync_EmptyStream_ReturnsEmptyContent()
+    public async Task BufferAsync_EmptyStream_ReturnsEmptyText()
     {
         var result = await StreamBuffering.BufferAsync(ToStream(), onChunk: () => { });
-        Assert.Equal("", result.Content);
+        Assert.True(string.IsNullOrEmpty(result.Text));
     }
 
     [Fact]
@@ -82,13 +68,13 @@ public class StreamBufferingTests
         // OperationCanceledException so AIService can classify it as a ModelStallException.
         using var cts = new CancellationTokenSource();
 
-        static async IAsyncEnumerable<StreamingChatMessageContent> CancelAwareStream(
+        static async IAsyncEnumerable<AgentResponseUpdate> CancelAwareStream(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            yield return Chunk("first");
+            yield return new AgentResponseUpdate(ChatRole.Assistant, "first");
             ct.ThrowIfCancellationRequested();   // cancelled by the onChunk below before we get here
-            yield return Chunk("second");
+            yield return new AgentResponseUpdate(ChatRole.Assistant, "second");
         }
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>

@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.FileSystemGlobbing;
-using Microsoft.SemanticKernel;
 using MandoCode.Models;
 using MandoCode.Services;
 
@@ -44,7 +43,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Lists all project files recursively, excluding ignored directories.
     /// </summary>
-    [KernelFunction("list_all_project_files")]
     [Description("Lists all project files recursively, excluding ignored directories. Returns one relative file path per line. Use list_files_match_glob_pattern instead if you only need specific file types.")]
     public async Task<string> ListAllProjectFiles()
     {
@@ -69,7 +67,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Lists files matching a specific glob pattern.
     /// </summary>
-    [KernelFunction("list_files_match_glob_pattern")]
     [Description("Lists files matching a glob pattern. Examples: '*.cs', '*.js', 'src/**/*.ts', '*.*'")]
     public async Task<string> ListFiles(
         [Description("Glob pattern to match files (e.g., '*.cs', '*.js', 'src/**/*.ts')")] string pattern)
@@ -99,7 +96,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Reads the contents of a file, optionally restricted to a line range.
     /// </summary>
-    [KernelFunction("read_file_contents")]
     [Description("Reads the contents of a file, optionally a specific line range. Output is capped at ~10,000 characters; when a file is larger, the output names the exact line it stopped at — call again with startLine set to that line + 1 to read the next section. ALWAYS read the section you intend to edit immediately before calling edit_file, so your old_text matches the file and not your memory of it.")]
     public async Task<string> ReadFile(
         [Description("Relative path to the file from project root")] string relativePath,
@@ -170,7 +166,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Creates a folder/directory.
     /// </summary>
-    [KernelFunction("create_folder")]
     [Description("Creates a new folder/directory. Use this when asked to create a folder, directory, or organize files into a new location.")]
     public Task<string> CreateFolder(
         [Description("Relative path to the folder from project root")] string relativePath)
@@ -198,7 +193,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Writes content to a file, creating it if it doesn't exist.
     /// </summary>
-    [KernelFunction("write_file")]
     [Description("Writes content to a file (full overwrite). Creates the file and directories if they don't exist. For small edits to existing files, prefer edit_file instead — it's more efficient and produces cleaner diffs. Do NOT use this to create empty folders — use create_folder instead.")]
     public async Task<string> WriteFile(
         [Description("Relative path to the file from project root")] string relativePath,
@@ -231,7 +225,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Edits a file by replacing a specific text fragment with new text.
     /// </summary>
-    [KernelFunction("edit_file")]
     [Description("Edits an existing file by finding and replacing a specific text fragment. Much more efficient than rewriting the entire file with write_file. The old_text must match exactly (including whitespace and indentation). Use this for targeted edits instead of write_file when modifying existing files.")]
     public async Task<string> EditFile(
         [Description("Relative path to the file from project root")] string relativePath,
@@ -349,7 +342,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Searches file contents using a text pattern (grep-like).
     /// </summary>
-    [KernelFunction("grep_files")]
     [Description("Searches for a text pattern across all project files (like grep). Returns matching file paths, line numbers, and line content. Case-insensitive. Results capped at 50 matches.")]
     public async Task<string> GrepFiles(
         [Description("Text or pattern to search for across all project files")] string searchText)
@@ -414,7 +406,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Deletes a file from the project.
     /// </summary>
-    [KernelFunction("delete_file")]
     [Description("Deletes a single file. Use relative path from project root. For deleting folders/directories, use delete_folder instead.")]
     public Task<string> DeleteFile(
         [Description("Relative path to the file from project root")] string relativePath)
@@ -442,7 +433,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Deletes a folder/directory and all its contents from the project.
     /// </summary>
-    [KernelFunction("delete_folder")]
     [Description("Deletes a folder/directory and all its contents. Use relative path from project root. Use this when asked to delete, remove, or clean up a folder or directory.")]
     public Task<string> DeleteFolder(
         [Description("Relative path to the folder from project root")] string relativePath)
@@ -473,7 +463,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Searches for text within files.
     /// </summary>
-    [KernelFunction("search_text_in_files")]
     [Description("Searches for text within files matching a glob pattern. Case-insensitive. Returns file paths and line numbers. Use grep_files instead for searching ALL files without a glob filter.")]
     public async Task<string> FindInFiles(
         [Description("Glob pattern to match files (e.g., '*.cs', '*.js')")] string pattern,
@@ -543,7 +532,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Gets the absolute path for a file.
     /// </summary>
-    [KernelFunction("get_absolute_path")]
     [Description("Converts a relative file path to its absolute path on the filesystem. Use this when the user needs the full path to a file.")]
     public Task<string> GetAbsolutePath(
         [Description("Relative path to the file from project root")] string relativePath)
@@ -568,7 +556,6 @@ public class FileSystemPlugin
     /// <summary>
     /// Executes a shell command in the project root directory with idle-based timeout.
     /// </summary>
-    [KernelFunction("execute_command")]
     [Description("Executes a shell command (e.g., git status, dotnet build, npm install). Runs in the project root directory. Killed after 30 seconds of no output, or 10 minutes total. Output capped at 5000 characters.")]
     public async Task<string> ExecuteCommand(
         [Description("The shell command to execute (e.g., 'git status', 'dotnet build')")] string command)
@@ -910,7 +897,7 @@ public class FileSystemPlugin
     /// <summary>
     /// Resolves a model-supplied relative path to its canonical absolute path within
     /// <paramref name="projectRoot"/>, handling redundant-root-prefix aliases. Public and
-    /// static so FunctionInvocationFilter can normalize its per-scope bookkeeping keys
+    /// static so AgentFunctionMiddleware can normalize its per-scope bookkeeping keys
     /// with the SAME resolution the plugin uses — "Games/index.html" and
     /// "src/MandoCode/bin/Debug/net8.0/Games/index.html" are one file on disk, and keying
     /// circuit-breaker counts on the raw strings let a model split its edit-failure tally

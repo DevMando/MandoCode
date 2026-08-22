@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Task Planner handles complex, multi-step requests that would otherwise overwhelm a single model turn â€” either by timing out, overflowing the provider's context window, or producing one enormous unstructured response. The current design is a **hybrid LLM-tool approach**: the model itself decides mid-conversation whether a request needs decomposition, via a Semantic Kernel function (`propose_plan`). A thin heuristic acts as a safety net for smaller models that don't reliably self-invoke tool calls.
+The Task Planner handles complex, multi-step requests that would otherwise overwhelm a single model turn â€” either by timing out, overflowing the provider's context window, or producing one enormous unstructured response. The current design is a **hybrid LLM-tool approach**: the model itself decides mid-conversation whether a request needs decomposition, via a tool function (`propose_plan`). A thin heuristic acts as a safety net for smaller models that don't reliably self-invoke tool calls.
 
 ## How It Works
 
@@ -20,7 +20,7 @@ ChatStreamAsync â†’ model sees the tools
     â”‚
     â””â”€ model calls propose_plan(goal, steps[])
            â”‚
-   [FunctionInvocationFilter intercepts]
+   [AgentFunctionMiddleware intercepts]
            â”‚
    [PlanHandoff.ProcessAsync â†’ UI callback]
            â”‚
@@ -46,7 +46,7 @@ There are two paths, roughly: the model's own judgement (primary) and a trimmed 
 
 ### Primary: model self-classification via `propose_plan`
 
-`PlanningPlugin.ProposePlan` is a Semantic Kernel function registered on every kernel (when `enableTaskPlanning` is true). Its `[Description]` tells the model exactly when to call it:
+`PlanningPlugin.ProposePlan` is bound as an AIFunction on every agent build (when `enableTaskPlanning` is true). Its `[Description]` tells the model exactly when to call it:
 
 > *"Propose a multi-step plan for the user's request. Call this ONLY when the request clearly requires multiple distinct file or code operations that depend on each other. Do NOT call for questions, single-file edits, lookups, or one-shot operations. Each step MUST include a non-empty `description` and `instruction`."*
 
@@ -71,7 +71,7 @@ The model sees this and calls `propose_plan`. One code path, one execution path.
 
 ## Circuit Breakers
 
-`InvocationScope` provides per-chat/per-step bookkeeping that the `FunctionInvocationFilter` consults before every tool call. Two circuits:
+`InvocationScope` provides per-chat/per-step bookkeeping that `AgentFunctionMiddleware` consults before every tool call. Two circuits:
 
 ### 1. Duplicate-read detection
 
@@ -165,11 +165,11 @@ CLI equivalents: `mandocode --config set autoContinue false`, `--config set tool
 
 | File | Purpose |
 |------|---------|
-| `Plugins/PlanningPlugin.cs` | The `propose_plan` Semantic Kernel function + `PlanStepProposal` record |
-| `Services/PlanHandoff.cs` | Bridge between `FunctionInvocationFilter` and the UI approval callback |
+| `Plugins/PlanningPlugin.cs` | The `propose_plan` tool function + `PlanStepProposal` record |
+| `Services/PlanHandoff.cs` | Bridge between `AgentFunctionMiddleware` and the UI approval callback |
 | `Services/TaskPlannerService.cs` | Slim heuristic (`RequiresPlanning`), typed proposal mapping (`FromProposals`), step execution orchestration |
 | `Services/InvocationScope.cs` | Per-scope state: read-dedup set, path-modification flags, result-char budget |
-| `Services/FunctionInvocationFilter.cs` | Intercepts `propose_plan`, runs circuit breakers, records scope bookkeeping, diff-approval handoff |
+| `Services/AgentFunctionMiddleware.cs` | Intercepts `propose_plan`, runs circuit breakers, records scope bookkeeping, diff-approval handoff |
 | `Services/AIService.cs` | Chat loop with auto-continuation + synthetic-summary recovery, per-turn scope lifecycle |
 | `Services/ShellEnvironment.cs` | Runtime shell detection; injects OS-specific rules into the system prompt |
 | `Services/FunctionCompletionTracker.cs` | Event-based function-completion waits between plan steps |
@@ -235,7 +235,7 @@ Two layers:
 
 | Layer | Scope | Window/trigger |
 |-------|-------|----------------|
-| Time-based dedup | Global (`FunctionInvocationFilter._recentCalls`) | 2s (reads) / 5s configurable (writes) â€” identical args within the window reuse the cached result |
+| Time-based dedup | Global (`AgentFunctionMiddleware._recentCalls`) | 2s (reads) / 5s configurable (writes) â€” identical args within the window reuse the cached result |
 | Scope-level dup-read | Per chat turn / plan step (`InvocationScope`) | Same-path re-read with no intervening write â†’ short-circuit with a stern message |
 
 The scope-level check is the stronger one; the time-based window is a legacy belt-and-braces.
@@ -303,7 +303,7 @@ Unit tests cover the deterministic parts: `TaskPlannerServiceTests`, `Invocation
 
 ### Diff Approvals
 
-File writes and deletions intercepted by `FunctionInvocationFilter` trigger a diff approval UI before execution. This works alongside the task planner â€” during planned step execution, each file operation still requires approval (unless globally or per-session bypassed).
+File writes and deletions intercepted by `AgentFunctionMiddleware` trigger a diff approval UI before execution. This works alongside the task planner â€” during planned step execution, each file operation still requires approval (unless globally or per-session bypassed).
 
 See the main [README](../../../README.md#diff-approvals) for user-facing documentation.
 
@@ -314,5 +314,5 @@ See the main [README](../../../README.md#diff-approvals) for user-facing documen
 - [ ] Step dependency graph for parallel execution of independent steps
 - [ ] Plan persistence for resuming interrupted plans across sessions
 - [ ] User-editable plan before approval
-- [ ] Mid-generation progress signals â€” currently only tool-call boundaries update the UI. A real fix requires switching to SK's `GetStreamingChatMessageContentsAsync` so chunks arrive as the model emits them; current code uses non-streaming because streaming + local Ollama + auto-invoke is unreliable (noted in `ChatStreamAsync`).
+- [x] ~~Mid-generation progress signals~~ — shipped: `StreamingMode` config streams chunks as the model emits them (via `_agent.RunStreamingAsync`, buffered through `StreamBuffering` for the stall-watchdog heartbeat), with non-streaming still available as a fallback for models where streaming + auto-invoke proved unreliable.
 - [ ] Smarter `Required` vs `Auto` tool-choice on plan-step first turn (force a tool call on steps that the model drifts into prose on)

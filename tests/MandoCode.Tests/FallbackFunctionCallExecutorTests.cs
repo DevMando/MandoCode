@@ -1,6 +1,6 @@
 using Xunit;
 using MandoCode.Services;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MandoCode.Tests;
 
@@ -8,7 +8,7 @@ namespace MandoCode.Tests;
 /// Covers the text-based function-call fallback parser extracted from AIService:
 /// JSON extraction across the three formats local models emit, function/parameter
 /// name normalization, and call-JSON removal from the surrounding prose. These are
-/// pure functions — no kernel or network needed.
+/// pure functions — no tool list or network needed.
 /// </summary>
 public class FallbackFunctionCallExecutorTests
 {
@@ -187,15 +187,44 @@ public class FallbackFunctionCallExecutorTests
         Assert.Equal(text, FallbackFunctionCallExecutor.RemoveFunctionCallJson(text));
     }
 
-    // ---- ProcessAsync (no-match fast path; needs only an empty kernel) ----
+    // ---- ProcessAsync (no-match fast path; needs only an empty tool list) ----
 
     [Fact]
     public async Task ProcessAsync_NoFunctionCalls_ReturnsResponseUnchanged()
     {
         var executor = new FallbackFunctionCallExecutor();
-        var kernel = Kernel.CreateBuilder().Build();
         var response = "A plain answer with no tool calls.";
 
-        Assert.Equal(response, await executor.ProcessAsync(response, kernel, "test-model"));
+        Assert.Equal(response, await executor.ProcessAsync(response, [], "test-model"));
+    }
+
+    // ---- ProcessAsync (flat AIFunction lookup — feat/agent-framework-migration cleanup) ----
+
+    [Fact]
+    public async Task ProcessAsync_TextEmittedCall_InvokesMatchingToolByFlatName()
+    {
+        var executor = new FallbackFunctionCallExecutor();
+        AIFunction tool = AIFunctionFactory.Create(
+            (string relativePath) => $"created {relativePath}",
+            new AIFunctionFactoryOptions { Name = "create_folder" });
+
+        var response = @"I'll create it now. {""name"": ""create_folder"", ""parameters"": {""relativePath"": ""src""}}";
+
+        var result = await executor.ProcessAsync(response, [tool], "test-model");
+
+        Assert.Contains("--- Function Results ---", result);
+        Assert.Contains("create_folder: created src", result);
+        Assert.DoesNotContain("\"name\": \"create_folder\"", result);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TextEmittedCall_NoMatchingTool_ReportsNotFound()
+    {
+        var executor = new FallbackFunctionCallExecutor();
+        var response = @"{""name"": ""nonexistent_tool"", ""parameters"": {}}";
+
+        var result = await executor.ProcessAsync(response, [], "test-model");
+
+        Assert.Contains("not found", result);
     }
 }
