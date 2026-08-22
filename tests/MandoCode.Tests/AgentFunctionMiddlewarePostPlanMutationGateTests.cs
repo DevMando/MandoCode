@@ -5,11 +5,11 @@ using Microsoft.Extensions.AI;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// MAF-side sibling of PostPlanMutationGateTests' Kernel-driven cases (feat/agent-framework-migration,
-/// Phase 6). The PlanHandoff-manifest tests in the SK file aren't duplicated here — PlanHandoff
-/// and TaskPlan are already framework-agnostic (confirmed during the migration survey), so those
-/// tests already exercise the same code this middleware calls into; there's nothing SK-specific
-/// in them to port.
+/// MAF-side sibling of the old PostPlanMutationGateTests' Kernel-driven cases (feat/agent-framework-migration,
+/// Phase 6, since deleted along with the rest of SK). Its PlanHandoff-manifest tests weren't
+/// duplicated here — PlanHandoff and TaskPlan are already framework-agnostic (confirmed during the
+/// migration survey), so those tests already exercise the same code this middleware calls into;
+/// there was nothing SK-specific in them to port.
 /// </summary>
 public class AgentFunctionMiddlewarePostPlanMutationGateTests
 {

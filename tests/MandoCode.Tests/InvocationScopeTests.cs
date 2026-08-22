@@ -209,7 +209,7 @@ public class InvocationScopeTests
     public void EditFailureCircuitThreshold_IsThree()
     {
         // The circuit constant lives in InvocationScope and is consumed by
-        // FunctionInvocationFilter. This test pins the value so an accidental tweak
+        // AgentFunctionMiddleware. This test pins the value so an accidental tweak
         // is visible in code review — three is a deliberate sweet spot between
         // "tolerate a normal retry" and "catch a thrash loop fast."
         Assert.Equal(3, InvocationScope.EditFailureCircuitThreshold);

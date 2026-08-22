@@ -8,8 +8,9 @@ namespace MandoCode.Services;
 /// MCP tools are opaque — we can't tell a read from a write by inspecting arguments —
 /// so the safest UX is a one-time prompt per <c>(server, tool)</c> pair per session,
 /// with an opt-out for tools the user has pre-approved in <c>mcpServers[name].autoApprove</c>.
-/// Works in concert with <see cref="FunctionInvocationFilter"/>, which consults the gate
-/// for any function whose plugin name starts with <c>"mcp_"</c>.
+/// Works in concert with <c>AgentFunctionMiddleware</c>, which consults the gate for any
+/// tool its <c>McpServerNameResolver</c> resolves to an MCP server (MAF has no plugin-name
+/// concept to check a <c>"mcp_"</c> prefix against the way SK's PluginName did).
 /// </summary>
 public sealed class McpApprovalGate
 {

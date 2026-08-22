@@ -23,9 +23,9 @@ current releases in the same pass.
 - **Targets .NET 8 and .NET 10.** The published package carries both, and NuGet selects the match
   for your machine at install time. `net10.0` is listed first, so it is the default target for
   Visual Studio F5 and for `dotnet run -f`.
-- **Dependencies updated to current releases**, including Semantic Kernel 1.80.0, Model Context
-  Protocol 2.2.0, and YamlDotNet 18.1.0. NAudio stays on 2.2.1: version 3 raised its floor to
-  .NET 9 and would have dropped .NET 8 users.
+- **Dependencies updated to current releases**, including Model Context Protocol 2.2.0 and
+  YamlDotNet 18.1.0. NAudio stays on 2.2.1: version 3 raised its floor to .NET 9 and would have
+  dropped .NET 8 users.
 - **README prerequisites now ask for the .NET 10 SDK**, with a note that the .NET 8 fallback
   exists and when it goes away.
 
@@ -33,10 +33,12 @@ current releases in the same pass.
 The full suite runs twice, once per build. 505 tests green on .NET 8 and 505 green on .NET 10.
 
 ### Internal
-- **Migrating the AI orchestration layer off Semantic Kernel, onto Microsoft's newer Agent
-  Framework.** In progress, on its own branch — no user-visible change yet. I'm building the new
-  path alongside the current one rather than swapping in one big step, so nothing about how
-  MandoCode behaves changes until the switch is fully verified and I turn it on.
+- **Moved the AI orchestration layer off Semantic Kernel, onto Microsoft's newer Agent
+  Framework.** Done, on its own branch — no user-visible change. I built the new path alongside
+  the old one rather than swapping in one big step, verified every piece against real models
+  before switching over, and only removed Semantic Kernel once nothing in the codebase depended
+  on it anymore. Same models, same tools, same approval prompts — this is a foundation swap
+  underneath behavior that doesn't change.
 
 ## [0.14.3] - 2026-07-28
 

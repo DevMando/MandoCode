@@ -7,11 +7,11 @@ namespace MandoCode.Tests;
 /// <summary>
 /// Covers the one behavior AIService.BuildAgent's NamedTool helper relies on that the compiler
 /// can't check: AIFunctionFactoryOptions.Name actually overriding the default method-name-derived
-/// tool name. This mapping (C# method name -> snake_case [KernelFunction] name) now exists in two
-/// places — the plugin's attribute and BuildAgent's NamedTool call — so a silent Name override
-/// failure would desync the MAF-side tool name from the system prompt/skills that reference the
-/// snake_case name, without any compile error to catch it. See feat/agent-framework-migration,
-/// Phase 2.
+/// tool name. The snake_case tool name lives only in BuildAgent's NamedTool call now (the plugins'
+/// old [KernelFunction] attributes were removed once SK was fully cleaned up), so a silent Name
+/// override failure would desync the MAF-side tool name from the system prompt/skills that
+/// reference the snake_case name, without any compile error to catch it. See
+/// feat/agent-framework-migration, Phase 2.
 /// </summary>
 public class AgentToolNamingTests
 {

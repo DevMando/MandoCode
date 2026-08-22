@@ -20,12 +20,12 @@
   <img src="docs/images/hero-demo.gif" alt="MandoCode in action" width="800">
 </p>
 
-MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Semantic Kernel](https://github.com/microsoft/semantic-kernel) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
+MandoCode is an AI coding assistant built on [RazorConsole](https://github.com/RazorConsole/RazorConsole), powered by [Microsoft Agent Framework](https://github.com/microsoft/agent-framework) and [Ollama](https://ollama.ai). RazorConsole makes the entire terminal UI possible — Razor components, a virtual DOM, and Spectre.Console rendering all running in the console.
 
 Run locally or connect to Ollama cloud — no API keys required for anything, including web search (an optional free [Tavily](https://www.tavily.com/) key upgrades search reliability). It gives you Claude-Code-style project awareness — reading, writing, searching, planning, and web browsing across your entire codebase — without ever leaving your terminal. It understands **any file type**: C#, JavaScript, TypeScript, Python, CSS, HTML, JSON, config files, and more.
 
 > **Prefer a native app?** **[MandoCode Desktop](https://github.com/DevMando/MandoCode.Desktop)** is now
-> available — the exact same engine (Ollama + Semantic Kernel, same brains) with a native Windows
+> available — the exact same engine (Ollama + Microsoft Agent Framework, same brains) with a native Windows
 > interface instead of the terminal: multiple agents side by side, a real integrated shell, a
 > git-aware file explorer, and 16 built-in themes. Same CLI underneath; WinUI 3 on top.
 
@@ -262,7 +262,7 @@ remembers what it read, said, and did, tools included. `/clear` deletes the save
         |
   MandoCode adds project context (@files, system prompt)
         |
-  Semantic Kernel sends to Ollama (local or cloud model)
+  Microsoft Agent Framework sends to Ollama (local or cloud model)
         |
   AI responds with text + function calls
         |
@@ -587,7 +587,7 @@ MandoCode cannot tell a read-only MCP tool from a destructive one by inspecting 
 - `/mcp add` — interactive wizard for adding a new server without hand-editing JSON
 - `/mcp remove <name>` — remove a server from config (with confirm)
 - `/mcp tools <server>` — list every tool exposed by connected servers with descriptions (server arg optional — omit to list all)
-- `/mcp-reload` — tears down every MCP client, restarts them, and re-registers their tools on the kernel (useful when you edit the config mid-session)
+- `/mcp-reload` — tears down every MCP client, restarts them, and re-registers their tools on the agent (useful when you edit the config mid-session)
 
 ### Toggle
 
@@ -709,7 +709,7 @@ src/MandoCode/
   Components/        Razor UI (App, Banner, HelpDisplay, ConfigMenu, Prompt)
   Services/          Core logic (AI, markdown, syntax, tokens, music, diffs, input state machine)
   Models/            Data models, config, system prompts, educational content
-  Plugins/           Semantic Kernel plugins (FileSystem, WebSearch)
+  Plugins/           Tool classes bound as AIFunctions (FileSystem, WebSearch, Planning, Skills)
   Audio/             Bundled lofi and synthwave MP3 tracks
   docs/              Feature and architecture documentation
   Program.cs         Entry point and DI registration
@@ -719,13 +719,16 @@ src/MandoCode/
 
 | Package | Purpose |
 |---------|---------|
-| [Microsoft.SemanticKernel](https://github.com/microsoft/semantic-kernel) 1.72.0 | LLM orchestration and plugin system |
-| [Ollama Connector](https://github.com/microsoft/semantic-kernel) 1.72.0-alpha | Ollama model integration |
-| [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) 0.5.0-alpha | Terminal UI with Razor components |
-| [Markdig](https://github.com/xoofx/markdig) 1.0.0 | Markdown parsing |
+| [Microsoft.Agents.AI](https://github.com/microsoft/agent-framework) 1.18.0 | Agentic orchestration — tool calling, approval middleware |
+| [Microsoft.Extensions.AI](https://github.com/dotnet/extensions) 10.9.0 | Provider-agnostic chat/tool abstractions underneath Agent Framework |
+| [OllamaSharp](https://github.com/awaescher/OllamaSharp) 5.4.30 | Ollama model integration |
+| [ModelContextProtocol](https://github.com/modelcontextprotocol/csharp-sdk) 2.2.0 | MCP server support |
+| [RazorConsole.Core](https://github.com/RazorConsole/RazorConsole) 0.5.0 | Terminal UI with Razor components |
+| [Markdig](https://github.com/xoofx/markdig) 1.3.2 | Markdown parsing |
 | [NAudio](https://github.com/naudio/NAudio) 2.2.1 | Audio playback |
-| [HtmlAgilityPack](https://html-agility-pack.net/) 1.11.72 | HTML parsing for web search |
-| [FileSystemGlobbing](https://www.nuget.org/packages/Microsoft.Extensions.FileSystemGlobbing) 10.0.3 | Glob pattern matching |
+| [HtmlAgilityPack](https://html-agility-pack.net/) 1.12.4 | HTML parsing for web search |
+| [FileSystemGlobbing](https://www.nuget.org/packages/Microsoft.Extensions.FileSystemGlobbing) 10.0.11 | Glob pattern matching |
+| [YamlDotNet](https://github.com/aaubry/YamlDotNet) 18.1.0 | Skill/config YAML parsing |
 
 ---
 
@@ -733,9 +736,9 @@ src/MandoCode/
 
 Most AI coding agents in the wild are built with Python, Rust, or TypeScript. .NET rarely gets mentioned — but it should.
 
-[Semantic Kernel](https://github.com/microsoft/semantic-kernel) is Microsoft's open-source SDK for building AI agents, and it's one of the most capable orchestration frameworks available: native plugin systems, function calling, structured planning, and first-class support for local models through connectors like Ollama. It runs cross-platform on Windows, Linux, and macOS.
+[Microsoft Agent Framework](https://github.com/microsoft/agent-framework) is Microsoft's open-source SDK for building AI agents, and it's one of the most capable orchestration frameworks available: tool/function calling, middleware you can hook into for approvals and circuit breakers, structured multi-agent workflows, and first-class support for local models through providers like Ollama. It runs cross-platform on Windows, Linux, and macOS.
 
-MandoCode exists partly to prove the point: you can build a full-featured, agentic CLI tool on .NET and Semantic Kernel that stands alongside anything built in other ecosystems. The tooling is there. It's open source. It just doesn't get the attention it deserves.
+MandoCode exists partly to prove the point: you can build a full-featured, agentic CLI tool on .NET and Agent Framework that stands alongside anything built in other ecosystems. The tooling is there. It's open source. It just doesn't get the attention it deserves.
 
 ---
 

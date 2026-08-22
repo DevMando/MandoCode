@@ -8,7 +8,7 @@
  *  File: FallbackFunctionCallExecutor.cs
  */
 
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using MandoCode.Models;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -21,16 +21,13 @@ namespace MandoCode.Services;
 /// calls as JSON in the response body instead of using the tool-call protocol. Only active
 /// when <see cref="MandoCodeConfig.EnableFallbackFunctionParsing"/> is on.
 ///
-/// Phase 5 (feat/agent-framework-migration) note: deliberately NOT ported/redesigned to drop
-/// the raw <see cref="Kernel"/> parameter. Two reasons: (1) it's still the SK-only live path —
-/// <c>_agent</c> isn't wired into live chat yet, so there's no MAF-side caller to serve; (2) the
-/// Phase 0 spike ran this exact failure mode against 4 real Ollama models, including the
-/// smallest (qwen2.5:1.5b), and NONE of them needed the fallback under MAF's own invocation
-/// loop — real tool calls came through natively every time. That's encouraging but not
-/// conclusive (one prompt, one run each) — re-test against prompts that have actually triggered
-/// this class historically before deciding whether MAF needs an equivalent at all. Redesigning
-/// its signature now, before that question is answered, risks building a Kernel-free port of
-/// something that turns out to be unnecessary.
+/// feat/agent-framework-migration final cleanup: ported from a raw SK <c>Kernel</c> lookup to a
+/// flat <see cref="AIFunction"/> list (AIService's <c>_agentFunctions</c>) — kept rather than
+/// dropped, since the Phase 0 spike's "no fallback needed" evidence was one prompt per model,
+/// not conclusive enough to retire a safety net on. One behavior change, not a regression: the
+/// old lookup only searched the "FileSystem" plugin; the flat list has no such grouping, so this
+/// can now also catch a text-emitted call to search_web/load_skill/propose_plan etc. Broader net,
+/// same name-matching precision.
 /// </summary>
 public class FallbackFunctionCallExecutor
 {
@@ -49,14 +46,14 @@ public class FallbackFunctionCallExecutor
 
     /// <summary>
     /// Scans <paramref name="response"/> for text-based function calls, executes any found
-    /// against <paramref name="kernel"/>, and returns the response with the call JSON replaced
+    /// against <paramref name="tools"/>, and returns the response with the call JSON replaced
     /// by a "Function Results" section. Returns the response unchanged when nothing matches.
     /// </summary>
-    public async Task<string> ProcessAsync(string response, Kernel kernel, string modelName)
+    public async Task<string> ProcessAsync(string response, IReadOnlyList<AIFunction> tools, string modelName)
     {
         try
         {
-            return await ProcessCoreAsync(response, kernel, modelName);
+            return await ProcessCoreAsync(response, tools, modelName);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -73,7 +70,7 @@ public class FallbackFunctionCallExecutor
         }
     }
 
-    private async Task<string> ProcessCoreAsync(string response, Kernel kernel, string modelName)
+    private async Task<string> ProcessCoreAsync(string response, IReadOnlyList<AIFunction> tools, string modelName)
     {
         var functionCalls = ExtractFunctionCallsFromText(response);
 
@@ -101,7 +98,7 @@ public class FallbackFunctionCallExecutor
                 System.Diagnostics.Debug.WriteLine(
                     $"[FallbackParsing] Invoking function: {normalizedName} (original: {functionName})");
 
-                var functionResult = await InvokeFunctionByNameAsync(kernel, normalizedName, parametersJson);
+                var functionResult = await InvokeFunctionByNameAsync(tools, normalizedName, parametersJson);
 
                 if (functionResult != null)
                 {
@@ -405,29 +402,21 @@ public class FallbackFunctionCallExecutor
     }
 
     /// <summary>
-    /// Invokes a FileSystem plugin function by name with JSON parameters.
+    /// Invokes a tool by name with JSON parameters. Searches the full flat tool list rather
+    /// than a single plugin — see the class-level doc comment for why that's a widening, not a
+    /// regression.
     /// </summary>
-    private async Task<string?> InvokeFunctionByNameAsync(Kernel kernel, string functionName, string parametersJson)
+    private async Task<string?> InvokeFunctionByNameAsync(IReadOnlyList<AIFunction> tools, string functionName, string parametersJson)
     {
         try
         {
-            // Get the FileSystem plugin
-            if (!kernel.Plugins.TryGetPlugin("FileSystem", out var plugin))
-            {
-                return null;
-            }
+            // Find the function (case-insensitive, matching the old plugin lookup's fallback)
+            var function = tools.FirstOrDefault(f =>
+                f.Name.Equals(functionName, StringComparison.OrdinalIgnoreCase));
 
-            // Find the function
-            if (!plugin.TryGetFunction(functionName, out var function))
+            if (function == null)
             {
-                // Try case-insensitive search
-                function = plugin.FirstOrDefault(f =>
-                    f.Name.Equals(functionName, StringComparison.OrdinalIgnoreCase));
-
-                if (function == null)
-                {
-                    return $"Function '{functionName}' not found in FileSystem plugin";
-                }
+                return $"Function '{functionName}' not found";
             }
 
             // Parse parameters
@@ -437,8 +426,8 @@ public class FallbackFunctionCallExecutor
                 return "Failed to parse function parameters";
             }
 
-            // Build kernel arguments
-            var arguments = new KernelArguments();
+            // Build function arguments
+            var arguments = new AIFunctionArguments();
             foreach (var param in parameters)
             {
                 // Convert parameter name to match function parameter names
@@ -459,8 +448,8 @@ public class FallbackFunctionCallExecutor
             });
 
             // Invoke the function
-            var result = await function.InvokeAsync(kernel, arguments);
-            var resultString = result.GetValue<string>() ?? result.ToString() ?? "Function completed";
+            var result = await function.InvokeAsync(arguments);
+            var resultString = result?.ToString() ?? "Function completed";
 
             // Raise function completed event
             _onFunctionCompleted?.Invoke(new FunctionExecutionResult

@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
-using Microsoft.SemanticKernel;
 
 namespace MandoCode.Plugins;
 
@@ -61,7 +60,6 @@ public class WebSearchPlugin
     /// <summary>
     /// Searches the web — Tavily when a key is configured, DuckDuckGo otherwise.
     /// </summary>
-    [KernelFunction("search_web")]
     [Description("Searches the web for information. Returns titles, URLs, and snippets. Use this to find current information, documentation, tutorials, or answers to questions.")]
     public async Task<string> SearchWeb(
         [Description("The search query")] string query,
@@ -315,7 +313,6 @@ public class WebSearchPlugin
     /// <summary>
     /// Fetches a webpage and extracts its text content.
     /// </summary>
-    [KernelFunction("fetch_webpage")]
     [Description("Fetches a webpage URL and extracts its readable text content. Use this to read documentation pages, articles, blog posts, or any web page the user wants to learn about.")]
     public async Task<string> FetchWebpage(
         [Description("The URL of the webpage to fetch")] string url,

@@ -16,10 +16,10 @@ public sealed class PlanCancellationRequestedException : Exception
 }
 
 /// <summary>
-/// Bridge between FunctionInvocationFilter (where propose_plan is intercepted)
+/// Bridge between AgentFunctionMiddleware (where propose_plan is intercepted)
 /// and App.razor (which drives the approval UI and plan execution).
 ///
-/// The filter calls <see cref="ProcessAsync"/> and awaits the summary string.
+/// The middleware calls <see cref="ProcessAsync"/> and awaits the summary string.
 /// The UI subscribes to <see cref="OnPlanRequested"/>, handles approval, runs
 /// <c>ExecutePlanAsync</c>, and returns a recap that the model sees as the tool result.
 /// </summary>
@@ -55,21 +55,21 @@ public class PlanHandoff
     public event Action? ExecutionStarted;
     public event Action? ExecutionFinished;
 
-    // File operations recorded by FunctionInvocationFilter while a plan executes.
+    // File operations recorded by AgentFunctionMiddleware while a plan executes.
     // These are EVIDENCE from the choke point (the call actually ran and succeeded),
     // not model self-reports — they feed the manifest the outer model receives.
     private readonly List<(string Operation, string Path)> _fileOperations = new();
 
     /// <summary>
     /// True when the most recent <see cref="ProcessAsync"/> actually executed work
-    /// (at least one step completed). The filter reads this to arm the post-plan
+    /// (at least one step completed). The middleware reads this to arm the post-plan
     /// mutation gate — a rejected or never-started plan leaves it false, because the
     /// model is then expected to do the work directly.
     /// </summary>
     public bool LastPlanExecutedWork { get; private set; }
 
     /// <summary>
-    /// Called by FunctionInvocationFilter after a successful filesystem-mutating call.
+    /// Called by AgentFunctionMiddleware after a successful filesystem-mutating call.
     /// No-ops outside plan execution so ordinary chat-turn writes don't pollute the
     /// next plan's manifest.
     /// </summary>
@@ -83,7 +83,7 @@ public class PlanHandoff
     }
 
     /// <summary>
-    /// Called by FunctionInvocationFilter when the model invokes propose_plan.
+    /// Called by AgentFunctionMiddleware when the model invokes propose_plan.
     /// Guards against recursive planning (the model calling propose_plan while a
     /// previous plan is still running) by returning a short-circuit message.
     /// </summary>

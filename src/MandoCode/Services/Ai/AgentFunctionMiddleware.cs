@@ -11,9 +11,9 @@ using System.Text.RegularExpressions;
 namespace MandoCode.Services;
 
 /// <summary>
-/// MAF (Microsoft Agent Framework) function-calling-middleware equivalent of
-/// <see cref="FunctionInvocationFilter"/> — see feat/agent-framework-migration, Phase 3
-/// (memory agent-framework-migration.md).
+/// MAF (Microsoft Agent Framework) function-calling-middleware equivalent of the retired
+/// SK-side <c>FunctionInvocationFilter</c> (deleted in the migration's final cleanup) — see
+/// feat/agent-framework-migration, Phase 3 (memory agent-framework-migration.md).
 ///
 /// Design decision (deliberately NOT what Phase 2's comments anticipated): gating happens
 /// INLINE inside this middleware, awaiting the same <c>OnWriteApprovalRequested</c>/etc.
@@ -30,8 +30,8 @@ namespace MandoCode.Services;
 /// approval flows (including edit-preview construction and the edit-failure circuit) — these
 /// are the actual safety-relevant behavior. Deliberately NOT ported: the rich
 /// <c>OperationDisplayEvent</c> UI construction (diff line counts, additions/deletions,
-/// inline-diff rendering) that <c>FunctionInvocationFilter.BuildOperationDisplay</c> and its
-/// eight Build*Display helpers produce — that's cosmetic terminal-UI polish with no bearing on
+/// inline-diff rendering) that the old filter's <c>BuildOperationDisplay</c> and its
+/// eight Build*Display helpers produced — that's cosmetic terminal-UI polish with no bearing on
 /// gating correctness, and porting sixteen near-identical display branches is better done
 /// alongside the actual live cutover (Phase 4/5) than speculatively now while _agent still
 /// isn't wired to the live chat path. <see cref="OnFunctionCompleted"/> still fires so the
@@ -92,7 +92,7 @@ public class AgentFunctionMiddleware
         _defaultResultCharBudget = resultCharBudget;
     }
 
-    /// <summary>Same nesting semantics as FunctionInvocationFilter.BeginScope — see there.</summary>
+    /// <summary>Same nesting semantics as the retired SK-side FunctionInvocationFilter.BeginScope.</summary>
     public InvocationScope BeginScope()
     {
         var previous = _currentScope.Value;

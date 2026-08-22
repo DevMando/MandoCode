@@ -1,15 +1,10 @@
 /**
  *  Author: DevMando
  *  Date: 2025-12-10
- *  Description: AIService.cs - Manages AI interactions using Semantic Kernel with Ollama.
+ *  Description: AIService.cs - Manages AI interactions using Microsoft Agent Framework with Ollama.
  *  File: AIService.cs
  */
 
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Ollama;
-// MAF side of the SK -> Agent Framework migration (feat/agent-framework-migration). Both stacks
-// intentionally coexist while the migration is in progress — see BuildAgent()'s doc comment.
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OllamaSharp;
@@ -23,19 +18,25 @@ namespace MandoCode.Services;
 
 
 /// <summary>
-/// Manages AI interactions using Semantic Kernel with Ollama.
+/// Manages AI interactions using Microsoft Agent Framework with Ollama.
 /// </summary>
 public class AIService
 {
-    private Kernel _kernel;
-    private IChatCompletionService _chatService;
-    private readonly ChatHistory _chatHistory;
+    // MEAI's native ChatMessage list — the conversation's sole mutable source of truth. Used to
+    // be SK's ChatHistory (a deliberately deferred piece of feat/agent-framework-migration);
+    // migrated in the migration's final cleanup once nothing else needed the SK type. Passed
+    // straight to _agent.RunAsync with no conversion — see ExecuteAgentModelCallAsync.
+    private readonly List<ChatMessage> _chatHistory;
     private string _systemPrompt;
 
-    // MAF agent — the live chat path since the cutover (feat/agent-framework-migration). _kernel/
-    // _chatService/_functionFilter are still built (BuildKernel) but no longer called from any
-    // live call site — kept alive only for FallbackFunctionCallExecutor, until final SK cleanup.
+    // MAF agent — the live chat path (feat/agent-framework-migration).
     private AIAgent? _agent;
+
+    // Flat list of every tool bound to _agent (plugin tools + MCP tools), populated by
+    // BuildAgent. Feeds FallbackFunctionCallExecutor's by-name lookup and
+    // EstimateToolSchemaChars' pre-flight sizing — the two places that previously walked
+    // _kernel.Plugins.
+    private List<AIFunction> _agentFunctions = new();
 
     // Set by ExecuteAgentModelCallAsync when a call throws after at least one tool call
     // genuinely completed — MAF's RunAsync is atomic, so unlike SK's connector (which mutates
@@ -55,8 +56,8 @@ public class AIService
     // check the way SK's PluginName.StartsWith("mcp_") did, so the middleware needs this map.
     private readonly Dictionary<string, string> _mcpToolServerByName = new();
 
-    // MAF-side function-calling middleware — see AgentFunctionMiddleware's doc comment (Phase 3).
-    // Rebuilt in BuildAgent alongside _agent; wiring mirrors _functionFilter's (see the
+    // MAF-side function-calling middleware — see AgentFunctionMiddleware's doc comment.
+    // Rebuilt in BuildAgent alongside _agent (see the
     // OnWriteApprovalRequested/OnDeleteApprovalRequested/OnCommandApprovalRequested setters above).
     private AgentFunctionMiddleware? _agentFunctionMiddleware;
 
@@ -65,10 +66,8 @@ public class AIService
     // truth about target paths — see ChatStreamAsync and BuildStepContext.
     private string? _currentTurnUserMessage;
     private MandoCodeConfig _config;
-    private OllamaPromptExecutionSettings _settings;
     private readonly ProjectRootAccessor _projectRootAccessor;
     private readonly FunctionCompletionTracker _completionTracker = new();
-    private FunctionInvocationFilter _functionFilter;
     private readonly TokenTrackingService _tokenTracker;
     private readonly PlanHandoff _planHandoff;
     private readonly SkillLoader _skillLoader;
@@ -104,10 +103,6 @@ public class AIService
         set
         {
             _onWriteApprovalRequested = value;
-            if (_functionFilter != null)
-            {
-                _functionFilter.OnWriteApprovalRequested = value;
-            }
             if (_agentFunctionMiddleware != null)
             {
                 _agentFunctionMiddleware.OnWriteApprovalRequested = value;
@@ -126,10 +121,6 @@ public class AIService
         set
         {
             _onDeleteApprovalRequested = value;
-            if (_functionFilter != null)
-            {
-                _functionFilter.OnDeleteApprovalRequested = value;
-            }
             if (_agentFunctionMiddleware != null)
             {
                 _agentFunctionMiddleware.OnDeleteApprovalRequested = value;
@@ -148,10 +139,6 @@ public class AIService
         set
         {
             _onCommandApprovalRequested = value;
-            if (_functionFilter != null)
-            {
-                _functionFilter.OnCommandApprovalRequested = value;
-            }
             if (_agentFunctionMiddleware != null)
             {
                 _agentFunctionMiddleware.OnCommandApprovalRequested = value;
@@ -173,11 +160,10 @@ public class AIService
             call => OnFunctionInvoked?.Invoke(call),
             result => OnFunctionCompleted?.Invoke(result));
         RebuildSystemPrompt();
-        BuildKernel();
         BuildAgent();
 
         // Initialize chat history with system prompt
-        _chatHistory = new ChatHistory(_systemPrompt);
+        _chatHistory = [new ChatMessage(ChatRole.System, _systemPrompt)];
     }
 
     /// <summary>
@@ -217,7 +203,6 @@ public class AIService
     {
         _config = config;
         RebuildSystemPrompt();
-        BuildKernel();
         BuildAgent();
         await AttachMcpPluginsAsync();
         await ClearHistoryAsync();
@@ -238,29 +223,28 @@ public class AIService
         // The history-preserving path still has the OLD system prompt as message 0 —
         // swap it in place so a mid-conversation toggle (e.g. websearch) actually
         // reaches the model instead of waiting for the next /clear.
-        if (_chatHistory.Count > 0 && _chatHistory[0].Role == AuthorRole.System)
+        if (_chatHistory.Count > 0 && _chatHistory[0].Role == ChatRole.System)
         {
-            _chatHistory[0] = new ChatMessageContent(AuthorRole.System, _systemPrompt);
+            _chatHistory[0] = new ChatMessage(ChatRole.System, _systemPrompt);
         }
 
-        BuildKernel();
         BuildAgent();
         await AttachMcpPluginsAsync();
     }
 
     /// <summary>
-    /// Registers tools from every active MCP client as SK plugins on the current kernel AND
-    /// (feat/agent-framework-migration) as MAF AIFunctions on <see cref="_agent"/>. Idempotent
-    /// per server within a single kernel instance — registration is skipped if a plugin with
-    /// the same <c>mcp_&lt;server&gt;</c> name is already present. BuildKernel/BuildAgent discard
-    /// the old kernel/agent, so after a rebuild the next call re-registers from scratch.
+    /// Registers tools from every active MCP client as MAF <see cref="AIFunction"/>s on
+    /// <see cref="_agent"/>. Idempotent per server — registration is skipped if
+    /// <see cref="_mcpAgentToolsByServer"/> already has an entry for the <c>mcp_&lt;server&gt;</c>
+    /// key. BuildAgent discards the old agent on rebuild, so this dictionary — not the agent
+    /// itself — is the durable idempotency record across rebuilds.
     ///
     /// Reconciles <see cref="_mcpAgentToolsByServer"/> against the CURRENT active-client set
     /// first, before the idempotency check below — a server disabled or removed since the last
     /// call must drop out of the dictionary (and therefore _agent's tool list on the next
     /// rebuild) even though the loop below never revisits it. Rebuilds <see cref="_agent"/> at
     /// the end whenever anything changed, since AIAgent's tool list is fixed at construction —
-    /// unlike _kernel.Plugins, there's no in-place "add a tool" for the agent side.
+    /// there's no in-place "add a tool" for the agent side.
     /// </summary>
     public async Task AttachMcpPluginsAsync(CancellationToken cancellationToken = default)
     {
@@ -280,18 +264,15 @@ public class AIService
             foreach (var (serverName, client) in _mcpManager.ActiveClients)
             {
                 var pluginName = $"mcp_{serverName}";
-                if (_kernel.Plugins.Any(p => p.Name == pluginName)) continue;
+                if (_mcpAgentToolsByServer.ContainsKey(pluginName)) continue;
 
                 try
                 {
                     var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
                     if (tools.Count == 0) continue;
-                    _kernel.Plugins.AddFromFunctions(
-                        pluginName,
-                        tools.Select(t => t.AsKernelFunction()));
 
-                    // MAF side: no bridge method needed at all — McpClientTool derives directly
-                    // from Microsoft.Extensions.AI.AIFunction, so it already IS one.
+                    // No bridge method needed at all — McpClientTool derives directly from
+                    // Microsoft.Extensions.AI.AIFunction, so it already IS one.
                     _mcpAgentToolsByServer[pluginName] = tools.Cast<AIFunction>().ToList();
                     changed = true;
                 }
@@ -315,118 +296,31 @@ public class AIService
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_kernel), nameof(_chatService), nameof(_settings), nameof(_functionFilter))]
-    private void BuildKernel()
-    {
-        _settings = new()
-        {
-            Temperature = (float)_config.Temperature,
-            NumPredict = _config.MaxTokens,
-            FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: true, options: new() { AllowConcurrentInvocation = true })
-        };
-
-        var builder = Kernel.CreateBuilder();
-
-        // Route Ollama traffic through NumCtxHttpHandler so the configured context window
-        // rides on every request instead of depending on how the daemon was started.
-        // Timeout is infinite on purpose: model calls are bounded by MandoCode's own stall
-        // watchdog and request-timeout ceiling, and a fixed HttpClient timeout underneath
-        // them would surface as a bogus transport error on slow local generations.
-        // The old client (like the old kernel it served) is left for GC rather than
-        // disposed — a rebuild can race a call still in flight on the discarded kernel.
-        var ollamaHttpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
-        {
-            BaseAddress = new Uri(_config.OllamaEndpoint),
-            Timeout = System.Threading.Timeout.InfiniteTimeSpan
-        };
-
-        builder.AddOllamaChatCompletion(
-            modelId: _config.GetEffectiveModelName(),
-            httpClient: ollamaHttpClient
-        );
-
-        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner);
-        if (_config.IgnoreDirectories.Any())
-        {
-            fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);
-        }
-
-        builder.Plugins.AddFromObject(fileSystemPlugin, "FileSystem");
-
-        if (_config.EnableWebSearch)
-        {
-            builder.Plugins.AddFromObject(new WebSearchPlugin(_config.GetEffectiveTavilyApiKey()), "WebSearch");
-        }
-
-        if (_config.EnableTaskPlanning)
-        {
-            builder.Plugins.AddFromObject(new PlanningPlugin(), "Planning");
-        }
-
-        // Always register the Skills plugin — even when no skills are installed, so
-        // users can add skills and trigger a reload without rebuilding the kernel.
-        builder.Plugins.AddFromObject(new SkillsPlugin(_skillLoader), "Skills");
-
-        _kernel = builder.Build();
-        _chatService = _kernel.GetRequiredService<IChatCompletionService>();
-
-        // Set up function invocation filter for UI events, deduplication, and propose_plan interception.
-        // Handlers on the PREVIOUS filter are deliberately left attached: a rebuild (e.g. /config set
-        // mid-session) can race a function still in flight on the old kernel, and that function's
-        // completion must still reach _completionTracker — detaching here would leak the pending count
-        // and pin the stall watchdog paused. The old filter only fires for calls already routed through
-        // the discarded kernel, so nothing fires twice; it becomes collectible once those finish.
-        _functionFilter = new FunctionInvocationFilter(_config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker, _planHandoff, _config.ToolResultCharBudget);
-        _functionFilter.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
-        _functionFilter.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
-        _functionFilter.OnFunctionStarted += () => _completionTracker.RegisterStart();
-        _functionFilter.OnFunctionFinished += () => _completionTracker.RegisterCompletion();
-
-        // Wire diff approval callbacks through to the filter
-        if (_onWriteApprovalRequested != null)
-        {
-            _functionFilter.OnWriteApprovalRequested = _onWriteApprovalRequested;
-        }
-        if (_onDeleteApprovalRequested != null)
-        {
-            _functionFilter.OnDeleteApprovalRequested = _onDeleteApprovalRequested;
-        }
-        if (_onCommandApprovalRequested != null)
-        {
-            _functionFilter.OnCommandApprovalRequested = _onCommandApprovalRequested;
-        }
-
-        // MCP gate — filter delegates to the gate for any plugin whose name starts with "mcp_"
-        _functionFilter.McpApprovalGate = _mcpApprovalGate;
-
-        _kernel.FunctionInvocationFilters.Add(_functionFilter);
-    }
-
     /// <summary>
-    /// Builds the Microsoft Agent Framework equivalent of <see cref="BuildKernel"/>, as a
-    /// parallel construction path for the SK -> Agent Framework migration
-    /// (feat/agent-framework-migration, see memory agent-framework-migration.md). Mirrors
-    /// BuildKernel's non-plugin concerns — the same NumCtxHttpHandler wiring, endpoint, model,
-    /// and temperature/max-tokens mapping — plus (Phase 2) the same 16 plugin functions,
-    /// registered as plain <see cref="AIFunction"/>s with the exact snake_case names the system
-    /// prompt and any user skills already reference (MAF has no plugin/namespace concept —
-    /// [KernelFunction] is left in place on the plugin classes for SK's AddFromObject and simply
-    /// ignored here; each tool is bound directly off a plugin instance method).
+    /// Builds the MAF <see cref="_agent"/>: an <see cref="OllamaApiClient"/> wrapped as an
+    /// <see cref="AIAgent"/>, with every plugin function bound as a plain <see cref="AIFunction"/>
+    /// under the exact snake_case name the system prompt and any user skills already reference
+    /// (MAF has no plugin/namespace concept — each tool is bound directly off a plugin instance
+    /// method via <see cref="NamedTool"/>), plus MCP tools kept current by
+    /// <see cref="AttachMcpPluginsAsync"/>.
     ///
-    /// (Phase 3) <see cref="AgentFunctionMiddleware"/> is attached via <c>AsBuilder().Use(...)</c>
-    /// and ports the approval gating, circuit breakers, and propose_plan interception from
-    /// <see cref="FunctionInvocationFilter"/> — gating happens inline in the middleware, awaiting
-    /// the same approval callbacks, NOT via <c>ApprovalRequiredAIFunction</c> (see that class's
-    /// doc comment for why). MCP tools (from <see cref="_mcpAgentToolsByServer"/>, kept current by
-    /// <see cref="AttachMcpPluginsAsync"/>) are included in the tool list and gated the same way as
-    /// everything else, via <see cref="AgentFunctionMiddleware.McpServerNameResolver"/>.
+    /// <see cref="AgentFunctionMiddleware"/> is attached via <c>AsBuilder().Use(...)</c> and
+    /// handles approval gating, circuit breakers, and propose_plan interception — gating happens
+    /// inline in the middleware, awaiting the approval callbacks directly, NOT via
+    /// <c>ApprovalRequiredAIFunction</c> (see that class's doc comment for why). MCP tools are
+    /// gated the same way as everything else, via
+    /// <see cref="AgentFunctionMiddleware.McpServerNameResolver"/>.
     /// </summary>
     [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_agent), nameof(_agentFunctionMiddleware))]
     private void BuildAgent()
     {
-        // Same handler/timeout rationale as BuildKernel's ollamaHttpClient — see there. Two
-        // clients, one per stack, both pointed at the same daemon; harmless duplication while
-        // both are alive, deleted along with BuildKernel once the migration finishes.
+        // Route Ollama traffic through NumCtxHttpHandler so the configured context window rides
+        // on every request instead of depending on how the daemon was started. Timeout is
+        // infinite on purpose: model calls are bounded by MandoCode's own stall watchdog and
+        // request-timeout ceiling, and a fixed HttpClient timeout underneath them would surface
+        // as a bogus transport error on slow local generations. The old client (like the old
+        // agent it served) is left for GC rather than disposed — a rebuild can race a call still
+        // in flight on the discarded agent.
         var ollamaHttpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
         {
             BaseAddress = new Uri(_config.OllamaEndpoint),
@@ -483,7 +377,11 @@ public class AIService
             tools.AddRange(mcpTools);
         }
 
-        // Compaction (Phase 4 — NOT wired, see below): Microsoft Learn documents a
+        // Flat AIFunction view of the same tool list, for FallbackFunctionCallExecutor's
+        // by-name lookup and EstimateToolSchemaChars' pre-flight sizing.
+        _agentFunctions = tools.OfType<AIFunction>().ToList();
+
+        // Compaction (NOT wired, see below): Microsoft Learn documents a
         // PipelineCompactionStrategy/CompactionProvider API (experimental, MAAI001) for exactly
         // this. It does not exist in Microsoft.Agents.AI 1.18.0 — the actual latest version on
         // NuGet as of this migration — confirmed by the compiler failing to resolve
@@ -505,9 +403,11 @@ public class AIService
             },
         });
 
-        // Same rebuild rationale as BuildKernel's _functionFilter: the previous middleware
-        // instance is left attached to the discarded agent rather than detached, since a call
-        // still in flight on it must still reach _completionTracker.
+        // The previous middleware instance is left attached to the discarded agent rather than
+        // detached on rebuild (e.g. /config set mid-session), since a call still in flight on it
+        // must still reach _completionTracker — detaching here would leak the pending count and
+        // pin the stall watchdog paused. The old middleware only fires for calls already routed
+        // through the discarded agent, so nothing fires twice; it becomes collectible once those finish.
         _agentFunctionMiddleware = new AgentFunctionMiddleware(
             _config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker, _planHandoff, _config.ToolResultCharBudget);
         _agentFunctionMiddleware.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
@@ -538,10 +438,10 @@ public class AIService
     /// <summary>
     /// Wraps a plugin instance method as an <see cref="AIFunction"/> under an explicit name.
     /// AIFunctionFactory otherwise derives the tool name from the C# method name (e.g.
-    /// "ListAllProjectFiles"), which doesn't match the snake_case names
-    /// ([KernelFunction("list_all_project_files")]) the system prompt, skills, and the model's
-    /// own tool-call habits already depend on — so every call site here passes the real name
-    /// explicitly rather than relying on the default.
+    /// "ListAllProjectFiles"), which doesn't match the snake_case names (e.g.
+    /// "list_all_project_files") the system prompt, skills, and the model's own tool-call
+    /// habits already depend on — so every call site here passes the real name explicitly
+    /// rather than relying on the default.
     /// </summary>
     private static AIFunction NamedTool(Delegate method, string name) =>
         AIFunctionFactory.Create(method, new AIFunctionFactoryOptions { Name = name });
@@ -590,9 +490,8 @@ public class AIService
 
     /// <summary>
     /// Sends a message to the AI and streams the response chunk by chunk.
-    /// NOTE: Uses non-streaming mode internally for reliable function execution with local models.
-    /// Streaming with auto-invocation causes issues where function calls are not properly parsed
-    /// or executed by the Semantic Kernel with local Ollama models.
+    /// NOTE: Non-streaming mode is the default for reliable function execution with local models —
+    /// see <see cref="MandoCodeConfig.StreamingMode"/> and <see cref="InvokeAgentChatAsync"/>.
     /// </summary>
     public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -606,7 +505,7 @@ public class AIService
 
         // Add message under lock, then release before the long AI call
         await _historyLock.WaitAsync(cancellationToken);
-        try { _chatHistory.AddUserMessage(userMessage); }
+        try { _chatHistory.Add(new ChatMessage(ChatRole.User, userMessage)); }
         finally { _historyLock.Release(); }
 
         int continuations = 0;
@@ -668,7 +567,7 @@ public class AIService
 
             var rawResponse = string.IsNullOrEmpty(result.Text) ? "No response from AI." : result.Text;
             response = _config.EnableFallbackFunctionParsing
-                ? await _fallbackExecutor.ProcessAsync(rawResponse, _kernel, _config.GetEffectiveModelName())
+                ? await _fallbackExecutor.ProcessAsync(rawResponse, _agentFunctions, _config.GetEffectiveModelName())
                 : rawResponse;
 
             if (result.DoneStream is { } doneStream
@@ -699,9 +598,9 @@ public class AIService
                 await _historyLock.WaitAsync();
                 try
                 {
-                    _chatHistory.AddUserMessage(
+                    _chatHistory.Add(new ChatMessage(ChatRole.User,
                         "Continue from where you left off. Your previous response was a progress summary; " +
-                        "the tool-call budget has been reset, so you can call tools again to finish the remaining work.");
+                        "the tool-call budget has been reset, so you can call tools again to finish the remaining work."));
                 }
                 finally { _historyLock.Release(); }
             }
@@ -776,10 +675,9 @@ public class AIService
     }
 
     /// <summary>
-    /// Rough serialized size of the live history in characters. When a message carries
-    /// Items (SK's auto-invoke loop puts function calls/results there), the items are
-    /// counted INSTEAD of Content — ChatMessageContent.Content mirrors the first
-    /// TextContent item, so counting both would double-count assistant turns.
+    /// Rough serialized size of the live history in characters. Walks <c>Contents</c> (function
+    /// calls/results/text all live there in MEAI's model) rather than <c>Text</c> — <c>Text</c>
+    /// is a convenience view derived FROM <c>Contents</c>, so counting both would double-count.
     /// </summary>
     private async Task<long> EstimateHistoryCharsAsync()
     {
@@ -789,26 +687,26 @@ public class AIService
             long chars = 0;
             foreach (var msg in _chatHistory)
             {
-                if (msg.Items == null || msg.Items.Count == 0)
+                if (msg.Contents.Count == 0)
                 {
-                    chars += msg.Content?.Length ?? 0;
+                    chars += msg.Text?.Length ?? 0;
                     continue;
                 }
 
-                foreach (var item in msg.Items)
+                foreach (var item in msg.Contents)
                 {
                     switch (item)
                     {
-                        case Microsoft.SemanticKernel.FunctionCallContent fc:
-                            chars += fc.FunctionName?.Length ?? 0;
+                        case Microsoft.Extensions.AI.FunctionCallContent fc:
+                            chars += fc.Name?.Length ?? 0;
                             if (fc.Arguments != null)
                                 foreach (var kv in fc.Arguments)
                                     chars += kv.Key.Length + (kv.Value?.ToString()?.Length ?? 0);
                             break;
-                        case Microsoft.SemanticKernel.FunctionResultContent fr:
+                        case Microsoft.Extensions.AI.FunctionResultContent fr:
                             chars += fr.Result?.ToString()?.Length ?? 0;
                             break;
-                        case Microsoft.SemanticKernel.TextContent tc:
+                        case Microsoft.Extensions.AI.TextContent tc:
                             chars += tc.Text?.Length ?? 0;
                             break;
                     }
@@ -823,20 +721,17 @@ public class AIService
     /// Rough size of the tool definitions the connector serializes into EVERY request —
     /// they're not in the chat history, but with MCP servers attached they can be most of
     /// a small model's window, so a pre-flight estimate that ignores them undercounts badly.
+    /// <see cref="AIFunction.JsonSchema"/> already carries the full parameter schema as one
+    /// <see cref="JsonElement"/>, so measuring its serialized length directly is at least as
+    /// accurate as the old per-parameter walk over SK's <c>KernelFunctionMetadata</c>.
     /// </summary>
     private long EstimateToolSchemaChars()
     {
         long chars = 0;
-        foreach (var plugin in _kernel.Plugins)
+        foreach (var function in _agentFunctions)
         {
-            foreach (var function in plugin)
-            {
-                var md = function.Metadata;
-                chars += (md.Name?.Length ?? 0) + (md.Description?.Length ?? 0) + 40;
-                foreach (var p in md.Parameters)
-                    chars += (p.Name?.Length ?? 0) + (p.Description?.Length ?? 0)
-                           + (p.Schema?.ToString()?.Length ?? 0) + 20;
-            }
+            chars += (function.Name?.Length ?? 0) + (function.Description?.Length ?? 0) + 40;
+            chars += function.JsonSchema.ToString().Length;
         }
         return chars;
     }
@@ -907,112 +802,44 @@ public class AIService
                "- /clear frees space right now by trimming history";
     }
 
-    /// <summary>
-    /// Shared model-call scaffolding for direct chat turns and plan steps: the per-turn
-    /// request-timeout ceiling, the stall watchdog, the heartbeat spinner, the retry policy,
-    /// and token recording. Cancellation is classified here — while the token sources are
-    /// still in scope — into typed exceptions so each caller phrases its own user-facing
-    /// message: <see cref="ModelStallException"/> when the watchdog fired,
-    /// <see cref="ModelCallTimeoutException"/> when the request ceiling was hit. A
-    /// user-initiated cancellation rethrows the original <see cref="OperationCanceledException"/>.
-    /// All other exceptions (context overflow, HTTP failures) propagate unwrapped.
-    /// </summary>
-    private async Task<ChatMessageContent> ExecuteModelCallAsync(
-        ChatHistory history,
-        OllamaPromptExecutionSettings settings,
-        string retryOperationName,
-        string tokenLabel,
-        string spinnerMessage,
-        bool pauseDuringPlan,
-        CancellationToken cancellationToken)
-    {
-        // Two timeouts: requestCts is the generous per-turn ceiling (RequestTimeoutMinutes);
-        // responseCts is the stall watchdog (ModelResponseTimeoutSeconds) — a much shorter
-        // bound on a single model-silent stretch so a local model that stops streaming once
-        // context grows recovers in minutes, not the full ceiling.
-        using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-        using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCts.Token, responseCts.Token);
-
-        // The request ceiling only needs plan-pausing on the outer chat turn (the whole plan
-        // runs inside that single model call); plan steps keep their own bounded ceiling.
-        using var watchdog = AttachStallWatchdog(
-            responseCts,
-            pauseDuringPlan,
-            requestCts: pauseDuringPlan ? requestCts : null,
-            requestTimeout: TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
-
-        // Heartbeat over the model-generation stretch: keep a ticking spinner alive (the
-        // existing one is stopped between tool events) and advertise the escape hatch so a
-        // slow/stalled turn never looks dead.
-        _spinner.Start(spinnerMessage);
-
-        try
-        {
-            var result = await RetryPolicy.ExecuteWithRetryAsync(
-                async () => await InvokeChatAsync(history, settings, responseCts, linkedCts.Token),
-                _config.MaxRetryAttempts,
-                retryOperationName,
-                linkedCts.Token
-            );
-
-            ExtractAndRecordTokens(result, tokenLabel);
-            return result;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException) when (responseCts.IsCancellationRequested)
-        {
-            throw new ModelStallException();
-        }
-        catch (OperationCanceledException)
-        {
-            throw new ModelCallTimeoutException();
-        }
-    }
-
     // ============================================================
-    // MAF-side model call path (feat/agent-framework-migration — the live cutover). Mirrors
-    // ExecuteModelCallAsync/InvokeChatAsync/AttachStallWatchdog exactly, but calls _agent
-    // instead of _chatService/_kernel. _chatHistory (SK's ChatHistory) stays the sole mutable
+    // Model call path (feat/agent-framework-migration). _chatHistory stays the sole mutable
     // source of truth — compaction, export/import, and pre-flight sizing all keep working
-    // unmodified — converted to/from MEAI messages only around the actual model call, via
-    // ChatHistoryConversion. No AgentSession/stateful accumulation: verified empirically that
+    // unmodified — and is now MEAI's own ChatMessage list, passed straight to _agent.RunAsync
+    // with no conversion. No AgentSession/stateful accumulation: verified empirically that
     // AIAgent.RunAsync(IEnumerable<ChatMessage>) with no session is a pure function of whatever
-    // list you pass, exactly like SK's GetChatMessageContentAsync(history, ...) today.
+    // list you pass.
     //
-    // ORIGINAL LIMITATION, since FIXED (see _lastCallPartialTrace below): SK's connector
-    // mutates the passed-in ChatHistory with tool-call/result messages DURING a multi-round
-    // tool-calling call, so a context-overflow failure mid-call still left the successful
-    // earlier rounds in history for SynthesizeHistorySummary to recap. MAF's RunAsync is
-    // atomic — on failure, nothing is returned, so ChatHistoryConversion has nothing to append.
-    // Fixed by accumulating a partial trace from AgentFunctionMiddleware's per-call events
-    // directly (those fire regardless of the outer call's fate) instead of relying on
-    // ChatHistory mutation that MAF doesn't do. See ExecuteAgentModelCallAsync's trace
-    // accumulator, and _lastCallPartialTrace's doc comment for where it's consumed.
+    // ORIGINAL LIMITATION FROM THE SK->MAF CUTOVER, since FIXED (see _lastCallPartialTrace
+    // below): SK's connector used to mutate the passed-in ChatHistory with tool-call/result
+    // messages DURING a multi-round tool-calling call, so a context-overflow failure mid-call
+    // still left the successful earlier rounds in history for SynthesizeHistorySummary to
+    // recap. MAF's RunAsync is atomic — on failure, nothing is returned, so there's nothing to
+    // append. Fixed by accumulating a partial trace from AgentFunctionMiddleware's per-call
+    // events directly (those fire regardless of the outer call's fate) instead of relying on
+    // history mutation that MAF doesn't do. See ExecuteAgentModelCallAsync's trace accumulator,
+    // and _lastCallPartialTrace's doc comment for where it's consumed.
     // ============================================================
 
     /// <summary>Carries an agent turn's result: the final text (pre-fallback-processing), every
     /// new message the turn produced (for appending to history), and the raw Ollama done-stream
-    /// when reachable (for the length-cutoff check) — the MAF-side equivalent of the single
-    /// ChatMessageContent ExecuteModelCallAsync returns.</summary>
+    /// when reachable (for the length-cutoff check).</summary>
     private sealed record AgentTurnResult(
         string Text,
-        List<ChatMessageContent> NewHistoryMessages,
+        List<ChatMessage> NewHistoryMessages,
         OllamaSharp.Models.Chat.ChatDoneResponseStream? DoneStream);
 
     /// <summary>
     /// Appends an agent turn's messages to <paramref name="history"/>. Intermediate tool-call/
     /// tool-result messages are appended as-is; the trailing assistant-text message is REPLACED
     /// by <paramref name="finalText"/> (which may differ from the raw agent text if fallback
-    /// parsing rewrote it) — mirroring SK's own split, where the connector mutates history with
-    /// tool activity during the call but leaves the final text for the caller to add explicitly.
+    /// parsing rewrote it) — matching the exact shape SK's own connector used to leave behind
+    /// (tool activity added during the call, final text added explicitly by the caller), so
+    /// fallback-parsing's rewritten text never gets duplicated.
     /// </summary>
-    private static void AppendAgentTurnToHistory(ChatHistory history, List<ChatMessageContent> newMessages, string finalText)
+    private static void AppendAgentTurnToHistory(List<ChatMessage> history, List<ChatMessage> newMessages, string finalText)
     {
-        var toAppend = newMessages.Count > 0 && newMessages[^1].Role == AuthorRole.Assistant
+        var toAppend = newMessages.Count > 0 && newMessages[^1].Role == ChatRole.Assistant
             ? newMessages.Take(newMessages.Count - 1)
             : newMessages;
 
@@ -1020,14 +847,19 @@ public class AIService
             history.Add(m);
 
         if (!string.IsNullOrEmpty(finalText))
-            history.AddAssistantMessage(finalText);
+            history.Add(new ChatMessage(ChatRole.Assistant, finalText));
     }
 
-    /// <summary>MAF-side sibling of <see cref="ExecuteModelCallAsync"/> — same retry/watchdog/
-    /// token-recording scaffolding, calling <see cref="_agent"/> instead of <see
-    /// cref="_chatService"/>/<see cref="_kernel"/>.</summary>
+    /// <summary>Shared model-call scaffolding for direct chat turns and plan steps: the per-turn
+    /// request-timeout ceiling, the stall watchdog, the heartbeat spinner, the retry policy, and
+    /// token recording, via <see cref="_agent"/>. Cancellation is classified here — while the
+    /// token sources are still in scope — into typed exceptions so each caller phrases its own
+    /// user-facing message: <see cref="ModelStallException"/> when the watchdog fired,
+    /// <see cref="ModelCallTimeoutException"/> when the request ceiling was hit. A
+    /// user-initiated cancellation rethrows the original <see cref="OperationCanceledException"/>.
+    /// All other exceptions (context overflow, HTTP failures) propagate unwrapped.</summary>
     private async Task<AgentTurnResult> ExecuteAgentModelCallAsync(
-        ChatHistory history,
+        List<ChatMessage> history,
         string retryOperationName,
         string tokenLabel,
         string spinnerMessage,
@@ -1078,10 +910,13 @@ public class AIService
             {
                 try
                 {
-                    var meaiMessages = ChatHistoryConversion.ToMeaiMessages(history);
+                    // Snapshot rather than pass `history` itself — decouples the in-flight call
+                    // from any concurrent mutation of the live list, matching the old
+                    // ChatHistoryConversion-based defensive copy.
+                    var messagesSnapshot = history.ToList();
 
                     var response = await RetryPolicy.ExecuteWithRetryAsync(
-                        async () => await InvokeAgentChatAsync(meaiMessages, responseCts, linkedCts.Token),
+                        async () => await InvokeAgentChatAsync(messagesSnapshot, responseCts, linkedCts.Token),
                         _config.MaxRetryAttempts,
                         retryOperationName,
                         linkedCts.Token
@@ -1093,7 +928,7 @@ public class AIService
                         ? chatResponse.RawRepresentation as OllamaSharp.Models.Chat.ChatDoneResponseStream
                         : null;
 
-                    return new AgentTurnResult(response.Text ?? "", ChatHistoryConversion.ToSkMessages(response.Messages), doneStream);
+                    return new AgentTurnResult(response.Text ?? "", response.Messages.ToList(), doneStream);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -1130,10 +965,22 @@ public class AIService
         }
     }
 
-    /// <summary>MAF-side sibling of <see cref="InvokeChatAsync"/> — same streaming-mode routing
-    /// and heartbeat contract, via <see cref="_agent"/> instead of <see cref="_chatService"/>.
+    /// <summary>
+    /// Routes a single model call to either the non-streaming API or a buffered streaming path,
+    /// per <see cref="MandoCodeConfig.StreamingMode"/>: <c>All</c> streams every model, <c>Cloud</c>
+    /// streams only cloud models (<see cref="MandoCodeConfig.IsCloudModel"/>), <c>Off</c> never
+    /// streams. The buffered path resets the stall watchdog on every chunk — so a long-but-healthy
+    /// generation never trips the watchdog — then returns a non-streaming-shaped result so the
+    /// fallback parser, token recording, and every caller behave identically (the assembled text is
+    /// the same either way, so a text-emitted tool call still reaches <see cref="FallbackFunctionCallExecutor"/>
+    /// intact). Verified against the live Ollama connector before defaulting to <c>All</c> (the
+    /// streaming spikes): structured auto-invoke (qwen2.5/glm-5.2), middleware events, token metadata,
+    /// and a text-emitted call surviving the stream intact (gemma3) all checked.
+    ///
     /// No session: called stateless, passing the full message list every time (see the class
-    /// note above).</summary>
+    /// note above) — verified empirically that <see cref="_agent"/>'s <c>RunAsync</c> with no
+    /// session is a pure function of whatever list you pass.
+    /// </summary>
     private async Task<AgentResponse> InvokeAgentChatAsync(
         List<Microsoft.Extensions.AI.ChatMessage> messages,
         CancellationTokenSource responseCts,
@@ -1156,10 +1003,23 @@ public class AIService
             linkedToken);
     }
 
-    /// <summary>MAF-side sibling of <see cref="AttachStallWatchdog"/> — identical pause/resume
-    /// contract, hooking <see cref="_agentFunctionMiddleware"/>'s events instead of <see
-    /// cref="_functionFilter"/>'s. <see cref="_planHandoff"/> is unchanged and shared by both
-    /// paths — it was already framework-agnostic.</summary>
+    /// <summary>
+    /// Attaches a stall watchdog to <paramref name="responseCts"/>: it fires after
+    /// <see cref="MandoCodeConfig.ModelResponseTimeoutSeconds"/> of pure model-generation time.
+    /// Tool calls — and the approval prompts that run inside them — PAUSE the watchdog: while any
+    /// function is in flight the timer is disabled, so a long-running tool (e.g. a build) or a
+    /// user deliberating at an approval prompt is never mistaken for a stalled model. The
+    /// watchdog only counts contiguous stretches where the model is generating with no tool
+    /// activity, via <see cref="_agentFunctionMiddleware"/>'s events. Dispose the returned handle
+    /// once the model call completes to detach the hooks.
+    ///
+    /// pauseDuringPlan: the outer chat turn's whole plan (propose_plan) executes inside this
+    /// single model call — pausing suppresses tool-event resumes so the plan's own per-step
+    /// watchdogs (which pass pauseDuringPlan=false) are the ones that fire on a stalled step, not
+    /// this outer one. The request-timeout ceiling (requestCts) pauses for the same reason: a
+    /// long-running plan crossing RequestTimeoutMinutes would otherwise get cancelled and
+    /// mislabeled "Cancelled by user."
+    /// </summary>
     private IDisposable AttachAgentStallWatchdog(
         CancellationTokenSource responseCts,
         bool pauseDuringPlan = false,
@@ -1201,7 +1061,8 @@ public class AIService
         });
     }
 
-    /// <summary>MAF-side sibling of <see cref="ExtractAndRecordTokens"/>. Uses MEAI's
+    /// <summary>Extracts real token counts from an agent turn's response and records them.
+    /// Non-critical — failures are silently swallowed. Uses MEAI's
     /// provider-agnostic <see cref="Microsoft.Extensions.AI.UsageDetails"/> for token counts
     /// (verified: matches Ollama's PromptEvalCount/EvalCount exactly) rather than digging into
     /// the raw Ollama type — a robustness improvement, since this keeps working even if the
@@ -1234,120 +1095,11 @@ public class AIService
         }
     }
 
-    /// <summary>
-    /// Routes a single model call to either the non-streaming API or a buffered streaming path,
-    /// per <see cref="MandoCodeConfig.StreamingMode"/>: <c>All</c> streams every model, <c>Cloud</c>
-    /// streams only cloud models (<see cref="MandoCodeConfig.IsCloudModel"/>), <c>Off</c> never
-    /// streams. The buffered path resets the stall watchdog on every chunk — so a long-but-healthy
-    /// generation never trips the watchdog — then returns a non-streaming-shaped result so the
-    /// fallback parser, token recording, and every caller behave identically (the assembled text is
-    /// the same either way, so a text-emitted tool call still reaches <see cref="FallbackFunctionCallExecutor"/>
-    /// intact). Verified against the live Ollama connector before defaulting to <c>All</c> (the
-    /// streaming spikes): structured auto-invoke (qwen2.5/glm-5.2), filter events, token metadata,
-    /// and a text-emitted call surviving the stream intact (gemma3) all checked.
-    /// </summary>
-    private async Task<ChatMessageContent> InvokeChatAsync(
-        ChatHistory history,
-        OllamaPromptExecutionSettings settings,
-        CancellationTokenSource responseCts,
-        CancellationToken linkedToken)
-    {
-        var useStreaming = _config.StreamingMode switch
-        {
-            ResponseStreamingMode.All => true,
-            ResponseStreamingMode.Cloud => MandoCodeConfig.IsCloudModel(_config.GetEffectiveModelName()),
-            _ => false // Off
-        };
-
-        if (!useStreaming)
-            return await _chatService.GetChatMessageContentAsync(history, settings, _kernel, linkedToken);
-
-        // HEARTBEAT: each streamed chunk pushes the stall watchdog forward by the full budget,
-        // so it can only fire on a genuine gap (no chunk for ModelResponseTimeoutSeconds). A tool
-        // call mid-stream pauses the watchdog via the filter's OnFunctionStarted; the next content
-        // chunk resumes the same budget, so the two compose. CancelAfter is thread-safe and a
-        // no-op once disposed.
-        var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
-        return await StreamBuffering.BufferAsync(
-            _chatService.GetStreamingChatMessageContentsAsync(history, settings, _kernel, linkedToken),
-            onChunk: () => { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } },
-            linkedToken);
-    }
-
     /// <summary>The stall watchdog fired: the model went silent (no tokens, no tool activity) past the per-call budget.</summary>
     private sealed class ModelStallException : Exception;
 
     /// <summary>The per-turn request-timeout ceiling (RequestTimeoutMinutes) was hit.</summary>
     private sealed class ModelCallTimeoutException : Exception;
-
-    /// <summary>
-    /// Attaches a stall watchdog to <paramref name="responseCts"/>: it fires after
-    /// <see cref="MandoCodeConfig.ModelResponseTimeoutSeconds"/> of pure model-generation time.
-    /// Tool calls — and the approval prompts that run inside them — PAUSE the watchdog: while any
-    /// function is in flight the timer is disabled, so a long-running tool (e.g. a build) or a user
-    /// deliberating at an approval prompt is never mistaken for a stalled model. The watchdog only
-    /// counts contiguous stretches where the model is generating with no tool activity. Dispose the
-    /// returned handle once the model call completes to detach the hooks.
-    /// </summary>
-    private IDisposable AttachStallWatchdog(
-        CancellationTokenSource responseCts,
-        bool pauseDuringPlan = false,
-        CancellationTokenSource? requestCts = null,
-        TimeSpan requestTimeout = default)
-    {
-        // Capture the filter locally so subscribe/unsubscribe target the same instance even if the
-        // kernel is rebuilt mid-flight. CancelAfter is thread-safe and a no-op once disposed.
-        var filter = _functionFilter;
-        var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
-
-        // When a plan is running inside this call, suppress tool-event resumes — see below.
-        var planActive = false;
-
-        void Pause() { try { responseCts.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
-        void Resume() { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } }
-
-        // A function entering flight pauses the watchdog; the last one leaving flight resumes it.
-        // PendingFunctionCount is already decremented before OnFunctionFinished fires, so a reading
-        // of 0 means no tool is in flight. AllowConcurrentInvocation is handled: the count only hits
-        // 0 when the final concurrent call completes.
-        void OnStarted() => Pause();
-        void OnFinished() { if (!planActive && filter.PendingFunctionCount == 0) Resume(); }
-
-        filter.OnFunctionStarted += OnStarted;
-        filter.OnFunctionFinished += OnFinished;
-
-        // Outer chat turn only: the whole plan executes inside this single model call (the
-        // propose_plan tool). Its steps legitimately generate large files with >timeout gaps
-        // between tool calls, and this call's token is threaded into the plan — so if the watchdog
-        // fired mid-plan it would cancel a step and surface as a bogus "Cancelled by user." Pause
-        // it for the plan's entire duration; the plan's own per-step watchdogs cover stalls there.
-        // (Plan-step watchdogs pass pauseDuringPlan=false: IsExecuting is already true for them, so
-        // honoring it would pin them paused and disable their stall detection.)
-        // The request-timeout ceiling (requestCts) ALSO wraps the whole plan and would
-        // misfire the same way — a long (or thrashing) plan that crosses RequestTimeoutMinutes
-        // got cancelled and mislabeled "Cancelled by user." So pause it for the plan too. Each
-        // plan step still has its OWN request timeout, so steps stay bounded; only the redundant
-        // outer ceiling is suspended. Resumed (fresh) for any post-plan model wrap-up.
-        void PauseRequest() { try { requestCts?.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
-        void ResumeRequest() { try { requestCts?.CancelAfter(requestTimeout); } catch (ObjectDisposedException) { } }
-
-        Action? onPlanStart = null, onPlanEnd = null;
-        if (pauseDuringPlan && _planHandoff != null)
-        {
-            onPlanStart = () => { planActive = true; Pause(); PauseRequest(); };
-            onPlanEnd = () => { planActive = false; Resume(); ResumeRequest(); };
-            _planHandoff.ExecutionStarted += onPlanStart;
-            _planHandoff.ExecutionFinished += onPlanEnd;
-        }
-
-        return new ActionDisposable(() =>
-        {
-            filter.OnFunctionStarted -= OnStarted;
-            filter.OnFunctionFinished -= OnFinished;
-            if (onPlanStart != null) _planHandoff!.ExecutionStarted -= onPlanStart;
-            if (onPlanEnd != null) _planHandoff!.ExecutionFinished -= onPlanEnd;
-        });
-    }
 
     /// <summary>Runs an action on Dispose. Used to detach stall-watchdog hooks deterministically.</summary>
     private sealed class ActionDisposable : IDisposable
@@ -1498,8 +1250,12 @@ public class AIService
             BuildStepContext(_systemPrompt, _currentTurnUserMessage, previousResults));
 
         // Create a temporary chat history for this step
-        var stepHistory = new ChatHistory(contextBuilder.ToString());
-        stepHistory.AddUserMessage($"Execute this step now: {stepInstruction}\n\nRemember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.");
+        List<ChatMessage> stepHistory =
+        [
+            new ChatMessage(ChatRole.System, contextBuilder.ToString()),
+            new ChatMessage(ChatRole.User,
+                $"Execute this step now: {stepInstruction}\n\nRemember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.")
+        ];
 
         var stepLabel = $"Step {previousResults.Count + 1}";
         var combined = new System.Text.StringBuilder();
@@ -1529,7 +1285,7 @@ public class AIService
                     await _completionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
 
                     processedResponse = _config.EnableFallbackFunctionParsing
-                        ? await _fallbackExecutor.ProcessAsync(response, _kernel, _config.GetEffectiveModelName())
+                        ? await _fallbackExecutor.ProcessAsync(response, _agentFunctions, _config.GetEffectiveModelName())
                         : response;
 
                     // Mirrors where SK's connector already mutated stepHistory with this round's
@@ -1603,12 +1359,15 @@ public class AIService
                 combined.AppendLine($"⚠ Provider rejected request (context window full). Restarting step with a compacted summary ({continuations}/{_config.MaxAutoContinuations}).");
                 combined.AppendLine();
 
-                stepHistory = new ChatHistory(contextBuilder.ToString());
-                stepHistory.AddUserMessage(
-                    $"Execute this step: {stepInstruction}\n\n" +
-                    $"A previous attempt hit the provider's context-window limit and was aborted. " +
-                    $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
-                    $"Continue from where it left off. Use the available functions to finish the step.");
+                stepHistory =
+                [
+                    new ChatMessage(ChatRole.System, contextBuilder.ToString()),
+                    new ChatMessage(ChatRole.User,
+                        $"Execute this step: {stepInstruction}\n\n" +
+                        $"A previous attempt hit the provider's context-window limit and was aborted. " +
+                        $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
+                        $"Continue from where it left off. Use the available functions to finish the step.")
+                ];
 
                 continue;
             }
@@ -1625,9 +1384,9 @@ public class AIService
 
             // The turn's own messages (including this response) were already appended above via
             // AppendAgentTurnToHistory — just add the nudge to keep going.
-            stepHistory.AddUserMessage(
+            stepHistory.Add(new ChatMessage(ChatRole.User,
                 "Continue from where you left off. Your previous response was a progress summary; " +
-                "the tool-call budget has been reset, so call tools again to finish this step.");
+                "the tool-call budget has been reset, so call tools again to finish this step."));
         }
     }
 
@@ -1643,23 +1402,36 @@ public class AIService
     /// doesn't reintroduce the overflow. Start/end indices let callers exclude messages
     /// they're about to re-seed fresh (e.g. the system prompt or current user message).
     ///
-    /// Tool-call activity often lives in <see cref="ChatMessageContent.Items"/> rather than
-    /// <c>Content</c> — SK's auto-invoke loop puts function calls/results there. Skipping
-    /// Items would drop most of the trace on a context-overflow recovery. We walk both.
+    /// Tool-call activity lives in <see cref="ChatMessage.Contents"/> alongside any text —
+    /// walking Contents (not the <c>Text</c> convenience view) is what surfaces it.
     /// </summary>
     private static string SynthesizeHistorySummary(
-        ChatHistory history,
+        List<ChatMessage> history,
         int startIndex = 2,
         int? endIndexExclusive = null,
         int maxChars = 1500)
     {
         var sb = new System.Text.StringBuilder();
         var end = endIndexExclusive ?? history.Count;
+
+        // Unlike SK's FunctionResultContent, MEAI's carries no function name — only the CallId
+        // its matching FunctionCallContent shares. Build that lookup once so the result line
+        // below can still read "list_all_project_files → ..." instead of a bare call id.
+        var callIdToName = new Dictionary<string, string>();
+        for (int i = Math.Max(0, startIndex); i < end; i++)
+        {
+            foreach (var item in history[i].Contents)
+            {
+                if (item is Microsoft.Extensions.AI.FunctionCallContent fc)
+                    callIdToName[fc.CallId] = fc.Name;
+            }
+        }
+
         for (int i = Math.Max(0, startIndex); i < end; i++)
         {
             var msg = history[i];
-            var role = msg.Role.Label;
-            var line = FormatMessageForSummary(msg);
+            var role = msg.Role.Value;
+            var line = FormatMessageForSummary(msg, callIdToName);
             if (string.IsNullOrEmpty(line)) continue;
 
             if (line.Length > 180) line = line[..180] + "...";
@@ -1676,35 +1448,38 @@ public class AIService
 
     /// <summary>
     /// Produces a one-line recap of a single chat message for the summary walker.
-    /// Falls back to <c>Items</c> (function calls / results) when <c>Content</c> is empty.
+    /// Falls back to walking <c>Contents</c> (function calls / results) when <c>Text</c> is empty.
+    /// <paramref name="callIdToName"/> recovers the function name for a result entry — MEAI's
+    /// FunctionResultContent carries only the call id, not the name.
     /// </summary>
-    private static string FormatMessageForSummary(Microsoft.SemanticKernel.ChatMessageContent msg)
+    private static string FormatMessageForSummary(ChatMessage msg, Dictionary<string, string> callIdToName)
     {
-        var content = msg.Content?.Trim();
+        var content = msg.Text?.Trim();
         if (!string.IsNullOrEmpty(content)) return content;
 
-        if (msg.Items == null || msg.Items.Count == 0) return "";
+        if (msg.Contents.Count == 0) return "";
 
         var parts = new List<string>();
-        foreach (var item in msg.Items)
+        foreach (var item in msg.Contents)
         {
             switch (item)
             {
-                case Microsoft.SemanticKernel.FunctionCallContent fc:
+                case Microsoft.Extensions.AI.FunctionCallContent fc:
                 {
                     var args = fc.Arguments != null && fc.Arguments.Count > 0
                         ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={Truncate(kv.Value?.ToString(), 40)}"))
                         : "";
-                    parts.Add($"called {fc.FunctionName}({args})");
+                    parts.Add($"called {fc.Name}({args})");
                     break;
                 }
-                case Microsoft.SemanticKernel.FunctionResultContent fr:
+                case Microsoft.Extensions.AI.FunctionResultContent fr:
                 {
                     var resultText = fr.Result?.ToString() ?? "";
-                    parts.Add($"{fr.FunctionName} → {Truncate(resultText, 80)}");
+                    var name = callIdToName.TryGetValue(fr.CallId, out var n) ? n : fr.CallId;
+                    parts.Add($"{name} → {Truncate(resultText, 80)}");
                     break;
                 }
-                case Microsoft.SemanticKernel.TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
+                case Microsoft.Extensions.AI.TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
                     parts.Add(tc.Text.Trim());
                     break;
             }
@@ -1727,10 +1502,19 @@ public class AIService
     // History persistence — full-fidelity session export/restore
     // ============================================================
     // Consumed by hosts that persist sessions across process restarts (MandoCode.Desktop's
-    // session restore; a future CLI --continue). Uses Semantic Kernel's own polymorphic
-    // content serialization, so assistant turns that carried function calls/results
-    // round-trip too — a restored model genuinely remembers what it read and did, rather
-    // than being briefed about it.
+    // session restore; a future CLI --continue). Uses MEAI's own polymorphic content
+    // serialization (plain System.Text.Json, no custom converters — verified to round-trip
+    // text/function-call/function-result content by ChatHistoryConversionTests before the
+    // cutover), so assistant turns that carried function calls/results round-trip too — a
+    // restored model genuinely remembers what it read and did, rather than being briefed
+    // about it.
+    //
+    // FORMAT NOTE: this JSON shape changed with the _chatHistory type migration (MEAI's
+    // ChatMessage/AIContent instead of SK's ChatMessageContent/KernelContent) — a session file
+    // saved by an older MandoCode version won't deserialize into the new shape. That's a
+    // one-time, silent degradation, not a crash: TryRestoreHistoryJson already treats any
+    // deserialization failure as "0 restored" and callers already fall back to lighter
+    // re-brief mechanisms for that case.
 
     /// <summary>
     /// Serializes the conversation — everything except the system prompt — to JSON.
@@ -1741,7 +1525,7 @@ public class AIService
     {
         try
         {
-            var messages = _chatHistory.Where(m => m.Role != AuthorRole.System).ToList();
+            var messages = _chatHistory.Where(m => m.Role != ChatRole.System).ToList();
             return messages.Count == 0 ? null : JsonSerializer.Serialize(messages);
         }
         catch
@@ -1754,19 +1538,20 @@ public class AIService
     /// Restores a previously exported conversation into the live history, after the current
     /// system prompt. Intended for a FRESH session right after construction — it appends,
     /// never replaces. Returns the number of messages restored; 0 means nothing usable
-    /// (corrupt/foreign JSON), and callers should fall back to lighter re-brief mechanisms.
+    /// (corrupt/foreign JSON, or JSON from a pre-migration MandoCode version — see the format
+    /// note above), and callers should fall back to lighter re-brief mechanisms.
     /// </summary>
     public int TryRestoreHistoryJson(string json)
     {
         try
         {
-            var messages = JsonSerializer.Deserialize<List<ChatMessageContent>>(json);
+            var messages = JsonSerializer.Deserialize<List<ChatMessage>>(json);
             if (messages == null) return 0;
 
             var restored = 0;
             foreach (var message in messages)
             {
-                if (message?.Role is null || message.Role == AuthorRole.System) continue;
+                if (message is null || message.Role == ChatRole.System) continue;
                 _chatHistory.Add(message);
                 restored++;
             }
@@ -1786,7 +1571,7 @@ public class AIService
             int lastUserIdx = -1;
             for (int i = _chatHistory.Count - 1; i >= 0; i--)
             {
-                if (_chatHistory[i].Role == AuthorRole.User)
+                if (_chatHistory[i].Role == ChatRole.User)
                 {
                     lastUserIdx = i;
                     break;
@@ -1794,7 +1579,7 @@ public class AIService
             }
             if (lastUserIdx < 1) return; // Nothing to compact.
 
-            var lastUserContent = _chatHistory[lastUserIdx].Content ?? "";
+            var lastUserContent = _chatHistory[lastUserIdx].Text ?? "";
 
             // Summarize everything between the system prompt (0) and the current user turn.
             var recap = SynthesizeHistorySummary(_chatHistory, startIndex: 1, endIndexExclusive: lastUserIdx);
@@ -1810,45 +1595,16 @@ public class AIService
             }
 
             _chatHistory.Clear();
-            _chatHistory.AddSystemMessage(_systemPrompt);
+            _chatHistory.Add(new ChatMessage(ChatRole.System, _systemPrompt));
             if (!string.IsNullOrWhiteSpace(recap) && recap != "(no prior activity captured)")
             {
-                _chatHistory.AddUserMessage(
+                _chatHistory.Add(new ChatMessage(ChatRole.User,
                     "[Prior conversation recap — the previous attempt hit the provider's context-window limit and was compacted:]\n" +
-                    recap);
+                    recap));
             }
-            _chatHistory.AddUserMessage(lastUserContent);
+            _chatHistory.Add(new ChatMessage(ChatRole.User, lastUserContent));
         }
         finally { _historyLock.Release(); }
-    }
-
-    /// <summary>
-    /// Extracts real token counts from a ChatMessageContent response and records them.
-    /// Non-critical — failures are silently swallowed.
-    /// </summary>
-    private void ExtractAndRecordTokens(ChatMessageContent response, string label)
-    {
-        try
-        {
-            if (response.InnerContent is OllamaSharp.Models.Chat.ChatDoneResponseStream done)
-            {
-                var promptTokens = done.PromptEvalCount;
-                var completionTokens = done.EvalCount;
-                if (promptTokens > 0 || completionTokens > 0)
-                {
-                    // EvalDuration is in nanoseconds — convert to seconds
-                    double? generationSeconds = done.EvalDuration > 0
-                        ? done.EvalDuration / 1_000_000_000.0
-                        : null;
-
-                    _tokenTracker.RecordModelUsage(promptTokens, completionTokens, label, generationSeconds);
-                }
-            }
-        }
-        catch
-        {
-            // Token extraction is non-critical — never let it break the flow
-        }
     }
 
     /// <summary>
@@ -1866,7 +1622,7 @@ public class AIService
         try
         {
             _chatHistory.Clear();
-            _chatHistory.AddSystemMessage(SystemPrompts.LearnModePrompt);
+            _chatHistory.Add(new ChatMessage(ChatRole.System, SystemPrompts.LearnModePrompt));
         }
         finally
         {
@@ -1883,8 +1639,8 @@ public class AIService
         try
         {
             _chatHistory.Clear();
-            _chatHistory.AddSystemMessage(_systemPrompt);
-            _functionFilter.ClearCache();
+            _chatHistory.Add(new ChatMessage(ChatRole.System, _systemPrompt));
+            _agentFunctionMiddleware!.ClearCache();
             _tokenTracker.Reset();
         }
         finally
@@ -1897,38 +1653,16 @@ public class AIService
     /// Gets the current chat history.
     /// </summary>
     // Public but currently uncalled anywhere in the repo (confirmed by a repo-wide search) —
-    // flagged by the migration survey as an SK type (ChatMessageContent) leaking out of
-    // AIService's public API regardless. Left as-is: this is still the live representation
-    // (_chatHistory), and it costs nothing to leave a public method around that nothing calls
-    // yet. See GetHistoryAsMeaiMessagesAsync below for the MAF-side sibling
-    // (feat/agent-framework-migration, Phase 5) — once the live cutover happens and _chatHistory
-    // itself goes away, this method is deleted alongside it rather than converted in place.
-    public async Task<IReadOnlyList<ChatMessageContent>> GetHistoryAsync()
+    // costs nothing to leave a public method around that nothing calls yet. Used to be two
+    // methods (an SK-typed GetHistoryAsync and a GetHistoryAsMeaiMessagesAsync sibling) before
+    // _chatHistory itself was migrated off SK's ChatHistory type — now there's only one
+    // representation to return, so they merged back into one method.
+    public async Task<IReadOnlyList<ChatMessage>> GetHistoryAsync()
     {
         await _historyLock.WaitAsync();
         try
         {
             return _chatHistory.ToList().AsReadOnly();
-        }
-        finally
-        {
-            _historyLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// MAF-side sibling of <see cref="GetHistoryAsync"/> — returns the same conversation via
-    /// <see cref="ChatHistoryConversion.ToMeaiMessages"/> instead of SK's <see
-    /// cref="ChatMessageContent"/>. Reads from the same <see cref="_chatHistory"/> (there's no
-    /// separate MAF-native history yet — <see cref="_agent"/> isn't live), so this is a
-    /// translation view, not an independent source of truth.
-    /// </summary>
-    public async Task<IReadOnlyList<Microsoft.Extensions.AI.ChatMessage>> GetHistoryAsMeaiMessagesAsync()
-    {
-        await _historyLock.WaitAsync();
-        try
-        {
-            return ChatHistoryConversion.ToMeaiMessages(_chatHistory).AsReadOnly();
         }
         finally
         {

@@ -4,12 +4,15 @@ using MandoCode.Services;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// Tests the shell-file-read classifier used to steer execute_command callers back to
-/// read_file_contents. The classifier protects the chat history from unbounded content
-/// dumps via type/cat/head/findstr/grep — see the shell-read circuit in
-/// FunctionInvocationFilter.OnFunctionInvocationAsync.
+/// Tests the shell-file-read and long-running-command classifiers used to steer
+/// execute_command callers back to read_file_contents and refuse dev-server-style commands.
+/// These protect the chat history from unbounded content dumps and the tool budget from a
+/// command that never exits — see AgentFunctionMiddleware.InterceptAsync's shell-read and
+/// long-running-command circuits. Ported unchanged from the retired SK-side
+/// FunctionInvocationFilter (feat/agent-framework-migration final cleanup) — the classifiers
+/// themselves are pure string logic, unaffected by the SK -> Agent Framework cutover.
 /// </summary>
-public class FunctionInvocationFilterTests
+public class ShellCommandClassifierTests
 {
     [Theory]
     // cmd.exe verbs.
@@ -43,7 +46,7 @@ public class FunctionInvocationFilterTests
     [InlineData("cmd /c type game.js")]
     public void LooksLikeShellFileRead_BlocksKnownReaders(string command)
     {
-        Assert.True(FunctionInvocationFilter.LooksLikeShellFileRead(command));
+        Assert.True(AgentFunctionMiddleware.LooksLikeShellFileRead(command));
     }
 
     [Theory]
@@ -74,7 +77,7 @@ public class FunctionInvocationFilterTests
     [InlineData("   ")]
     public void LooksLikeShellFileRead_AllowsNonReaders(string command)
     {
-        Assert.False(FunctionInvocationFilter.LooksLikeShellFileRead(command));
+        Assert.False(AgentFunctionMiddleware.LooksLikeShellFileRead(command));
     }
 
     [Theory]
@@ -110,7 +113,7 @@ public class FunctionInvocationFilterTests
     [InlineData("powershell -Command \"npm run dev\"")]
     public void LooksLikeLongRunningCommand_BlocksServers(string command)
     {
-        Assert.True(FunctionInvocationFilter.LooksLikeLongRunningCommand(command));
+        Assert.True(AgentFunctionMiddleware.LooksLikeLongRunningCommand(command));
     }
 
     [Theory]
@@ -130,6 +133,6 @@ public class FunctionInvocationFilterTests
     [InlineData("   ")]
     public void LooksLikeLongRunningCommand_AllowsOneShotCommands(string command)
     {
-        Assert.False(FunctionInvocationFilter.LooksLikeLongRunningCommand(command));
+        Assert.False(AgentFunctionMiddleware.LooksLikeLongRunningCommand(command));
     }
 }

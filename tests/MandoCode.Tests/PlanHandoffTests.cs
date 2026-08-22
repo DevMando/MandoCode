@@ -6,7 +6,7 @@ using MandoCode.Services;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// Tests for PlanHandoff — the bridge between FunctionInvocationFilter and the UI.
+/// Tests for PlanHandoff — the bridge between AgentFunctionMiddleware and the UI.
 /// </summary>
 public class PlanHandoffTests
 {

@@ -6,10 +6,10 @@ using Microsoft.Extensions.AI;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// MAF-side sibling of FunctionInvocationFilterLifecycleTests (feat/agent-framework-migration,
-/// Phase 6). Same regressions, same assertions — driven through AgentFunctionMiddleware.InterceptAsync
-/// directly instead of a real Kernel, via AgentMiddlewareTestHelpers. The SK tests stay in place
-/// and untouched; SK is still the live chat path until the actual cutover.
+/// MAF-side sibling of the old FunctionInvocationFilterLifecycleTests (feat/agent-framework-migration,
+/// Phase 6, since deleted along with the rest of SK). Same regressions, same assertions — driven
+/// through AgentFunctionMiddleware.InterceptAsync directly instead of a real Kernel, via
+/// AgentMiddlewareTestHelpers.
 /// </summary>
 public class AgentFunctionMiddlewareLifecycleTests
 {

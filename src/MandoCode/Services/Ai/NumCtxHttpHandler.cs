@@ -10,11 +10,11 @@ namespace MandoCode.Services;
 /// <c>options.num_ctx</c> &gt; the daemon's <c>OLLAMA_CONTEXT_LENGTH</c> env var &gt; the
 /// daemon default (which the Ollama desktop app's settings slider controls). MandoCode
 /// only sets the env var when it launches the daemon itself — when the tray app started
-/// it first, the in-app context-length setting was silently a no-op. The Semantic Kernel
-/// Ollama connector doesn't expose NumCtx on its execution settings, so this handler
-/// patches the request body instead: the configured window wins no matter who started
-/// the daemon, takes effect on the next message without a restart, and can differ per
-/// agent tab.
+/// it first, the in-app context-length setting was silently a no-op. MandoCode's own
+/// OllamaApiClient wiring (see AIService.BuildAgent) has no per-request num_ctx option to
+/// set, so this handler patches the request body instead: the configured window wins no
+/// matter who started the daemon, takes effect on the next message without a restart, and
+/// can differ per agent tab.
 ///
 /// <para><paramref name="getNumCtx"/> is re-read on every request so it tracks live
 /// config changes; return 0 to leave the request untouched (cloud models — their
