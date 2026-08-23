@@ -39,6 +39,11 @@ The full suite runs twice, once per build. 505 tests green on .NET 8 and 505 gre
   before switching over, and only removed Semantic Kernel once nothing in the codebase depended
   on it anymore. Same models, same tools, same approval prompts — this is a foundation swap
   underneath behavior that doesn't change.
+- **Excluded OllamaSharp's source generator from the build.** The generator ships built against
+  Roslyn 5.6, which is newer than the compiler in current Visual Studio and .NET SDK releases,
+  so loading it failed the build with CS9057 on developer machines while floating CI runners
+  stayed green. It only generates code for `[OllamaTool]`-annotated types, which this project
+  does not use, so excluding it costs nothing.
 
 ## [0.14.3] - 2026-07-28
 

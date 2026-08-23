@@ -56,7 +56,11 @@ Every change is covered by automated tests — the suite grew to 486 checks.
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.9.0" />
     <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
-    <PackageReference Include="OllamaSharp" Version="5.4.30" />
+    <!-- analyzers excluded: OllamaSharp's source generator is built against Roslyn 5.6,
+         newer than the compiler in current VS and .NET SDK builds, so loading it fails the
+         build with CS9057. It only generates code for [OllamaTool]-annotated types, which
+         this project does not use — MandoCode declares its tools its own way. -->
+    <PackageReference Include="OllamaSharp" Version="5.4.30" ExcludeAssets="analyzers" />
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
     <!-- Held at 2.x on purpose: NAudio 3.x raised its floor to net9.0, which would drop the
          net8.0 build entirely. Revisit when net8.0 is dropped (November 2026). -->
