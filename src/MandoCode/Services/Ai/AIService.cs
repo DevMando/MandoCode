@@ -560,16 +560,11 @@ public class AIService
         {
             using var scope = _agentFunctionMiddleware!.BeginScope();
 
-            // pauseDuringPlan: this outer call can run a whole plan (propose_plan). Both outer
-            // timers (the stall watchdog and the request-timeout ceiling) pause for the plan's
-            // duration so neither can cancel a step and surface as a bogus "Cancelled by user."
-            // Each step has its own watchdog + request timeout, so steps stay bounded.
             var result = await ExecuteAgentModelCallAsync(
                 _chatHistory,
                 retryOperationName: "ChatStreamAsync",
                 tokenLabel: "Chat",
                 spinnerMessage: "Thinking… (Esc to cancel)",
-                pauseDuringPlan: true,
                 cancellationToken);
 
             var rawResponse = string.IsNullOrEmpty(result.Text) ? "No response from AI." : result.Text;
@@ -870,18 +865,13 @@ public class AIService
         string retryOperationName,
         string tokenLabel,
         string spinnerMessage,
-        bool pauseDuringPlan,
         CancellationToken cancellationToken)
     {
         using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
         using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCts.Token, responseCts.Token);
 
-        using var watchdog = AttachAgentStallWatchdog(
-            responseCts,
-            pauseDuringPlan,
-            requestCts: pauseDuringPlan ? requestCts : null,
-            requestTimeout: TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
+        using var watchdog = AttachAgentStallWatchdog(responseCts);
 
         _spinner.Start(spinnerMessage);
 
@@ -1020,51 +1010,30 @@ public class AIService
     /// activity, via <see cref="_agentFunctionMiddleware"/>'s events. Dispose the returned handle
     /// once the model call completes to detach the hooks.
     ///
-    /// pauseDuringPlan: the outer chat turn's whole plan (propose_plan) executes inside this
-    /// single model call — pausing suppresses tool-event resumes so the plan's own per-step
-    /// watchdogs (which pass pauseDuringPlan=false) are the ones that fire on a stalled step, not
-    /// this outer one. The request-timeout ceiling (requestCts) pauses for the same reason: a
-    /// long-running plan crossing RequestTimeoutMinutes would otherwise get cancelled and
-    /// mislabeled "Cancelled by user."
+    /// There used to be a pauseDuringPlan mode here that suspended both this watchdog and the
+    /// request-timeout ceiling for the duration of a plan, because the whole plan ran inside the
+    /// propose_plan tool call and a slow step would otherwise trip a timer and surface as a bogus
+    /// "Cancelled by user." Plans now run after the turn unwinds, as a peer of the chat turn, so
+    /// there is no plan inside this call to protect against and each step keeps its own watchdog.
     /// </summary>
-    private IDisposable AttachAgentStallWatchdog(
-        CancellationTokenSource responseCts,
-        bool pauseDuringPlan = false,
-        CancellationTokenSource? requestCts = null,
-        TimeSpan requestTimeout = default)
+    private IDisposable AttachAgentStallWatchdog(CancellationTokenSource responseCts)
     {
         var middleware = _agentFunctionMiddleware!;
         var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
-
-        var planActive = false;
 
         void Pause() { try { responseCts.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
         void Resume() { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } }
 
         void OnStarted() => Pause();
-        void OnFinished() { if (!planActive && middleware.PendingFunctionCount == 0) Resume(); }
+        void OnFinished() { if (middleware.PendingFunctionCount == 0) Resume(); }
 
         middleware.OnFunctionStarted += OnStarted;
         middleware.OnFunctionFinished += OnFinished;
-
-        void PauseRequest() { try { requestCts?.CancelAfter(Timeout.InfiniteTimeSpan); } catch (ObjectDisposedException) { } }
-        void ResumeRequest() { try { requestCts?.CancelAfter(requestTimeout); } catch (ObjectDisposedException) { } }
-
-        Action? onPlanStart = null, onPlanEnd = null;
-        if (pauseDuringPlan && _planHandoff != null)
-        {
-            onPlanStart = () => { planActive = true; Pause(); PauseRequest(); };
-            onPlanEnd = () => { planActive = false; Resume(); ResumeRequest(); };
-            _planHandoff.ExecutionStarted += onPlanStart;
-            _planHandoff.ExecutionFinished += onPlanEnd;
-        }
 
         return new ActionDisposable(() =>
         {
             middleware.OnFunctionStarted -= OnStarted;
             middleware.OnFunctionFinished -= OnFinished;
-            if (onPlanStart != null) _planHandoff!.ExecutionStarted -= onPlanStart;
-            if (onPlanEnd != null) _planHandoff!.ExecutionFinished -= onPlanEnd;
         });
     }
 
@@ -1284,7 +1253,6 @@ public class AIService
                         retryOperationName: "ExecutePlanStepAsync",
                         tokenLabel: stepLabel,
                         spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
-                        pauseDuringPlan: false,
                         cancellationToken);
 
                     var response = string.IsNullOrEmpty(result.Text) ? "Step completed (no response content)." : result.Text;
@@ -1522,6 +1490,22 @@ public class AIService
     // one-time, silent degradation, not a crash: TryRestoreHistoryJson already treats any
     // deserialization failure as "0 restored" and callers already fall back to lighter
     // re-brief mechanisms for that case.
+
+    /// <summary>
+    /// Appends an assistant message to the conversation without calling the model.
+    /// </summary>
+    /// <remarks>
+    /// Used to record a completed plan's manifest. Deliberately does NOT re-invoke the model: the
+    /// old design let the outer model keep its turn after a plan finished, and it reliably read the
+    /// summary as "not started yet" and redid the work — which is why three separate layers existed
+    /// to argue it out of that. Writing the outcome straight into history removes the opportunity
+    /// rather than guarding against it.
+    /// </remarks>
+    public void AppendAssistantNote(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _chatHistory.Add(new ChatMessage(ChatRole.Assistant, text));
+    }
 
     /// <summary>
     /// Serializes the conversation — everything except the system prompt — to JSON.

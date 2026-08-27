@@ -118,13 +118,7 @@ public class AgentFunctionMiddleware
     {
         if (context.Function.Name == "propose_plan" && _planHandoff != null)
         {
-            if (_currentScope.Value?.PlanAlreadyProcessed == true)
-            {
-                return "A plan was already proposed and handled for this request. Do NOT propose another plan " +
-                       "or start new work. Respond to the user now with a brief summary of what was accomplished, then stop.";
-            }
-
-            return await HandleProposePlanAsync(context, cancellationToken);
+            return HandleProposePlan(context);
         }
 
         var scope = _currentScope.Value;
@@ -136,12 +130,20 @@ public class AgentFunctionMiddleware
                        "Stop immediately — do not call tools, write files, or continue the work.";
             }
 
-            if (scope.PlanWorkCompleted && IsMutatingFunction(context.Function.Name))
+            // A plan is queued for the moment this turn ends, so the model must not also do the
+            // work itself — it would race the plan and duplicate it. Mechanical, not a prose
+            // request: the refusal string is a courtesy, the refusal is the enforcement.
+            //
+            // This replaces the old post-plan mutation gate, which had to keep refusing mutations
+            // for the REST of the turn because the plan had already run inside the tool call and
+            // the model, never having seen the steps execute, would redo the work. With execution
+            // deferred there is no post-plan turn to guard, so the window shrinks to "between
+            // propose_plan and the end of this reply".
+            if (scope.ProposalPending && IsMutatingFunction(context.Function.Name))
             {
-                return "A plan already completed this work during this turn — the files it " +
-                       "created or modified exist on disk. Do NOT recreate or rewrite them. " +
-                       "Respond to the user with a brief summary of the completed work; if " +
-                       "further changes are needed, the user will ask in a follow-up message.";
+                return "A plan is queued and will run as soon as you finish this reply — it will " +
+                       "make these changes for you. Do NOT make them yourself. Reply now with one " +
+                       "short sentence telling the user their plan is ready to review.";
             }
 
             if (scope.BudgetExhausted)
@@ -563,25 +565,42 @@ public class AgentFunctionMiddleware
         }
     }
 
-    private async Task<string> HandleProposePlanAsync(FunctionInvocationContext context, CancellationToken cancellationToken)
+    /// <summary>
+    /// Records the proposal and returns immediately. The plan itself runs after this turn unwinds
+    /// (see <see cref="PlanHandoff.RunPendingPlanAsync"/>).
+    /// </summary>
+    /// <remarks>
+    /// This used to await the entire plan — approval, every step, every nested tool call and diff
+    /// prompt — inside this one tool call, and almost every oddity in the planner descended from
+    /// that: the outer stall watchdog had to be paused or it killed the plan, the prompt gate had
+    /// to be released early or step 1 deadlocked, and because the outer model's turn was still open
+    /// it treated the returned summary as "not started yet" and redid the work.
+    /// </remarks>
+    private string HandleProposePlan(FunctionInvocationContext context)
     {
         if (_planHandoff == null)
             return "Planning is not available in this context.";
+
+        // A step's own model call can reach propose_plan. Nested planning is always a runaway.
+        if (_planHandoff.IsExecuting)
+            return "A plan is already executing. Continue the current step instead of proposing a new plan.";
 
         var goal = GetArg(context, "goal") ?? string.Empty;
         context.Arguments.TryGetValue("steps", out var stepsObj);
         var proposals = CoerceProposals(stepsObj);
 
-        var summary = await _planHandoff.ProcessAsync(goal, proposals, cancellationToken);
+        // Malformed or empty args are common from local models; fall through to direct work rather
+        // than queueing a plan of empty steps.
+        if (proposals.Length == 0)
+            return "Proposed plan had no steps. Proceed without a plan.";
 
-        if (proposals.Length > 0)
-        {
-            _currentScope.Value?.MarkPlanProcessed();
-            if (_planHandoff.LastPlanExecutedWork)
-                _currentScope.Value?.MarkPlanWorkCompleted();
-        }
+        _planHandoff.SetPendingProposal(goal, proposals);
+        _currentScope.Value?.MarkProposalPending();
 
-        return summary;
+        return $"Plan received with {proposals.Length} step(s). It will be shown to the user for "
+             + "approval as soon as you finish this reply, and the approved steps will be executed "
+             + "for you. Do NOT start the work yourself and do NOT call propose_plan again. Reply "
+             + "now with one short sentence telling the user their plan is ready to review.";
     }
 
     private static PlanStepProposal[] CoerceProposals(object? raw)

@@ -280,36 +280,31 @@ public class InvocationScope : IDisposable
     }
 
     /// <summary>
-    /// Set once a propose_plan call with real steps has been fully processed this turn
-    /// (executed, rejected, or cancelled). A second proposal in the same turn is always
-    /// a runaway — observed live: a model completed a 5-step plan, immediately started
-    /// building an uninvited duplicate of the project, then proposed a THIRD round of
-    /// work. The filter short-circuits any repeat proposal with a stop directive.
-    /// One plan per user request; the user can always ask for more.
+    /// Set when the model has proposed a plan that will run as soon as this turn unwinds.
+    /// Mutating calls are refused while it holds, because the queued plan is about to make those
+    /// same changes and the model would otherwise race it and duplicate the work. Reads stay
+    /// allowed. A fresh scope (the next turn) resets this.
     /// </summary>
-    public bool PlanAlreadyProcessed { get; private set; }
+    /// <remarks>
+    /// Replaces two earlier circuits that both existed because the plan used to execute inside the
+    /// propose_plan tool call:
+    /// <list type="bullet">
+    /// <item><c>PlanAlreadyProcessed</c>, which refused a second proposal in the same turn —
+    /// observed live, a model finished a 5-step plan, immediately began an uninvited duplicate of
+    /// the project, then proposed a THIRD round of work. With execution deferred, a second proposal
+    /// is harmless: it simply replaces the first in the single-slot store.</item>
+    /// <item><c>PlanWorkCompleted</c>, the post-plan mutation gate, which refused mutations for the
+    /// rest of the turn after a plan ran — observed live overwriting a finished build under an
+    /// auto-approved session, because the outer model never saw the steps execute and read the
+    /// summary as "not started yet". There is no post-plan turn any more, so the guard's window
+    /// shrinks to the gap between propose_plan and the end of the reply.</item>
+    /// </list>
+    /// </remarks>
+    public bool ProposalPending { get; private set; }
 
-    public void MarkPlanProcessed()
+    public void MarkProposalPending()
     {
-        lock (_lock) PlanAlreadyProcessed = true;
-    }
-
-    /// <summary>
-    /// Set when a plan executed at least one step to completion in this scope. The
-    /// filter's post-plan mutation gate then refuses filesystem-mutating calls for the
-    /// rest of the turn: the outer model never sees the steps run (each executes in its
-    /// own chat history), so it tends to treat the returned summary as "not started yet"
-    /// and redo the task — observed live overwriting a finished build under an
-    /// auto-approved session. Reads stay allowed; a fresh scope (next turn) resets this.
-    /// Distinct from <see cref="PlanAlreadyProcessed"/>, which is also set for rejected
-    /// plans — after a rejection the model must do the work directly, so mutations
-    /// must stay allowed there.
-    /// </summary>
-    public bool PlanWorkCompleted { get; private set; }
-
-    public void MarkPlanWorkCompleted()
-    {
-        lock (_lock) PlanWorkCompleted = true;
+        lock (_lock) ProposalPending = true;
     }
 
     /// <summary>

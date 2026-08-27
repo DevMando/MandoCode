@@ -47,11 +47,16 @@ public class PlanHandoff
 
     /// <summary>
     /// Raised immediately before plan approval + execution begins, and again when it ends
-    /// (success, rejection, or throw). The whole plan runs inside a single outer model call
-    /// (the propose_plan tool), so the outer call's stall watchdog would otherwise fire mid-plan
-    /// on a slow step and surface as a bogus "Cancelled by user." AIService subscribes to pause
-    /// that outer watchdog for the plan's duration — the plan's own per-step watchdogs cover stalls.
+    /// (success, rejection, or throw).
     /// </summary>
+    /// <remarks>
+    /// AIService used to subscribe to these to suspend the outer stall watchdog and the
+    /// request-timeout ceiling, because the whole plan ran inside the propose_plan tool call and a
+    /// slow step would otherwise trip a timer and surface as a bogus "Cancelled by user." Plans now
+    /// run after the turn unwinds, so no timer is running to suspend and that subscription is gone.
+    /// The events remain as a UI extension point — they're multicast, unlike
+    /// <see cref="OnPlanRequested"/>, so a host can observe plan activity without owning it.
+    /// </remarks>
     public event Action? ExecutionStarted;
     public event Action? ExecutionFinished;
 
@@ -82,10 +87,64 @@ public class PlanHandoff
         }
     }
 
+    // Single-slot holder for a plan the model proposed during the current turn. The plan is NOT
+    // run here: propose_plan returns a receipt immediately and the host runs the plan after the
+    // turn unwinds (see RunPendingPlanAsync). Last write wins — a model that proposes twice in one
+    // turn simply replaces its own proposal, which is strictly better than the old behavior of
+    // refusing the second one with a prose directive it could ignore anyway.
+    private (string Goal, PlanStepProposal[] Steps)? _pendingProposal;
+
+    /// <summary>True when the model proposed a plan this turn that hasn't been run yet.</summary>
+    public bool HasPendingProposal
+    {
+        get { lock (_lock) return _pendingProposal != null; }
+    }
+
+    /// <summary>Records a proposal for the host to run once the current turn finishes.</summary>
+    public void SetPendingProposal(string goal, PlanStepProposal[] steps)
+    {
+        lock (_lock) _pendingProposal = (goal, steps);
+    }
+
+    /// <summary>Drops any pending proposal — used when a turn ends without running one.</summary>
+    public void ClearPendingProposal()
+    {
+        lock (_lock) _pendingProposal = null;
+    }
+
     /// <summary>
-    /// Called by AgentFunctionMiddleware when the model invokes propose_plan.
-    /// Guards against recursive planning (the model calling propose_plan while a
-    /// previous plan is still running) by returning a short-circuit message.
+    /// Runs the proposal recorded during the turn that just ended, if there is one, and returns the
+    /// manifest the caller should place into chat history. Returns <c>null</c> when no plan was
+    /// proposed.
+    /// </summary>
+    /// <remarks>
+    /// This is the entry point hosts call after their chat turn has fully drained. It exists so the
+    /// plan is a <i>peer</i> of the chat turn rather than a child of a tool call — the change that
+    /// removes the need for the outer watchdog pause, the prompt-gate release dance, and the
+    /// post-plan mutation gate.
+    /// <para>
+    /// Hosts that previously relied on the plan running inside <c>propose_plan</c> must call this;
+    /// without it a proposed plan is simply never executed.
+    /// </para>
+    /// </remarks>
+    public async Task<string?> RunPendingPlanAsync(CancellationToken ct = default)
+    {
+        (string Goal, PlanStepProposal[] Steps)? pending;
+        lock (_lock)
+        {
+            pending = _pendingProposal;
+            _pendingProposal = null;
+        }
+
+        if (pending == null) return null;
+
+        return await ProcessAsync(pending.Value.Goal, pending.Value.Steps, ct);
+    }
+
+    /// <summary>
+    /// Runs an approved plan end to end and returns the manifest describing what happened.
+    /// Guards against recursive planning (a plan step proposing another plan) by returning a
+    /// short-circuit message.
     /// </summary>
     public async Task<string> ProcessAsync(
         string goal,

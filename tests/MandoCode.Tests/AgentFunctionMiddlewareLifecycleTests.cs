@@ -212,30 +212,72 @@ public class AgentFunctionMiddlewareLifecycleTests
     }
 
     [Fact]
-    public async Task SecondProposePlan_InSameTurn_IsShortCircuited()
+    public async Task ProposePlan_QueuesThePlan_WithoutRunningIt()
     {
+        // The defining property of the deferred-proposal design: propose_plan returns a receipt and
+        // the plan runs only once the host drains the turn. Previously this single call awaited
+        // approval and every step inline, which is what forced the watchdog pause, the prompt-gate
+        // release dance, and the post-plan mutation gate into existence.
+        var ran = false;
         var handoff = new PlanHandoff
         {
-            OnPlanRequested = (_, _) => Task.FromResult("plan executed")
+            OnPlanRequested = (_, _) => { ran = true; return Task.FromResult("plan executed"); }
         };
         var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
         var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
         using var scope = middleware.BeginScope();
 
-        var args = new AIFunctionArguments
+        var receipt = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
         {
             ["goal"] = "build a game",
             ["steps"] = "[{\"description\":\"step one\",\"instruction\":\"do the thing\"}]"
+        });
+
+        Assert.False(ran);
+        Assert.True(handoff.HasPendingProposal);
+        Assert.True(scope.ProposalPending);
+        Assert.Contains("Plan received", receipt?.ToString());
+
+        // ...and it runs when the host asks for it, after the turn.
+        var manifest = await handoff.RunPendingPlanAsync();
+        Assert.True(ran);
+        Assert.Equal("plan executed", manifest);
+        Assert.False(handoff.HasPendingProposal);
+    }
+
+    [Fact]
+    public async Task SecondProposePlan_InSameTurn_ReplacesTheFirst()
+    {
+        // Previously refused outright, because a second proposal meant the first had already run
+        // and the model was starting uninvited extra work. With execution deferred nothing has run
+        // yet, so last-wins is both correct and safer than a prose refusal the model can ignore.
+        TaskPlan? executed = null;
+        var handoff = new PlanHandoff
+        {
+            OnPlanRequested = (plan, _) => { executed = plan; return Task.FromResult("done"); }
         };
+        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
-        var first = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, args);
-        Assert.Contains("plan executed", first?.ToString());
-        Assert.True(scope.PlanAlreadyProcessed);
+        using var scope = middleware.BeginScope();
 
-        var second = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, args);
-        Assert.Contains("already proposed", second?.ToString());
-        Assert.DoesNotContain("plan executed", second?.ToString());
+        await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+        {
+            ["goal"] = "first goal",
+            ["steps"] = "[{\"description\":\"one\",\"instruction\":\"do one\"}]"
+        });
+        await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+        {
+            ["goal"] = "second goal",
+            ["steps"] = "[{\"description\":\"two\",\"instruction\":\"do two\"},{\"description\":\"three\",\"instruction\":\"do three\"}]"
+        });
+
+        await handoff.RunPendingPlanAsync();
+
+        Assert.NotNull(executed);
+        Assert.Equal("second goal", executed!.OriginalRequest);
+        Assert.Equal(2, executed.Steps.Count);
     }
 
     [Fact]
@@ -250,19 +292,51 @@ public class AgentFunctionMiddlewareLifecycleTests
 
         using var scope = middleware.BeginScope();
 
-        var malformed = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+        await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
         {
             ["goal"] = "build a game",
             ["steps"] = "not json at all"
         });
-        Assert.False(scope.PlanAlreadyProcessed);
+        Assert.False(scope.ProposalPending);
+        Assert.False(handoff.HasPendingProposal);
 
-        var retry = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+        await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
         {
             ["goal"] = "build a game",
             ["steps"] = "[{\"description\":\"step one\",\"instruction\":\"do the thing\"}]"
         });
-        Assert.Contains("plan executed", retry?.ToString());
-        Assert.True(scope.PlanAlreadyProcessed);
+        Assert.True(scope.ProposalPending);
+        Assert.True(handoff.HasPendingProposal);
+    }
+
+    [Fact]
+    public async Task ProposePlan_DuringPlanExecution_IsRefused()
+    {
+        // A step's own model call can reach propose_plan. Nested planning is always a runaway.
+        var handoff = new PlanHandoff();
+        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
+
+        string? nested = null;
+        handoff.OnPlanRequested = async (_, _) =>
+        {
+            using var stepScope = middleware.BeginScope();
+            nested = (await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+            {
+                ["goal"] = "a plan within a plan",
+                ["steps"] = "[{\"description\":\"nested\",\"instruction\":\"nested\"}]"
+            }))?.ToString();
+            return "outer done";
+        };
+
+        using var scope = middleware.BeginScope();
+        await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
+        {
+            ["goal"] = "outer",
+            ["steps"] = "[{\"description\":\"one\",\"instruction\":\"do one\"}]"
+        });
+        await handoff.RunPendingPlanAsync();
+
+        Assert.Contains("already executing", nested);
     }
 }

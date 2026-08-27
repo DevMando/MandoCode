@@ -1786,6 +1786,13 @@
             }
 
             AnsiConsole.WriteLine();
+
+            // The model's turn is fully drained. Only now do we run any plan it proposed — the
+            // plan is a peer of the chat turn, not a child of the propose_plan tool call. Running
+            // it here is what lets the outer stall watchdog and request ceiling stay untouched
+            // (they've already completed), lets the prompt gate be held normally, and leaves the
+            // model with no open turn afterwards to redo the work in.
+            await RunPendingPlanAsync();
         }
         catch (OperationCanceledException)
         {
@@ -1946,6 +1953,71 @@
         _planSelectTcs?.TrySetResult(choice);
     }
 
+    private enum PlanTurnOutcome { None, Executed, Rejected, Cancelled }
+
+    private PlanTurnOutcome _lastPlanOutcome = PlanTurnOutcome.None;
+
+    // Bounds the answer-directly follow-up to a single extra turn. Without it a model that responds
+    // to a rejection by proposing another plan could ping-pong indefinitely.
+    private int _planFollowUpDepth;
+
+    /// <summary>
+    /// Runs a plan the model proposed during the turn that just finished, then records the outcome
+    /// in chat history. No-op when no plan was proposed.
+    /// </summary>
+    /// <remarks>
+    /// An executed plan's manifest goes into history as an assistant note rather than being fed back
+    /// to the model for a closing turn. That is deliberate: giving the model an open turn after a
+    /// plan is exactly what used to make it redo the work, and no amount of "the files already
+    /// exist" phrasing reliably stopped it.
+    /// <para>
+    /// A rejected plan is the one case that does need another turn — the user asked for a direct
+    /// answer instead of stepwise execution, and before plans were deferred the model got that for
+    /// free by simply continuing its open turn.
+    /// </para>
+    /// </remarks>
+    private async Task RunPendingPlanAsync()
+    {
+        if (!PlanHandoff.HasPendingProposal) return;
+
+        // Already inside the post-rejection follow-up: the user has just declined a plan, so
+        // silently running another one would be the opposite of what they asked for.
+        if (_planFollowUpDepth > 0)
+        {
+            PlanHandoff.ClearPendingProposal();
+            return;
+        }
+
+        var ct = _requestCts?.Token ?? CancellationToken.None;
+
+        _lastPlanOutcome = PlanTurnOutcome.None;
+        var manifest = await PlanHandoff.RunPendingPlanAsync(ct);
+
+        if (_lastPlanOutcome == PlanTurnOutcome.Rejected)
+        {
+            _planFollowUpDepth++;
+            try
+            {
+                await ProcessDirectRequestAsync(
+                    "[system: the user reviewed your proposed plan and chose to skip stepwise "
+                  + "execution. Answer their original request directly now. Do not call propose_plan.]");
+            }
+            finally
+            {
+                _planFollowUpDepth--;
+            }
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(manifest)) return;
+
+        AI.AppendAssistantNote(manifest);
+
+        // Keep --continue honest: the plan's outcome is part of this turn.
+        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+        catch { /* persistence must never break the chat */ }
+    }
+
     private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
     {
         string choice;
@@ -1975,23 +2047,29 @@
 
         if (choice == CancelRequestLabel)
         {
+            _lastPlanOutcome = PlanTurnOutcome.Cancelled;
             AnsiConsole.MarkupLine("[dim]Plan cancelled.[/]");
             AnsiConsole.WriteLine();
-            // Returning a "stop here" string is a POLITE REQUEST that small models ignore —
-            // observed live: the model received it and simply executed the cancelled plan's
-            // steps itself via direct tool calls. Cancel the request token so the turn
-            // mechanically unwinds (same path as Esc); the string below only matters in the
-            // narrow window before the cancellation lands.
+            // Cancel the token rather than trusting a "stop here" string. This predates deferred
+            // execution — observed live, the model received exactly that string and went on to
+            // execute the cancelled plan's steps itself via direct tool calls. The model has no
+            // open turn to do that in any more, but cancelling is still what unwinds the plan run
+            // itself (same path as Esc), so it stays.
             _requestCts?.Cancel();
             return "User cancelled the request. Stop here and do not take further action.";
         }
 
         if (choice == RejectPlanLabel)
         {
-            AnsiConsole.MarkupLine("[dim]Plan rejected — continuing without stepwise execution.[/]");
+            _lastPlanOutcome = PlanTurnOutcome.Rejected;
+            AnsiConsole.MarkupLine("[dim]Plan rejected — answering directly instead.[/]");
             AnsiConsole.WriteLine();
-            return "User rejected the proposed plan. Respond to the original request directly without calling propose_plan again.";
+            // The caller turns this into a fresh follow-up turn: with execution deferred there is
+            // no open turn left for the model to answer in, so one is started explicitly.
+            return "User rejected the proposed plan.";
         }
+
+        _lastPlanOutcome = PlanTurnOutcome.Executed;
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[green]Executing plan...[/]");
