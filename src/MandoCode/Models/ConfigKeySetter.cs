@@ -142,6 +142,31 @@ public static class ConfigKeySetter
                 }
                 return Fail("Error: Value must be 'true' or 'false'");
 
+            case "planner":
+            case "plannerengine":
+                // Deliberately separate from taskPlanning, which decides whether there is a
+                // planner at all (it gates registering propose_plan). Overloading that key
+                // would make "planning off" and "old engine" the same state and render any
+                // A/B between the two engines uninterpretable.
+                var planner = value.Trim().ToLowerInvariant();
+                if (planner is "default" or "auto" or "clear")
+                {
+                    config.PlannerEngine = null;
+                    return new(true, "✓ Planner engine reset to this build's default", ApplyScope.KernelRebuild);
+                }
+                if (planner == MandoCodeConfig.PlannerEngineLegacy)
+                {
+                    config.PlannerEngine = planner;
+                    return new(true, "✓ Planner engine set to: legacy", ApplyScope.KernelRebuild);
+                }
+                if (planner == MandoCodeConfig.PlannerEngineWorkflow)
+                {
+                    // The workflow engine lands in a later phase; accept the name only when the
+                    // graph actually exists, so nobody selects a no-op and thinks it took.
+                    return Fail("Error: The 'workflow' planner is not available in this build yet");
+                }
+                return Fail("Error: Value must be 'legacy' or 'default'");
+
             case "streaming":
             case "responsestreaming":
                 var streamMode = value.Trim().ToLowerInvariant();
@@ -249,6 +274,7 @@ public static class ConfigKeySetter
         maxContinuations     {config.MaxAutoContinuations}  ({MandoCodeConfig.MinMaxAutoContinuations}-{MandoCodeConfig.MaxMaxAutoContinuations})
         renderTimeout        {config.MarkdownRenderTimeoutSeconds}s  ({MandoCodeConfig.MinMarkdownRenderTimeoutSeconds}-{MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds})
         taskPlanning         {config.EnableTaskPlanning}
+        planner              {config.PlannerEngine ?? "default"}  (legacy | default)
         diffApprovals        {config.EnableDiffApprovals}
         webSearch            {config.EnableWebSearch}
         tavilyKey            {(string.IsNullOrWhiteSpace(config.TavilyApiKey) ? "not set" : MandoCodeConfig.MaskApiKey(config.TavilyApiKey))}  (Tavily API key for reliable web search — free at https://app.tavily.com; "clear" to remove)

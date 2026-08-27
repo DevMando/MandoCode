@@ -10,16 +10,29 @@ namespace MandoCode.Services;
 /// <see cref="FromProposals"/>. A slim deterministic heuristic (<see cref="RequiresPlanning"/>)
 /// only exists for local models that don't reliably self-invoke the tool.
 /// </summary>
-public class TaskPlannerService
+public class TaskPlannerService : IPlanRunner
 {
-    private readonly AIService _aiService;
+    private readonly IPlanStepExecutor _stepExecutor;
     private readonly MandoCodeConfig _config;
     private readonly object _planStatusLock = new();
 
-    public TaskPlannerService(AIService aiService, MandoCodeConfig config)
+    /// <summary>
+    /// Preferred constructor. Taking the step executor rather than <see cref="AIService"/> is what
+    /// lets plan sequencing, cancellation and skip/fail handling be tested without a live model.
+    /// </summary>
+    public TaskPlannerService(IPlanStepExecutor stepExecutor, MandoCodeConfig config)
     {
-        _aiService = aiService;
+        _stepExecutor = stepExecutor ?? throw new ArgumentNullException(nameof(stepExecutor));
         _config = config;
+    }
+
+    /// <summary>
+    /// Delegating overload kept so existing callers — including the Desktop app, which constructs
+    /// this by hand — compile unchanged against this commit.
+    /// </summary>
+    public TaskPlannerService(AIService aiService, MandoCodeConfig config)
+        : this(new AiServicePlanStepExecutor(aiService), config)
+    {
     }
 
     /// <summary>
@@ -121,7 +134,7 @@ public class TaskPlannerService
 
             try
             {
-                var result = await _aiService.ExecutePlanStepAsync(step.Instruction, previousResults, cancellationToken);
+                var result = await _stepExecutor.ExecuteStepAsync(step.Instruction, previousResults, cancellationToken);
 
                 step.Result = result;
                 step.Status = TaskStepStatus.Completed;
@@ -161,7 +174,7 @@ public class TaskPlannerService
                 stepEvent = TaskProgressEvent.StepFailed(plan, step, ex.Message);
             }
 
-            await _aiService.CompletionTracker.WaitForAllCompletionsAsync(TimeSpan.FromSeconds(5));
+            await _stepExecutor.WaitForQuiescenceAsync(TimeSpan.FromSeconds(5));
 
             if (stepEvent != null)
             {

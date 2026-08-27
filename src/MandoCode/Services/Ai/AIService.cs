@@ -393,7 +393,14 @@ public class AIService
         // version ships — see memory agent-framework-migration.md.
         var baseAgent = ollamaClient.AsAIAgent(new ChatClientAgentOptions
         {
-            Name = "MandoCode",
+            // Id is pinned, not left to MAF to synthesize, because workflow-executor identity
+            // derives from BOTH Id and Name. BuildAgent runs again on every MCP reconcile and
+            // every KernelRebuild-scoped /config set, so a synthesized Id would change
+            // mid-session and orphan any checkpoint written before it — silently, with no error.
+            // Must never incorporate anything volatile (model, temperature, project path).
+            // See PlanExecutorIds for the rest of the identity scheme.
+            Id = PlanExecutorIds.GeneralistAgentId,
+            Name = PlanExecutorIds.GeneralistAgentName,
             ChatOptions = new Microsoft.Extensions.AI.ChatOptions
             {
                 Instructions = _systemPrompt,

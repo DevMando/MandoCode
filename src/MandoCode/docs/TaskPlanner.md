@@ -309,10 +309,57 @@ See the main [README](../../../README.md#diff-approvals) for user-facing documen
 
 ---
 
+## Migration to MAF Workflows (in progress)
+
+The planner is being rebuilt on `Microsoft.Agents.AI.Workflows`. The driver is a single root cause:
+**the whole plan currently executes inside one `propose_plan` tool call.** Because the outer model's
+turn is still open, it never sees the steps run, treats the summary as "not started yet," and redoes
+the work — so `BuildManifest`, the App.razor stop directive, and the `PlanWorkCompleted` gate all
+exist to stop it. The watchdog pause and the prompt-gate release dance have the same origin.
+
+Decision: an **authored `WorkflowBuilder` graph**, not Magentic. Magentic's .NET manager is more
+local-model-tolerant than expected (prompt-injected schema, tolerant JSON extraction, 3 retries),
+but MandoCode has one agent — so `next_speaker` selection is degenerate — it throws and kills the
+run after 3 ledger parse failures with no way to raise the limit, and **its manager cannot have
+tools**, which would mean planning code changes against a repo it can't read. Handoff is rejected
+too: it routes via `handoff_to_*` tool calls that cannot be forced, the worst possible dependency on
+7B–30B instruction-following.
+
+| Phase | Scope | State |
+|---|---|---|
+| 0 | Spike the real 1.19.0 assembly | done |
+| 1 | Freeze identity / checkpoint envelope / config key; extract `IPlanRunner` + `IPlanStepExecutor` | done |
+| 2 | Un-nest: `propose_plan` returns a receipt, the host runs the plan after the turn drains | next |
+| 3 | The graph: 8 fixed executors, two `RequestPort`s, read-only progress | |
+| 4 | Checkpointing + resume | |
+| 5 | Retry / replan / forced-tool-use escalation | |
+| 6 | Flip the `planner` default, then delete the legacy runner | |
+
+Spike findings worth keeping:
+
+- A middleware-decorated agent **keeps its middleware** when used as a workflow executor (verified on
+  net10.0 and net8.0). The guard circuits survive the boundary.
+- `Microsoft.Agents.AI.Workflows` requires `Microsoft.Agents.AI` at the *same* version — a mismatch is
+  `NU1605`, which `TreatWarningsAsErrors` turns into a build error. Bump both together.
+- No `<NoWarn>` is needed: `WorkflowBuilder`, `RequestPort`, `InProcessExecution`, `CheckpointManager`
+  and `FileSystemJsonCheckpointStore` carry no `[Experimental]` attribute in 1.19.0.
+- ⚠️ **`WatchStreamAsync` returns before the run quiesces.** Poll `GetStatusAsync()` until it leaves
+  `RunStatus.Running` before declaring a plan finished — measuring at stream-end reports a plan
+  complete while its steps are still writing files.
+
+Executor and agent identities are fixed in `PlanExecutorIds` and must not drift: MAF derives
+workflow-executor identity from both the agent's `Id` and `Name`, and a checkpoint written under one
+identity can never be resumed under another. `PlanExecutorIdsTests` holds a golden list precisely so
+a rename fails loudly.
+
+---
+
 ## Future Improvements
 
 - [ ] Step dependency graph for parallel execution of independent steps
-- [ ] Plan persistence for resuming interrupted plans across sessions
-- [ ] User-editable plan before approval
+- [~] Plan persistence for resuming interrupted plans across sessions — in progress, phase 4 above;
+      envelope and identity scheme already landed in phase 1
+- [~] User-editable plan before approval — in progress, phase 3 above; the approval view will also
+      show each step's `Instruction`, which today is never shown before the user approves it
 - [x] ~~Mid-generation progress signals~~ — shipped: `StreamingMode` config streams chunks as the model emits them (via `_agent.RunStreamingAsync`, buffered through `StreamBuffering` for the stall-watchdog heartbeat), with non-streaming still available as a fallback for models where streaming + auto-invoke proved unreliable.
 - [ ] Smarter `Required` vs `Auto` tool-choice on plan-step first turn (force a tool call on steps that the model drifts into prose on)
