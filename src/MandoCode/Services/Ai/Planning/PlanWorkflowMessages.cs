@@ -17,6 +17,16 @@ internal static class PlanWorkflowMessages
 
     /// <summary>Key under <see cref="StateScope"/> holding the zero-based index of the next step.</summary>
     public const string CursorKey = "cursor";
+
+    /// <summary>
+    /// Key under <see cref="StateScope"/> holding the whole <see cref="PlanRunState"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the run resumable: MAF captures shared state at every superstep boundary,
+    /// so anything here survives a checkpoint. Anything held only in <see cref="PlanRunContext"/>
+    /// does not — that object carries live delegates and cannot be serialized.
+    /// </remarks>
+    public const string StateKey = "state";
 }
 
 /// <summary>Kicks off a run. Carries nothing: the plan itself is owned by the run context.</summary>

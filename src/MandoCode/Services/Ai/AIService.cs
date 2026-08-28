@@ -1276,8 +1276,10 @@ public class AIService
                             // output that is about to be rendered as markdown anyway.
                             narration.Append(text);
                             var line = narration.Shortened(SpinnerNarrationWidth);
-                            _spinner.UpdateActivity(
-                                line == null ? baseSpinnerMessage : $"{stepLabel} — {line}");
+                            // The model's line alone — no step number. The harness already prints
+                            // the authoritative "Step 2/3:" header above, and a second number
+                            // beside it is the same confusion the model's own invented counts caused.
+                            _spinner.UpdateActivity(line ?? baseSpinnerMessage);
                         });
 
                     var response = string.IsNullOrEmpty(result.Text) ? "Step completed (no response content)." : result.Text;

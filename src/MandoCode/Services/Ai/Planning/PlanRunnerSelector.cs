@@ -18,7 +18,8 @@ namespace MandoCode.Services;
 public sealed class PlanRunnerSelector(
     MandoCodeConfig config,
     TaskPlannerService legacyRunner,
-    IPlanStepExecutor stepExecutor)
+    IPlanStepExecutor stepExecutor,
+    PlanHandoff? planHandoff = null)
 {
     private WorkflowPlanRunner? _workflowRunner;
 
@@ -28,6 +29,6 @@ public sealed class PlanRunnerSelector(
 
     /// <summary>The engine to run the next plan with.</summary>
     public IPlanRunner Current => UsingWorkflowEngine
-        ? _workflowRunner ??= new WorkflowPlanRunner(stepExecutor)
+        ? _workflowRunner ??= new WorkflowPlanRunner(stepExecutor, planHandoff)
         : legacyRunner;
 }

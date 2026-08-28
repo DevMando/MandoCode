@@ -21,10 +21,14 @@ namespace MandoCode.Services;
 /// between a 3-step and a 12-step plan.
 /// </para>
 /// </remarks>
-public sealed class WorkflowPlanRunner(IPlanStepExecutor stepExecutor) : IPlanRunner
+public sealed class WorkflowPlanRunner(IPlanStepExecutor stepExecutor, PlanHandoff? planHandoff = null) : IPlanRunner
 {
     private readonly IPlanStepExecutor _stepExecutor = stepExecutor
         ?? throw new ArgumentNullException(nameof(stepExecutor));
+
+    // Optional: supplies the file-operation evidence recorded at the middleware choke point, which
+    // is part of what a resumed run needs in order to know what already happened on disk.
+    private readonly PlanHandoff? _planHandoff = planHandoff;
 
     /// <summary>
     /// One progress event, plus an optional handshake the producer waits on.
@@ -59,7 +63,7 @@ public sealed class WorkflowPlanRunner(IPlanStepExecutor stepExecutor) : IPlanRu
             await ack.Task;
         }
 
-        var ctx = new PlanRunContext(plan, _stepExecutor, RaiseAsync, cancellationToken);
+        var ctx = new PlanRunContext(plan, _stepExecutor, RaiseAsync, cancellationToken, _planHandoff);
         var workflow = BuildWorkflow(ctx);
 
         var pump = Task.Run(async () =>

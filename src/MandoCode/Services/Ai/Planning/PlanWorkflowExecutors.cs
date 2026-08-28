@@ -22,11 +22,35 @@ internal sealed class PlanRunContext(
     TaskPlan plan,
     IPlanStepExecutor stepExecutor,
     Func<TaskProgressEvent, bool, CancellationToken, Task> raise,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    PlanHandoff? planHandoff = null)
 {
     public TaskPlan Plan { get; } = plan;
     public IPlanStepExecutor StepExecutor { get; } = stepExecutor;
     public CancellationToken CancellationToken { get; } = cancellationToken;
+
+    /// <summary>Source of the file-operation evidence recorded by the middleware, when available.</summary>
+    public PlanHandoff? PlanHandoff { get; } = planHandoff;
+
+    /// <summary>
+    /// Writes the run's durable state into the workflow's shared scope.
+    /// </summary>
+    /// <remarks>
+    /// Called at every point the run advances. MAF captures shared state at each superstep
+    /// boundary, so this — not <see cref="Plan"/>, which lives on an unserializable context — is
+    /// what a checkpoint actually preserves.
+    /// </remarks>
+    public ValueTask SaveStateAsync(IWorkflowContext context, int cursor, CancellationToken ct)
+    {
+        var state = PlanRunState.From(
+            Plan,
+            cursor,
+            PreviousResults,
+            PlanHandoff?.FileOperations ?? []);
+
+        return context.QueueStateUpdateAsync(
+            PlanWorkflowMessages.StateKey, state, PlanWorkflowMessages.StateScope, ct);
+    }
 
     /// <summary>Step results accumulated so far, in the format each step's context expects.</summary>
     public List<string> PreviousResults { get; } = [];
@@ -78,6 +102,7 @@ internal sealed class PlanIntakeExecutor(PlanRunContext ctx)
         var first = ctx.NextRunnableIndex(0);
         await context.QueueStateUpdateAsync(
             PlanWorkflowMessages.CursorKey, Math.Max(first, 0), PlanWorkflowMessages.StateScope, cancellationToken);
+        await ctx.SaveStateAsync(context, Math.Max(first, 0), cancellationToken);
 
         if (first < 0)
         {
@@ -190,6 +215,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
 
                 if (plan.Status == TaskPlanStatus.Cancelled)
                 {
+                    await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
                     await Finish(context, cancellationToken);
                     return;
                 }
@@ -204,13 +230,19 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
         if (plan.Status == TaskPlanStatus.Cancelled || ctx.CancellationToken.IsCancellationRequested)
         {
             plan.Status = TaskPlanStatus.Cancelled;
+            await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
             await Finish(context, cancellationToken);
             return;
         }
 
         var next = ctx.NextRunnableIndex(message.StepIndex + 1);
+        var cursor = next < 0 ? plan.Steps.Count : next;
         await context.QueueStateUpdateAsync(
-            PlanWorkflowMessages.CursorKey, Math.Max(next, plan.Steps.Count), PlanWorkflowMessages.StateScope, cancellationToken);
+            PlanWorkflowMessages.CursorKey, cursor, PlanWorkflowMessages.StateScope, cancellationToken);
+
+        // The step just changed the plan — persist before dispatching the next one, so a checkpoint
+        // taken at this boundary reflects work that actually happened.
+        await ctx.SaveStateAsync(context, cursor, cancellationToken);
 
         if (next < 0)
         {
