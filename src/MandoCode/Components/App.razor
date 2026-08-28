@@ -895,6 +895,8 @@
 
     private async Task RunInteractiveLoopAsync()
     {
+        ShowUnfinishedPlanNotice();
+
         while (true)
         {
             // Show session token count right-aligned above prompt
@@ -954,6 +956,12 @@
                     continue;
                 }
 
+                if (command == "plan" || command.StartsWith("plan "))
+                {
+                    await HandlePlanCommandAsync(command.Length > 4 ? command[5..].Trim() : "");
+                    continue;
+                }
+
                 if (command == "help")
                 {
                     Console.WriteLine();
@@ -989,6 +997,7 @@
                     table.AddRow("/mcp remove <name>", "Remove an MCP server from config");
                     table.AddRow("/mcp tools <server>", "List tools exposed by connected MCP servers (server optional)");
                     table.AddRow("/mcp-reload", "Restart MCP servers and re-register their tools");
+                    table.AddRow("/plan", "Show, resume, or discard an unfinished plan");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -1970,6 +1979,162 @@
     private void HandlePlanSelectSubmit(string choice)
     {
         _planSelectTcs?.TrySetResult(choice);
+    }
+
+    /// <summary>
+    /// One line at startup when this project has an unfinished plan.
+    /// </summary>
+    /// <remarks>
+    /// Discoverability, not decoration: someone whose plan died to a crash or a Ctrl+C has no
+    /// reason to guess that <c>/plan</c> exists, and the work is only worth recording if they find
+    /// out it was. Silent on the common path — no saved plan, nothing printed.
+    /// </remarks>
+    private void ShowUnfinishedPlanNotice()
+    {
+        try
+        {
+            if (!PlanRunners.SupportsResume) return;
+
+            var saved = PlanRunners.FindResumable(out _);
+            if (saved == null) return;
+
+            var outstanding = PlanCheckpointStore.OutstandingSteps(saved);
+            if (outstanding == 0) return;
+
+            var done = saved.Steps.Count - outstanding;
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine(
+                $"[yellow]Unfinished plan:[/] {Spectre.Console.Markup.Escape(saved.Goal)} " +
+                $"[dim]({done} of {saved.Steps.Count} steps done)[/]");
+            AnsiConsole.MarkupLine("[dim]/plan resume[/] to continue, [dim]/plan discard[/] to forget it.");
+            AnsiConsole.WriteLine();
+        }
+        catch { /* a notice must never stop the session starting */ }
+    }
+
+    /// <summary>
+    /// `/plan` — inspect, resume or discard the plan recorded for this project.
+    /// </summary>
+    /// <remarks>
+    /// Only the workflow engine records progress, so only it can be resumed; the legacy runner
+    /// keeps the plan in a local variable that dies with the process. The command says so rather
+    /// than reporting "nothing to resume", which would be indistinguishable from having lost work.
+    /// </remarks>
+    private async Task HandlePlanCommandAsync(string arg)
+    {
+        AnsiConsole.WriteLine();
+
+        if (!PlanRunners.SupportsResume)
+        {
+            AnsiConsole.MarkupLine(
+                "[yellow]Plans are only resumable on the workflow planner.[/]");
+            AnsiConsole.MarkupLine("[dim]Enable it with:[/] /config set planner workflow");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (arg == "discard")
+        {
+            PlanRunners.DiscardResumable();
+            AnsiConsole.MarkupLine("[dim]Saved plan discarded.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var saved = PlanRunners.FindResumable(out var refusal);
+
+        if (refusal != null)
+        {
+            // Explain rather than silently offering nothing — the plan is on disk, it just can't
+            // be safely continued as things stand.
+            AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(refusal)}[/]");
+            AnsiConsole.MarkupLine("[dim]Use[/] /plan discard [dim]to forget it.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        if (saved == null)
+        {
+            AnsiConsole.MarkupLine("[dim]No unfinished plan for this project.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var outstanding = PlanCheckpointStore.OutstandingSteps(saved);
+        var done = saved.Steps.Count - outstanding;
+
+        if (arg != "resume")
+        {
+            AnsiConsole.MarkupLine(
+                $"[deepskyblue1]Unfinished plan:[/] {Spectre.Console.Markup.Escape(saved.Goal)}");
+            AnsiConsole.MarkupLine($"[dim]{done} of {saved.Steps.Count} steps done.[/]");
+            AnsiConsole.WriteLine();
+            DisplaySavedPlan(saved);
+            AnsiConsole.MarkupLine("[dim]/plan resume[/] to continue, [dim]/plan discard[/] to forget it.");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        AnsiConsole.MarkupLine(
+            $"[green]Resuming:[/] {Spectre.Console.Markup.Escape(saved.Goal)} " +
+            $"[dim]({outstanding} step(s) left)[/]");
+        AnsiConsole.WriteLine();
+
+        // Rebuild and run. Steps already Completed or Skipped keep that status, so the runner
+        // steps over them and only outstanding work executes.
+        var plan = PlanCheckpointStore.ToPlan(saved);
+
+        _requestCts = new CancellationTokenSource();
+        StartCancelKeyListener();
+        try
+        {
+            await foreach (var progressEvent in PlanRunners.Current.ExecutePlanAsync(plan, _requestCts.Token))
+            {
+                HandleProgressEvent(progressEvent, plan);
+            }
+
+            var manifest = PlanHandoff.BuildManifest(plan, []);
+            AI.AppendAssistantNote(manifest);
+        }
+        catch (OperationCanceledException)
+        {
+            AnsiConsole.MarkupLine("[yellow]Resume cancelled.[/]");
+        }
+        finally
+        {
+            Spinner.Stop();
+            StopCancelKeyListener();
+            var oldCts = Interlocked.Exchange(ref _requestCts, null);
+            oldCts?.Dispose();
+        }
+
+        AnsiConsole.WriteLine();
+    }
+
+    private static void DisplaySavedPlan(PlanRunState saved)
+    {
+        var table = new Spectre.Console.Table { Border = TableBorder.Rounded };
+        table.AddColumn("Step");
+        table.AddColumn("Description");
+        table.AddColumn("Status");
+
+        foreach (var step in saved.Steps)
+        {
+            var status = step.Status switch
+            {
+                TaskStepStatus.Completed => "[green]done[/]",
+                TaskStepStatus.Skipped => "[dim]skipped[/]",
+                TaskStepStatus.Failed => "[red]failed[/]",
+                _ => "[yellow]pending[/]",
+            };
+            table.AddRow(
+                step.Number.ToString(),
+                Spectre.Console.Markup.Escape(step.Description),
+                status);
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
     }
 
     private enum PlanTurnOutcome { None, Executed, Rejected, Cancelled }

@@ -173,7 +173,9 @@ class Program
             services.AddSingleton(provider => new PlanRunnerSelector(
                 provider.GetRequiredService<MandoCodeConfig>(),
                 provider.GetRequiredService<TaskPlannerService>(),
-                provider.GetRequiredService<IPlanStepExecutor>()));
+                provider.GetRequiredService<IPlanStepExecutor>(),
+                provider.GetRequiredService<PlanHandoff>(),
+                provider.GetRequiredService<ProjectRootAccessor>()));
 
             // Register MusicPlayerService as singleton
             services.AddSingleton(provider =>

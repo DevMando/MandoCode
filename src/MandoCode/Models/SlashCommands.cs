@@ -21,6 +21,7 @@ public static class SlashCommands
         { "/copy", "Copy last AI response to clipboard" },
         { "/copy-code", "Copy code blocks from last AI response" },
         { "/command", "Run a shell command (also: !<cmd>)" },
+        { "/plan", "Show, resume, or discard an unfinished plan (/plan resume | /plan discard)" },
         { "/clear", "Clear conversation history" },
         { "/learn", "Learn about LLMs and local AI models" },
         { "/retry", "Retry Ollama connection" },

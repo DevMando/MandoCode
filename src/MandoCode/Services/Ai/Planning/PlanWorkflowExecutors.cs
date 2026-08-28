@@ -23,7 +23,8 @@ internal sealed class PlanRunContext(
     IPlanStepExecutor stepExecutor,
     Func<TaskProgressEvent, bool, CancellationToken, Task> raise,
     CancellationToken cancellationToken,
-    PlanHandoff? planHandoff = null)
+    PlanHandoff? planHandoff = null,
+    Action<PlanRunState>? onStateSaved = null)
 {
     public TaskPlan Plan { get; } = plan;
     public IPlanStepExecutor StepExecutor { get; } = stepExecutor;
@@ -47,6 +48,10 @@ internal sealed class PlanRunContext(
             cursor,
             PreviousResults,
             PlanHandoff?.FileOperations ?? []);
+
+        // Also handed to the host, which persists it so an interrupted plan can be resumed.
+        // Best-effort: a failure to record progress must not stop the plan making it.
+        try { onStateSaved?.Invoke(state); } catch { }
 
         return context.QueueStateUpdateAsync(
             PlanWorkflowMessages.StateKey, state, PlanWorkflowMessages.StateScope, ct);
