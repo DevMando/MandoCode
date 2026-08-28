@@ -865,7 +865,8 @@ public class AIService
         string retryOperationName,
         string tokenLabel,
         string spinnerMessage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? onTextDelta = null)
     {
         using var requestCts = new CancellationTokenSource(TimeSpan.FromMinutes(_config.RequestTimeoutMinutes));
         using var responseCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds));
@@ -913,7 +914,7 @@ public class AIService
                     var messagesSnapshot = history.ToList();
 
                     var response = await RetryPolicy.ExecuteWithRetryAsync(
-                        async () => await InvokeAgentChatAsync(messagesSnapshot, responseCts, linkedCts.Token),
+                        async () => await InvokeAgentChatAsync(messagesSnapshot, responseCts, linkedCts.Token, onTextDelta),
                         _config.MaxRetryAttempts,
                         retryOperationName,
                         linkedCts.Token
@@ -981,7 +982,8 @@ public class AIService
     private async Task<AgentResponse> InvokeAgentChatAsync(
         List<Microsoft.Extensions.AI.ChatMessage> messages,
         CancellationTokenSource responseCts,
-        CancellationToken linkedToken)
+        CancellationToken linkedToken,
+        Action<string>? onTextDelta = null)
     {
         var useStreaming = _config.StreamingMode switch
         {
@@ -997,7 +999,8 @@ public class AIService
         return await StreamBuffering.BufferAsync(
             _agent!.RunStreamingAsync(messages, session: null, cancellationToken: linkedToken),
             onChunk: () => { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } },
-            linkedToken);
+            onText: onTextDelta,
+            cancellationToken: linkedToken);
     }
 
     /// <summary>
@@ -1220,6 +1223,13 @@ public class AIService
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Width budget for the narration shown beside the step label in the spinner. Conservative on
+    /// purpose: a spinner label that wraps corrupts the line the spinner keeps redrawing, and the
+    /// console may be narrower than expected.
+    /// </summary>
+    private const int SpinnerNarrationWidth = 60;
+
     public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
     {
         var contextBuilder = new System.Text.StringBuilder(
@@ -1248,12 +1258,27 @@ public class AIService
             {
                 try
                 {
+                    var baseSpinnerMessage = $"Working on {stepLabel} — press Esc to cancel";
+                    var narration = new StepNarration();
+
                     var result = await ExecuteAgentModelCallAsync(
                         stepHistory,
                         retryOperationName: "ExecutePlanStepAsync",
                         tokenLabel: stepLabel,
-                        spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
-                        cancellationToken);
+                        spinnerMessage: baseSpinnerMessage,
+                        cancellationToken,
+                        onTextDelta: text =>
+                        {
+                            // A step's text only renders once the step finishes, so without this a
+                            // long step is a spinner and nothing else — observed live sitting at
+                            // "Working…" for four minutes while the model narrated throughout.
+                            // Showing the newest line keeps the spinner honest without duplicating
+                            // output that is about to be rendered as markdown anyway.
+                            narration.Append(text);
+                            var line = narration.Shortened(SpinnerNarrationWidth);
+                            _spinner.UpdateActivity(
+                                line == null ? baseSpinnerMessage : $"{stepLabel} — {line}");
+                        });
 
                     var response = string.IsNullOrEmpty(result.Text) ? "Step completed (no response content)." : result.Text;
 

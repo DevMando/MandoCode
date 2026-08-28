@@ -23,21 +23,38 @@ public static class StreamBuffering
 {
     /// <param name="stream">The streamed chunks.</param>
     /// <param name="onChunk">Invoked once per chunk BEFORE it's appended — the watchdog heartbeat.</param>
+    /// <param name="onText">
+    /// Optional, invoked with each chunk's text as it arrives. Lets a caller show progress while a
+    /// long generation is still running; the assembled result is unaffected either way.
+    /// </param>
     /// <param name="cancellationToken">Cancels enumeration; an <see cref="OperationCanceledException"/> propagates.</param>
     public static Task<AgentResponse> BufferAsync(
         IAsyncEnumerable<AgentResponseUpdate> stream,
         Action onChunk,
+        Action<string>? onText = null,
         CancellationToken cancellationToken = default) =>
-        WithHeartbeat(stream, onChunk, cancellationToken).ToAgentResponseAsync(cancellationToken);
+        WithHeartbeat(stream, onChunk, onText, cancellationToken).ToAgentResponseAsync(cancellationToken);
 
     private static async IAsyncEnumerable<AgentResponseUpdate> WithHeartbeat(
         IAsyncEnumerable<AgentResponseUpdate> stream,
         Action onChunk,
+        Action<string>? onText,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var update in stream.WithCancellation(cancellationToken))
         {
             onChunk();
+
+            if (onText != null)
+            {
+                var text = update.Text;
+                // Never let a progress display break the generation it is reporting on.
+                if (!string.IsNullOrEmpty(text))
+                {
+                    try { onText(text); } catch { }
+                }
+            }
+
             yield return update;
         }
     }
