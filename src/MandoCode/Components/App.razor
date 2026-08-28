@@ -2480,9 +2480,18 @@
                 AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
 
                 // Ask user what to do
-                // Palette: gold = redirect (skip), red = destructive (kill the plan).
+                // Palette: green = try again, gold = redirect (skip), red = destructive.
+                const string retryStepLabel = "[green]Retry this step[/]";
                 const string skipStepLabel = "[rgb(255,200,80)]Skip this step and continue[/]";
                 const string cancelPlanLabel = "[red]Cancel the plan[/]";
+
+                var stepToDecide = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
+
+                // Retry is offered only on the workflow engine. The legacy runner walks the steps
+                // with a foreach and has already moved past this one — it has no way back.
+                var choices = PlanRunners.UsingWorkflowEngine
+                    ? new[] { retryStepLabel, skipStepLabel, cancelPlanLabel }
+                    : new[] { skipStepLabel, cancelPlanLabel };
 
                 string failChoice;
                 using (KeyCoordinator.Suppress())
@@ -2491,7 +2500,7 @@
                         new SelectionPrompt<string>()
                             .Title("[deepskyblue1]How would you like to proceed?[/]")
                             .HighlightStyle(SelectionHighlight)
-                            .AddChoices(new[] { skipStepLabel, cancelPlanLabel })
+                            .AddChoices(choices)
                     );
                 }
 
@@ -2499,14 +2508,17 @@
                 {
                     PlanRunners.Current.CancelPlan(plan);
                 }
-                else
+                else if (failChoice == retryStepLabel && stepToDecide != null)
                 {
-                    var failedStep = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
-                    if (failedStep != null)
-                    {
-                        PlanRunners.Current.SkipStep(plan, failedStep);
-                        SpinnerService.SetTaskbarWarning(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
-                    }
+                    // Pending is the signal triage reads as "run this one again".
+                    stepToDecide.Status = TaskStepStatus.Pending;
+                    AnsiConsole.MarkupLine($"[dim]Retrying step {progressEvent.CurrentStep}...[/]");
+                    AnsiConsole.WriteLine();
+                }
+                else if (stepToDecide != null)
+                {
+                    PlanRunners.Current.SkipStep(plan, stepToDecide);
+                    SpinnerService.SetTaskbarWarning(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                 }
                 break;
 

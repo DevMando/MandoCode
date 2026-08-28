@@ -68,6 +68,16 @@ internal sealed class PlanRunContext(
     /// </remarks>
     public List<string> PreviousResults { get; } = [.. seedResults ?? []];
 
+    /// <summary>How many times each step index has been retried after failing.</summary>
+    /// <remarks>
+    /// Capped so a step that fails identically every time cannot loop forever. The user is asked
+    /// each time, so this is a backstop against a mistake rather than against the user.
+    /// </remarks>
+    public Dictionary<int, int> RetryCounts { get; } = [];
+
+    /// <summary>Maximum retries of a single step within one run.</summary>
+    public const int MaxRetriesPerStep = 3;
+
     /// <summary>
     /// Publishes a progress event and, by default, waits until the consumer has processed it and
     /// asked for the next one.
@@ -231,6 +241,25 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                     await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
                     await Finish(context, cancellationToken);
                     return;
+                }
+
+                // A consumer that set the step back to Pending is asking for a retry. Re-dispatch
+                // the same index rather than advancing, which is what the cursor would otherwise do.
+                if (step.Status == TaskStepStatus.Pending)
+                {
+                    var attempts = ctx.RetryCounts.TryGetValue(message.StepIndex, out var n) ? n : 0;
+                    if (attempts < PlanRunContext.MaxRetriesPerStep)
+                    {
+                        ctx.RetryCounts[message.StepIndex] = attempts + 1;
+                        step.ErrorMessage = null;
+                        await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
+                        await context.SendMessageAsync(
+                            new RunPlanStep(message.StepIndex), PlanExecutorIds.StepRunner, cancellationToken);
+                        return;
+                    }
+
+                    // Out of retries: fall through and treat it as skipped rather than looping.
+                    step.Status = TaskStepStatus.Failed;
                 }
 
                 // Either the consumer skipped it, or there was no interactive consumer at all. Both
