@@ -1,4 +1,5 @@
 @using Spectre.Console;
+@using System.Reflection;
 
 @code {
     // Gate the easter-egg roll so it happens at most once per process launch.
@@ -20,9 +21,7 @@
             }
         }
 
-        var version = typeof(Program).Assembly.GetName().Version;
-        var versionStr = version != null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "";
-        var gradientText = BuildGradientBanner(versionStr);
+        var gradientText = BuildGradientBanner(ResolveVersionLabel());
 
         var panel = new Spectre.Console.Panel(new Spectre.Console.Markup("\n\n" + gradientText + "\n\n"));
         panel.Border(BoxBorder.Rounded);
@@ -30,6 +29,9 @@
 
         AnsiConsole.Write(panel);
     }
+
+    private static string ResolveVersionLabel()
+        => MandoCode.Services.VersionLabel.ForAssembly(typeof(Program).Assembly);
 
     // ════════════════════════════════════════════
     //  Gradient MANDOCODE figlet text
