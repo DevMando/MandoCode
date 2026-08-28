@@ -1224,6 +1224,23 @@ public class AIService
     }
 
     /// <summary>
+    /// Supplies the request a plan is fulfilling, for a plan that did not originate in this
+    /// session's conversation.
+    /// </summary>
+    /// <remarks>
+    /// Normally set when the user sends a message, and every plan step's context includes it as the
+    /// authority on WHERE work happens — target folders named in the request override unqualified
+    /// paths in a step instruction. A resumed plan has no such message: the process it was started
+    /// in is gone. Without this, resumed steps would run with no original request at all, which is
+    /// the exact shape of an observed failure where a plan lost its target folder and wrote every
+    /// file to the project root.
+    /// </remarks>
+    public void SetRequestContext(string? request)
+    {
+        if (!string.IsNullOrWhiteSpace(request)) _currentTurnUserMessage = request;
+    }
+
+    /// <summary>
     /// Width budget for the narration shown beside the step label in the spinner. Conservative on
     /// purpose: a spinner label that wraps corrupts the line the spinner keeps redrawing, and the
     /// console may be narrower than expected.

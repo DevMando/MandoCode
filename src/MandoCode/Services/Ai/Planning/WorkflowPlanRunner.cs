@@ -47,8 +47,27 @@ public sealed class WorkflowPlanRunner(
     /// </remarks>
     private sealed record Signal(TaskProgressEvent Event, TaskCompletionSource? Ack);
 
-    public async IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(
+    public IAsyncEnumerable<TaskProgressEvent> ExecutePlanAsync(
         TaskPlan plan,
+        CancellationToken cancellationToken = default)
+        => RunAsync(plan, seedResults: null, cancellationToken);
+
+    /// <summary>
+    /// Continues a plan recorded before an interruption.
+    /// </summary>
+    /// <remarks>
+    /// Seeds the results earlier steps produced. A resumed run that skipped this would execute its
+    /// remaining steps blind to everything already built — the context those steps usually depend
+    /// on — even though the record holds it.
+    /// </remarks>
+    public IAsyncEnumerable<TaskProgressEvent> ResumeAsync(
+        PlanRunState state,
+        CancellationToken cancellationToken = default)
+        => RunAsync(PlanCheckpointStore.ToPlan(state), state.PreviousResults, cancellationToken);
+
+    private async IAsyncEnumerable<TaskProgressEvent> RunAsync(
+        TaskPlan plan,
+        IReadOnlyList<string>? seedResults,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var channel = Channel.CreateUnbounded<Signal>(new UnboundedChannelOptions
@@ -69,7 +88,8 @@ public sealed class WorkflowPlanRunner(
             await ack.Task;
         }
 
-        var ctx = new PlanRunContext(plan, _stepExecutor, RaiseAsync, cancellationToken, _planHandoff, _onStateSaved);
+        var ctx = new PlanRunContext(
+            plan, _stepExecutor, RaiseAsync, cancellationToken, _planHandoff, _onStateSaved, seedResults);
         var workflow = BuildWorkflow(ctx);
 
         var pump = Task.Run(async () =>

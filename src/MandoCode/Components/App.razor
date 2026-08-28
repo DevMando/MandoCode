@@ -956,6 +956,18 @@
                     continue;
                 }
 
+                if (command == "plan-resume")
+                {
+                    await HandlePlanCommandAsync("resume");
+                    continue;
+                }
+
+                if (command == "plan-discard")
+                {
+                    await HandlePlanCommandAsync("discard");
+                    continue;
+                }
+
                 if (command == "plan" || command.StartsWith("plan "))
                 {
                     await HandlePlanCommandAsync(command.Length > 4 ? command[5..].Trim() : "");
@@ -997,7 +1009,9 @@
                     table.AddRow("/mcp remove <name>", "Remove an MCP server from config");
                     table.AddRow("/mcp tools <server>", "List tools exposed by connected MCP servers (server optional)");
                     table.AddRow("/mcp-reload", "Restart MCP servers and re-register their tools");
-                    table.AddRow("/plan", "Show, resume, or discard an unfinished plan");
+                    table.AddRow("/plan", "Show an unfinished plan");
+                    table.AddRow("/plan-resume", "Continue an unfinished plan");
+                    table.AddRow("/plan-discard", "Forget an unfinished plan");
                     table.AddRow("/clear", "Clear conversation history");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
@@ -2006,7 +2020,7 @@
             AnsiConsole.MarkupLine(
                 $"[yellow]Unfinished plan:[/] {Spectre.Console.Markup.Escape(saved.Goal)} " +
                 $"[dim]({done} of {saved.Steps.Count} steps done)[/]");
-            AnsiConsole.MarkupLine("[dim]/plan resume[/] to continue, [dim]/plan discard[/] to forget it.");
+            AnsiConsole.MarkupLine("[dim]/plan-resume[/] to continue, [dim]/plan-discard[/] to forget it.");
             AnsiConsole.WriteLine();
         }
         catch { /* a notice must never stop the session starting */ }
@@ -2048,7 +2062,7 @@
             // Explain rather than silently offering nothing — the plan is on disk, it just can't
             // be safely continued as things stand.
             AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(refusal)}[/]");
-            AnsiConsole.MarkupLine("[dim]Use[/] /plan discard [dim]to forget it.[/]");
+            AnsiConsole.MarkupLine("[dim]Use[/] /plan-discard [dim]to forget it.[/]");
             AnsiConsole.WriteLine();
             return;
         }
@@ -2070,7 +2084,7 @@
             AnsiConsole.MarkupLine($"[dim]{done} of {saved.Steps.Count} steps done.[/]");
             AnsiConsole.WriteLine();
             DisplaySavedPlan(saved);
-            AnsiConsole.MarkupLine("[dim]/plan resume[/] to continue, [dim]/plan discard[/] to forget it.");
+            AnsiConsole.MarkupLine("[dim]/plan-resume[/] to continue, [dim]/plan-discard[/] to forget it.");
             AnsiConsole.WriteLine();
             return;
         }
@@ -2080,15 +2094,25 @@
             $"[dim]({outstanding} step(s) left)[/]");
         AnsiConsole.WriteLine();
 
-        // Rebuild and run. Steps already Completed or Skipped keep that status, so the runner
-        // steps over them and only outstanding work executes.
+        // The plan was started in a process that no longer exists, so nothing has told the agent
+        // what request it is fulfilling. Steps treat that request as authoritative for WHERE work
+        // happens, so without it a resumed plan can write to the wrong place entirely.
+        AI.SetRequestContext(saved.Goal);
+
+        // Steps already Completed or Skipped keep that status, so the runner steps over them and
+        // only outstanding work executes. ResumeAsync also seeds what earlier steps produced.
         var plan = PlanCheckpointStore.ToPlan(saved);
 
         _requestCts = new CancellationTokenSource();
         StartCancelKeyListener();
         try
         {
-            await foreach (var progressEvent in PlanRunners.Current.ExecutePlanAsync(plan, _requestCts.Token))
+            var runner = PlanRunners.Current as WorkflowPlanRunner;
+            var progress = runner != null
+                ? runner.ResumeAsync(saved, _requestCts.Token)
+                : PlanRunners.Current.ExecutePlanAsync(plan, _requestCts.Token);
+
+            await foreach (var progressEvent in progress)
             {
                 HandleProgressEvent(progressEvent, plan);
             }

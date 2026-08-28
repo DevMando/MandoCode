@@ -24,7 +24,8 @@ internal sealed class PlanRunContext(
     Func<TaskProgressEvent, bool, CancellationToken, Task> raise,
     CancellationToken cancellationToken,
     PlanHandoff? planHandoff = null,
-    Action<PlanRunState>? onStateSaved = null)
+    Action<PlanRunState>? onStateSaved = null,
+    IReadOnlyList<string>? seedResults = null)
 {
     public TaskPlan Plan { get; } = plan;
     public IPlanStepExecutor StepExecutor { get; } = stepExecutor;
@@ -57,8 +58,15 @@ internal sealed class PlanRunContext(
             PlanWorkflowMessages.StateKey, state, PlanWorkflowMessages.StateScope, ct);
     }
 
-    /// <summary>Step results accumulated so far, in the format each step's context expects.</summary>
-    public List<string> PreviousResults { get; } = [];
+    /// <summary>
+    /// Step results accumulated so far, in the format each step's context expects.
+    /// </summary>
+    /// <remarks>
+    /// Seeded on resume from the saved record. Without that, steps picked up after an interruption
+    /// would run blind to everything earlier steps produced, which is exactly the context the
+    /// remaining work usually depends on.
+    /// </remarks>
+    public List<string> PreviousResults { get; } = [.. seedResults ?? []];
 
     /// <summary>
     /// Publishes a progress event and, by default, waits until the consumer has processed it and
