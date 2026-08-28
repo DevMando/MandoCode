@@ -50,4 +50,28 @@ public class SystemPromptsTests
             Assert.Contains("LARGE FILES", prompt);
         }
     }
+
+    [Fact]
+    public void ProgressLines_AreNotNumbered()
+    {
+        // The model cannot know how many pieces of work there will be, so it invents a total.
+        // Observed live: a 3-step plan rendered the harness's real "Step 2/3:" header directly above
+        // the model's own "(Step 2/5)" line, which reads as a broken progress display.
+        var prompt = SystemPrompts.BuildMandoCodeAssistant(webSearchEnabled: false);
+
+        Assert.DoesNotContain("(Step 1/5)", prompt);
+        Assert.DoesNotContain("Always number your steps", prompt);
+        Assert.Contains("Do NOT number these lines", prompt);
+    }
+
+    [Fact]
+    public void PlanningSection_DoesNotPromiseACompletionSummary()
+    {
+        // propose_plan returns a receipt as soon as the plan is queued; it no longer blocks until
+        // the plan has run, so telling the model to expect the outcome would be a lie.
+        var prompt = SystemPrompts.BuildMandoCodeAssistant(webSearchEnabled: false);
+
+        Assert.Contains("returns as soon as the plan is queued", prompt);
+        Assert.DoesNotContain("You will receive a summary string when planning completes", prompt);
+    }
 }
