@@ -1937,6 +1937,7 @@
     // Plain labels — ApprovalSelect carries the palette (green = proceed, warm gold =
     // redirect/stop), so these stay markup-free for clean comparisons and scrollback echo.
     private const string ExecutePlanLabel = "Execute plan";
+    private const string EditPlanStepLabel = "Edit a step";
     private const string RejectPlanLabel = "Reject (answer without a plan)";
     private const string CancelRequestLabel = "Cancel request";
 
@@ -1951,6 +1952,7 @@
     private static readonly ApprovalSelect.Option[] _planSelectOptions =
     {
         new(ExecutePlanLabel, Color.Green),
+        new(EditPlanStepLabel, Color.DeepSkyBlue1),
         new(RejectPlanLabel, new Color(255, 200, 80)),
         new(CancelRequestLabel, new Color(255, 200, 80)),
     };
@@ -2257,17 +2259,26 @@
             // Stop the outer "Thinking..." spinner so it doesn't fight the approval prompt.
             Spinner.Stop();
 
-            AnsiConsole.WriteLine();
-            DisplayPlan(plan);
-
-            // VDOM select instead of a Spectre SelectionPrompt — Spectre's blocking
-            // ReadKey races RazorConsole's keyboard pump and intermittently lost arrow
-            // presses (see ApprovalSelect.razor). Suppress() is still required: the
-            // Escape listener reads the same console and would steal keys from the
-            // pump exactly the way the pump stole them from Spectre.
-            using (KeyCoordinator.Suppress())
+            // Loops so editing a step returns to the menu: reviewing a plan is iterative, and
+            // being forced to approve or reject immediately after one edit defeats the point.
+            while (true)
             {
-                choice = await PromptPlanChoiceAsync(ct);
+                AnsiConsole.WriteLine();
+                DisplayPlan(plan);
+
+                // VDOM select instead of a Spectre SelectionPrompt — Spectre's blocking
+                // ReadKey races RazorConsole's keyboard pump and intermittently lost arrow
+                // presses (see ApprovalSelect.razor). Suppress() is still required: the
+                // Escape listener reads the same console and would steal keys from the
+                // pump exactly the way the pump stole them from Spectre.
+                using (KeyCoordinator.Suppress())
+                {
+                    choice = await PromptPlanChoiceAsync(ct);
+                }
+
+                if (choice != EditPlanStepLabel) break;
+
+                await EditPlanStepAsync(plan, ct);
             }
         }
 
@@ -2345,18 +2356,32 @@
                "Do NOT create more files, call more tools, or propose another plan.";
     }
 
+    /// <summary>
+    /// Renders the proposed plan for approval, including each step's instruction.
+    /// </summary>
+    /// <remarks>
+    /// The instruction is shown because it is the text actually sent to the model — the
+    /// description is a ≤60-character label for this table and nothing else. Showing only the
+    /// label meant approving work you had not read: two steps can look identical in summary and
+    /// target completely different files.
+    /// </remarks>
     private void DisplayPlan(TaskPlan plan)
     {
         var table = new Spectre.Console.Table()
             .Border(TableBorder.Rounded)
             .AddColumn(new TableColumn("Step").Centered())
-            .AddColumn(new TableColumn("Description"));
+            .AddColumn(new TableColumn("Description"))
+            .AddColumn(new TableColumn("What it will do"));
 
         foreach (var step in plan.Steps)
         {
+            var instruction = step.Instruction ?? "";
+            // Wrapped rather than truncated: a clipped instruction is the same problem as showing
+            // none — you cannot approve what you cannot read.
             table.AddRow(
                 $"[deepskyblue1]{step.StepNumber}[/]",
-                Spectre.Console.Markup.Escape(step.Description)
+                Spectre.Console.Markup.Escape(step.Description),
+                $"[dim]{Spectre.Console.Markup.Escape(instruction)}[/]"
             );
         }
 
@@ -2364,6 +2389,59 @@
         AnsiConsole.WriteLine();
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Lets the user rewrite a step's instruction before the plan runs.
+    /// </summary>
+    /// <remarks>
+    /// Edits the instruction, not the description: the description is a display label, so changing
+    /// it would alter what the table says without changing what actually happens — the worst of
+    /// both. The step's own text is the thing with consequences.
+    /// </remarks>
+    private async Task<bool> EditPlanStepAsync(TaskPlan plan, CancellationToken ct)
+    {
+        AnsiConsole.WriteLine();
+
+        var raw = await InstructionCoordinator.RequestAsync(
+            $"Which step to edit? (1-{plan.Steps.Count}, blank to go back)");
+
+        if (!int.TryParse(raw?.Trim(), out var number) || number < 1 || number > plan.Steps.Count)
+        {
+            AnsiConsole.MarkupLine("[dim]No step selected.[/]");
+            AnsiConsole.WriteLine();
+            return false;
+        }
+
+        var step = plan.Steps[number - 1];
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[deepskyblue1]Step {step.StepNumber}[/] — current instruction:");
+        AnsiConsole.MarkupLine($"[dim]{Spectre.Console.Markup.Escape(step.Instruction ?? "")}[/]");
+        AnsiConsole.WriteLine();
+
+        var revised = await InstructionCoordinator.RequestAsync(
+            "New instruction (blank to leave unchanged):");
+
+        if (string.IsNullOrWhiteSpace(revised))
+        {
+            AnsiConsole.MarkupLine("[dim]Left unchanged.[/]");
+            AnsiConsole.WriteLine();
+            return false;
+        }
+
+        step.Instruction = revised.Trim();
+
+        // Keep the label in step with the text when the model's original label no longer describes
+        // what the step does. Truncated the same way FromProposals does.
+        if (step.Description.Length == 0 || revised.Length <= 60)
+        {
+            step.Description = revised.Length > 60 ? revised[..57] + "..." : revised.Trim();
+        }
+
+        AnsiConsole.MarkupLine($"[green]Step {step.StepNumber} updated.[/]");
+        AnsiConsole.WriteLine();
+        return true;
     }
 
     private void HandleProgressEvent(TaskProgressEvent progressEvent, TaskPlan plan)
