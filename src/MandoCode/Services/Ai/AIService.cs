@@ -1323,10 +1323,10 @@ public class AIService
                         stepHistory,
                         retryOperationName: "ExecutePlanStepAsync",
                         tokenLabel: stepLabel,
-                        // Empty: the host owns the spinner for the duration of a plan, driven by the
-                        // step-progress events. Two spinners on one console is what bled frames
-                        // into the step headers.
-                        spinnerMessage: "",
+                        // Names the step and carries the Esc hint. This is the only spinner during a
+                        // plan — the host deliberately doesn't start its own on StepStarted, because
+                        // two spinners writing to one console is what bled frames into step headers.
+                        spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
                         cancellationToken);
 
                     var response = string.IsNullOrEmpty(result.Text) ? "Step completed (no response content)." : result.Text;
