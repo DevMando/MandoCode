@@ -10,7 +10,7 @@ namespace MandoCode.Services;
 /// is numeric-only and silently drops them, which made a test build indistinguishable from the
 /// release it was cut from — the same confusion that makes a stale binary hard to spot.
 /// </remarks>
-internal static class VersionLabel
+public static class VersionLabel
 {
     /// <summary>Version label for the running assembly, e.g. "v0.15.0-plan-test".</summary>
     public static string ForAssembly(Assembly assembly) => Build(
