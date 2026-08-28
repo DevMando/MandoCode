@@ -14,8 +14,8 @@ public class VersionLabelTests
     public void KeepsPrereleaseTag_AndDropsBuildMetadata()
     {
         Assert.Equal(
-            "v0.15.0-plan-test",
-            VersionLabel.Build("0.15.0-plan-test+a1a0df8d15c1a5da", new Version(0, 15, 0, 0)));
+            "v0.16.0-rc.1",
+            VersionLabel.Build("0.16.0-rc.1+a1a0df8d15c1a5da", new Version(0, 16, 0, 0)));
     }
 
     [Fact]
@@ -53,12 +53,13 @@ public class VersionLabelTests
     }
 
     [Fact]
-    public void RunningAssembly_CarriesThePlanTestTag()
+    public void RunningAssembly_ReportsAVersion()
     {
-        // Guards the actual csproj stamp, so the marker can't silently go missing from a test build.
-        // Delete this alongside the -plan-test suffix when the branch is released.
         // VersionLabel itself lives in the MandoCode assembly — a marker declared here would resolve
         // to the test assembly and assert nothing.
-        Assert.Equal("v0.15.0-plan-test", VersionLabel.ForAssembly(typeof(VersionLabel).Assembly));
+        var label = VersionLabel.ForAssembly(typeof(VersionLabel).Assembly);
+
+        Assert.StartsWith("v", label);
+        Assert.DoesNotContain("+", label);   // build metadata is stripped
     }
 }
