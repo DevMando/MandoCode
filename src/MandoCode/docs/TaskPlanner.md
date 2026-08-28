@@ -329,8 +329,9 @@ too: it routes via `handoff_to_*` tool calls that cannot be forced, the worst po
 |---|---|---|
 | 0 | Spike the real 1.19.0 assembly | done |
 | 1 | Freeze identity / checkpoint envelope / config key; extract `IPlanRunner` + `IPlanStepExecutor` | done |
-| 2 | Un-nest: `propose_plan` returns a receipt, the host runs the plan after the turn drains | next |
-| 3 | The graph: 8 fixed executors, two `RequestPort`s, read-only progress | |
+| 2 | Un-nest: `propose_plan` returns a receipt, the host runs the plan after the turn drains | done |
+| 3 | The graph behind `planner=workflow`: fixed topology, triage owns plan state | done |
+| 3b | Move approval and step decisions onto `RequestPort`s; make progress read-only | |
 | 4 | Checkpointing + resume | |
 | 5 | Retry / replan / forced-tool-use escalation | |
 | 6 | Flip the `planner` default, then delete the legacy runner | |
@@ -346,6 +347,26 @@ Spike findings worth keeping:
 - ⚠️ **`WatchStreamAsync` returns before the run quiesces.** Poll `GetStatusAsync()` until it leaves
   `RunStatus.Running` before declaring a plan finished — measuring at stream-end reports a plan
   complete while its steps are still writing files.
+
+Graph-authoring notes (all learned the hard way against the real assembly):
+
+- Every executor that sends must declare `[SendsMessage(typeof(T))]`; the finalizer needs
+  `[YieldsOutput(typeof(T))]`. Omitting one throws at **runtime**, not compile time.
+- State written without a scope name is **executor-private**. Plan state uses the named-scope
+  overload — the first attempt silently reported "0 steps completed".
+- The conditional `AddEdge<T>` overloads are mutually ambiguous to C# overload resolution, and hand
+  the condition a nullable `T?`. Plain edges plus typed messages plus an explicit `targetId` route
+  unambiguously, so conditions are not needed.
+- `Workflow.ToString()` and `EdgeInfo.ToString()` return type names only — a topology test built on
+  them passes vacuously. Use `ReflectExecutors()` / `ReflectEdges()` / `WorkflowVisualizer`.
+- `InProcessExecution.RunStreamingAsync`'s third positional parameter is `sessionId`, not the
+  cancellation token.
+
+`planner` selects the engine (`legacy` | `workflow` | `default`) and is re-read per plan by
+`PlanRunnerSelector`, so it can be flipped mid-session without losing history — which is what makes
+an honest A/B against a local model practical. `PlanRunnerBehaviorTests` runs every behavioral case
+against **both** engines: while both are selectable, any divergence would make that A/B
+uninterpretable, since a behavior difference would be indistinguishable from a model difference.
 
 Executor and agent identities are fixed in `PlanExecutorIds` and must not drift: MAF derives
 workflow-executor identity from both the agent's `Id` and `Name`, and a checkpoint written under one

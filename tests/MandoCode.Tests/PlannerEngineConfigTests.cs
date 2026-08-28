@@ -72,15 +72,14 @@ public class PlannerEngineConfigTests
     }
 
     [Fact]
-    public void TrySet_RejectsWorkflow_UntilTheGraphExists()
+    public void TrySet_AcceptsWorkflow()
     {
-        // Accepting a name that does nothing would let someone select it and believe it took.
         var config = new MandoCodeConfig();
         var result = ConfigKeySetter.TrySet(config, "planner", "workflow");
 
-        Assert.False(result.Ok);
-        Assert.Contains("not available", result.Message);
-        Assert.Null(config.PlannerEngine);
+        Assert.True(result.Ok);
+        Assert.Equal(MandoCodeConfig.PlannerEngineWorkflow, config.PlannerEngine);
+        Assert.Equal(ConfigKeySetter.ApplyScope.KernelRebuild, result.Scope);
     }
 
     [Fact]

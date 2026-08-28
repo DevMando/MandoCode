@@ -161,11 +161,10 @@ public static class ConfigKeySetter
                 }
                 if (planner == MandoCodeConfig.PlannerEngineWorkflow)
                 {
-                    // The workflow engine lands in a later phase; accept the name only when the
-                    // graph actually exists, so nobody selects a no-op and thinks it took.
-                    return Fail("Error: The 'workflow' planner is not available in this build yet");
+                    config.PlannerEngine = planner;
+                    return new(true, "✓ Planner engine set to: workflow (experimental)", ApplyScope.KernelRebuild);
                 }
-                return Fail("Error: Value must be 'legacy' or 'default'");
+                return Fail("Error: Value must be 'legacy', 'workflow', or 'default'");
 
             case "streaming":
             case "responsestreaming":
@@ -274,7 +273,7 @@ public static class ConfigKeySetter
         maxContinuations     {config.MaxAutoContinuations}  ({MandoCodeConfig.MinMaxAutoContinuations}-{MandoCodeConfig.MaxMaxAutoContinuations})
         renderTimeout        {config.MarkdownRenderTimeoutSeconds}s  ({MandoCodeConfig.MinMarkdownRenderTimeoutSeconds}-{MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds})
         taskPlanning         {config.EnableTaskPlanning}
-        planner              {config.PlannerEngine ?? "default"}  (legacy | default)
+        planner              {config.PlannerEngine ?? "default"}  (legacy | workflow | default)
         diffApprovals        {config.EnableDiffApprovals}
         webSearch            {config.EnableWebSearch}
         tavilyKey            {(string.IsNullOrWhiteSpace(config.TavilyApiKey) ? "not set" : MandoCodeConfig.MaskApiKey(config.TavilyApiKey))}  (Tavily API key for reliable web search — free at https://app.tavily.com; "clear" to remove)

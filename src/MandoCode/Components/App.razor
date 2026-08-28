@@ -6,6 +6,7 @@
 @inject AIService AI
 @inject MandoCodeConfig Config
 @inject TaskPlannerService TaskPlanner
+@inject PlanRunnerSelector PlanRunners
 @inject PlanHandoff PlanHandoff
 @inject FileAutocompleteProvider FileProvider
 @inject TokenTrackingService TokenTracker
@@ -2077,7 +2078,7 @@
 
         try
         {
-            await foreach (var progressEvent in TaskPlanner.ExecutePlanAsync(plan, ct))
+            await foreach (var progressEvent in PlanRunners.Current.ExecutePlanAsync(plan, ct))
             {
                 HandleProgressEvent(progressEvent, plan);
             }
@@ -2085,7 +2086,7 @@
         catch (OperationCanceledException)
         {
             Spinner.Stop();
-            TaskPlanner.CancelPlan(plan);
+            PlanRunners.Current.CancelPlan(plan);
         }
 
         AnsiConsole.WriteLine();
@@ -2193,14 +2194,14 @@
 
                 if (failChoice == cancelPlanLabel)
                 {
-                    TaskPlanner.CancelPlan(plan);
+                    PlanRunners.Current.CancelPlan(plan);
                 }
                 else
                 {
                     var failedStep = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
                     if (failedStep != null)
                     {
-                        TaskPlanner.SkipStep(plan, failedStep);
+                        PlanRunners.Current.SkipStep(plan, failedStep);
                         SpinnerService.SetTaskbarWarning(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
                     }
                 }

@@ -78,6 +78,13 @@ Every change is covered by automated tests — the suite grew to 486 checks.
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The plan workflow's executors, messages and run context are internal on purpose — they are
+         implementation detail of WorkflowPlanRunner, not API. The topology test needs to build the
+         graph directly, and later phases test executors in isolation. -->
+    <InternalsVisibleTo Include="MandoCode.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Audio\**\*.mp3" />
   </ItemGroup>
 
