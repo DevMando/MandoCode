@@ -1644,6 +1644,11 @@
 
     private async Task ProcessDirectRequestAsync(string input)
     {
+        // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
+        // turn the user then cancelled would sit in the single slot and execute at the end of some
+        // later, unrelated turn.
+        PlanHandoff.ClearPendingProposal();
+
         // Reset operation tracking for the new request
         _recentReadCount = 0;
         _recentReadFiles.Clear();
@@ -1990,6 +1995,14 @@
         }
 
         var ct = _requestCts?.Token ?? CancellationToken.None;
+
+        // The user cancelled this turn; running the plan it proposed is the opposite of what they
+        // asked for, and leaving it queued would run it at the end of some later, unrelated turn.
+        if (ct.IsCancellationRequested)
+        {
+            PlanHandoff.ClearPendingProposal();
+            return;
+        }
 
         _lastPlanOutcome = PlanTurnOutcome.None;
         var manifest = await PlanHandoff.RunPendingPlanAsync(ct);
