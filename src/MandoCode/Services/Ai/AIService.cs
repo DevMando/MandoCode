@@ -873,13 +873,7 @@ public class AIService
 
         using var watchdog = AttachAgentStallWatchdog(responseCts);
 
-        // An empty message means the caller owns the spinner. Plan steps do: the host already
-        // starts and stops one from the step-progress events, and a second spinner writing to the
-        // console at the same time is what produced frames bleeding into step headers.
-        if (!string.IsNullOrEmpty(spinnerMessage))
-        {
-            _spinner.Start(spinnerMessage);
-        }
+        _spinner.Start(spinnerMessage);
 
         // Partial-trace accumulator: AgentFunctionMiddleware fires these events per tool call,
         // synchronously, regardless of whether the OUTER RunAsync call eventually succeeds or
@@ -1184,11 +1178,7 @@ public class AIService
     /// project root). Previous-step results are limited to the last 2 and the original
     /// request is capped so step context stays small on local models.
     /// </summary>
-    public static string BuildStepContext(
-        string systemPrompt,
-        string? originalUserRequest,
-        List<string> previousResults,
-        IReadOnlyList<(string Operation, string Path)>? fileOperations = null)
+    public static string BuildStepContext(string systemPrompt, string? originalUserRequest, List<string> previousResults)
     {
         // Generous enough for a long message plus @folder listings; small enough that a
         // pasted @file of several thousand lines can't flood every step's context. Paths
@@ -1227,81 +1217,20 @@ public class AIService
             sb.AppendLine("--- End of Previous Steps ---\n");
         }
 
-        AppendFileManifest(sb, fileOperations);
-
         return sb.ToString();
     }
-
-    /// <summary>
-    /// Lists the files earlier steps have already created or modified.
-    /// </summary>
-    /// <remarks>
-    /// The highest signal-per-token context a step can get — roughly one short line per file. Only
-    /// the last two steps' prose summaries carry forward otherwise, and those describe work rather
-    /// than naming files, which leaves a step two bad options: invent names (observed live — step 3
-    /// wrote <c>getElementById('gameCanvas')</c> against step 1's <c>id="game-canvas"</c>, so the
-    /// game never started) or re-read whole files to find out (observed live — a 750-line file read
-    /// five times in one step, contributing to a 1.1M-token run).
-    /// </remarks>
-    private static void AppendFileManifest(
-        System.Text.StringBuilder sb,
-        IReadOnlyList<(string Operation, string Path)>? fileOperations)
-    {
-        if (fileOperations is not { Count: > 0 }) return;
-
-        // Distinct paths, first-touch order. A file edited ten times is still one line.
-        var paths = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (_, path) in fileOperations)
-        {
-            if (!string.IsNullOrWhiteSpace(path) && seen.Add(path)) paths.Add(path);
-        }
-
-        if (paths.Count == 0) return;
-
-        // Bounded: a sprawling plan must not crowd out the step's own instruction.
-        const int MaxListed = 40;
-        var listed = paths.Take(MaxListed).ToList();
-
-        sb.AppendLine("--- Files This Plan Has Already Created Or Modified ---");
-        foreach (var path in listed) sb.AppendLine(path);
-        if (paths.Count > listed.Count)
-            sb.AppendLine($"...and {paths.Count - listed.Count} more.");
-
-        sb.AppendLine(
-            "These exist on disk right now. Read one only if you actually need its current " +
-            "contents, and do not read the same file twice in this step — you already have it. " +
-            "Never guess at element ids, class names, or function names in these files: if your " +
-            "work has to line up with them, read the file once and match what is really there.");
-        sb.AppendLine("--- End of Files ---\n");
-    }
-
-    /// <summary>
-    /// The user-role message that drives one plan step.
-    /// </summary>
-    /// <remarks>
-    /// States the step's boundary explicitly. Without it a capable model treats the first step as
-    /// the whole task — observed live, a step scoped to "create the game HTML shell" wrote the
-    /// HTML, the CSS and all 612 lines of the game engine, after which the remaining three steps
-    /// each found their work already done and contributed one small addition apiece.
-    /// </remarks>
-    public static string BuildStepUserMessage(string stepInstruction) =>
-        $"Execute this step now: {stepInstruction}\n\n" +
-        "Do ONLY this step. The plan's later steps run after you and will cover the rest — doing " +
-        "their work now makes them redundant and wastes the user's time and tokens. Stop as soon " +
-        "as this step's own work is done.\n\n" +
-        "Remember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.";
 
     public async Task<string> ExecutePlanStepAsync(string stepInstruction, List<string> previousResults, CancellationToken cancellationToken = default)
     {
         var contextBuilder = new System.Text.StringBuilder(
-            BuildStepContext(_systemPrompt, _currentTurnUserMessage, previousResults, _planHandoff?.FileOperations));
+            BuildStepContext(_systemPrompt, _currentTurnUserMessage, previousResults));
 
         // Create a temporary chat history for this step
         List<ChatMessage> stepHistory =
         [
             new ChatMessage(ChatRole.System, contextBuilder.ToString()),
-            new ChatMessage(ChatRole.User, BuildStepUserMessage(stepInstruction))
+            new ChatMessage(ChatRole.User,
+                $"Execute this step now: {stepInstruction}\n\nRemember: Use the available functions to complete this task. Do not describe the function call - actually invoke it.")
         ];
 
         var stepLabel = $"Step {previousResults.Count + 1}";
@@ -1323,9 +1252,6 @@ public class AIService
                         stepHistory,
                         retryOperationName: "ExecutePlanStepAsync",
                         tokenLabel: stepLabel,
-                        // Names the step and carries the Esc hint. This is the only spinner during a
-                        // plan — the host deliberately doesn't start its own on StepStarted, because
-                        // two spinners writing to one console is what bled frames into step headers.
                         spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
                         cancellationToken);
 

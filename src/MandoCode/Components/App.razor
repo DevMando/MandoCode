@@ -2179,10 +2179,7 @@
                 SpinnerService.SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
                 AnsiConsole.MarkupLine($"[deepskyblue1]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
                 AnsiConsole.WriteLine();
-                // No spinner started here on purpose. The step's own model call starts one that
-                // names the step ("Working on Step 2 — press Esc to cancel"); starting a second one
-                // here means two spinners writing to the same console, which is what bled spinner
-                // frames into step headers.
+                Spinner.Start("Working...");
                 break;
 
             case TaskProgressType.StepCompleted:

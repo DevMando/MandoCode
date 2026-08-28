@@ -74,21 +74,6 @@ public class PlanHandoff
     public bool LastPlanExecutedWork { get; private set; }
 
     /// <summary>
-    /// Files written, edited or deleted so far by the plan currently executing, oldest first.
-    /// </summary>
-    /// <remarks>
-    /// Evidence recorded at the middleware choke point — the call actually ran and succeeded — not
-    /// the model's self-report. Fed into each step's context so a later step knows which files
-    /// earlier steps produced. Without it a step only sees the previous steps' prose summaries, and
-    /// either invents names that don't match what was written or re-reads whole files to find out;
-    /// one observed run re-read a 750-line file five times in a single step.
-    /// </remarks>
-    public IReadOnlyList<(string Operation, string Path)> FileOperations
-    {
-        get { lock (_lock) return [.. _fileOperations]; }
-    }
-
-    /// <summary>
     /// Called by AgentFunctionMiddleware after a successful filesystem-mutating call.
     /// No-ops outside plan execution so ordinary chat-turn writes don't pollute the
     /// next plan's manifest.
