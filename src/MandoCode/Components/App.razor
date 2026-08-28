@@ -1793,12 +1793,25 @@
 
             AnsiConsole.WriteLine();
 
+            // Spinner ownership note: ExecuteAgentModelCallAsync starts a spinner per model call
+            // and never stops it — it has always relied on the caller. Before plans were deferred
+            // they ran inside the enumerator drain above, so that finally cleaned up. Now they run
+            // out here, so the plan run needs its own guarantee or the last step's spinner keeps
+            // animating after everything has finished.
+            //
             // The model's turn is fully drained. Only now do we run any plan it proposed — the
             // plan is a peer of the chat turn, not a child of the propose_plan tool call. Running
             // it here is what lets the outer stall watchdog and request ceiling stay untouched
             // (they've already completed), lets the prompt gate be held normally, and leaves the
             // model with no open turn afterwards to redo the work in.
-            await RunPendingPlanAsync();
+            try
+            {
+                await RunPendingPlanAsync();
+            }
+            finally
+            {
+                Spinner.Stop();
+            }
         }
         catch (OperationCanceledException)
         {

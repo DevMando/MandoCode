@@ -32,11 +32,18 @@ internal sealed class PlanRunContext(
     public List<string> PreviousResults { get; } = [];
 
     /// <summary>
-    /// Publishes a progress event. When <paramref name="waitForConsumer"/> is true this does not
-    /// return until the consumer has processed the event and asked for the next one — the point at
-    /// which any mutation it made to <c>plan.Status</c> is visible.
+    /// Publishes a progress event and, by default, waits until the consumer has processed it and
+    /// asked for the next one.
     /// </summary>
-    public Task RaiseAsync(TaskProgressEvent evt, bool waitForConsumer = false)
+    /// <remarks>
+    /// Waiting is the default because it matches the legacy runner, where every progress event was
+    /// a <c>yield return</c> and therefore inherently blocked until the UI had handled it. Two
+    /// things depend on that ordering: the consumer's decision on a failed step (it mutates
+    /// <c>plan.Status</c>, only visible once it comes back for the next event), and rendering —
+    /// without the wait, a step's model call starts its own spinner while the step header is still
+    /// being drawn and the spinner frame bleeds into it.
+    /// </remarks>
+    public Task RaiseAsync(TaskProgressEvent evt, bool waitForConsumer = true)
         => raise(evt, waitForConsumer, CancellationToken);
 
     /// <summary>
@@ -105,6 +112,10 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
         }
 
         step.Status = TaskStepStatus.InProgress;
+
+        // Raising waits for the consumer (see RaiseAsync), so the step header is on screen before
+        // the model call below starts its own spinner. Without that ordering the spinner frame
+        // bleeds into the header — "▫ Three-stepping... · 0sStep 3/3: ...", observed live.
         await ctx.RaiseAsync(TaskProgressEvent.StepStarted(ctx.Plan, step));
 
         PlanStepOutcome outcome;
@@ -158,14 +169,14 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                 step.Result = message.Result;
                 step.Status = TaskStepStatus.Completed;
                 ctx.PreviousResults.Add($"Step {step.StepNumber} ({step.Description}): {message.Result}");
-                await ctx.RaiseAsync(TaskProgressEvent.StepCompleted(plan, step, message.Result), waitForConsumer: true);
+                await ctx.RaiseAsync(TaskProgressEvent.StepCompleted(plan, step, message.Result));
                 break;
 
             case PlanStepOutcomeKind.Cancelled:
                 step.Status = TaskStepStatus.Failed;
                 step.ErrorMessage = message.Error;
                 plan.Status = TaskPlanStatus.Cancelled;
-                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Cancelled."), waitForConsumer: true);
+                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Cancelled."));
                 await Finish(context, cancellationToken);
                 return;
 
@@ -175,7 +186,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
 
                 // Defer skip-vs-cancel to the consumer, then reconcile — matching the legacy runner,
                 // where deciding before the yield silently downgraded "Cancel the plan" to "skip".
-                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."), waitForConsumer: true);
+                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."));
 
                 if (plan.Status == TaskPlanStatus.Cancelled)
                 {
