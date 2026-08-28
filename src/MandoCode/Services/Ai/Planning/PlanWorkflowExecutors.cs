@@ -8,9 +8,10 @@ namespace MandoCode.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Holds the live <see cref="TaskPlan"/> because the current consumer contract requires it: the
-/// runner yields a progress event and the consumer is expected to mutate <c>plan.Status</c> before
-/// asking for the next one. <see cref="RaiseAsync"/> preserves that exactly.
+/// Holds the live <see cref="TaskPlan"/> because the current consumer contract requires it: on a
+/// failed step the consumer decides skip-vs-cancel by mutating <c>plan.Status</c>, which is only
+/// visible once it comes back for the next event. <see cref="RaiseAndAwaitDecisionAsync"/> is what
+/// preserves that; every other event is fire-and-forget so rendering never holds up the model.
 /// </para>
 /// <para>
 /// Phase 4 note: this object holds live delegates, so a workflow built around it is NOT
@@ -32,19 +33,34 @@ internal sealed class PlanRunContext(
     public List<string> PreviousResults { get; } = [];
 
     /// <summary>
-    /// Publishes a progress event and, by default, waits until the consumer has processed it and
-    /// asked for the next one.
+    /// Publishes a progress event without waiting for the consumer to render it.
     /// </summary>
     /// <remarks>
-    /// Waiting is the default because it matches the legacy runner, where every progress event was
-    /// a <c>yield return</c> and therefore inherently blocked until the UI had handled it. Two
-    /// things depend on that ordering: the consumer's decision on a failed step (it mutates
-    /// <c>plan.Status</c>, only visible once it comes back for the next event), and rendering —
-    /// without the wait, a step's model call starts its own spinner while the step header is still
-    /// being drawn and the spinner frame bleeds into it.
+    /// Fire-and-forget is safe because the channel behind this is FIFO with a single reader: events
+    /// can never arrive out of order, the display simply trails the work. That matters — the legacy
+    /// runner blocked on every event because each was a <c>yield return</c>, and reproducing that
+    /// made the workflow wait on markdown rendering before it could start the next step, which was
+    /// visibly slower on a fast model.
+    /// <para>
+    /// Use <see cref="RaiseAndAwaitDecisionAsync"/> for the one event that genuinely needs the
+    /// consumer to answer.
+    /// </para>
     /// </remarks>
-    public Task RaiseAsync(TaskProgressEvent evt, bool waitForConsumer = true)
-        => raise(evt, waitForConsumer, CancellationToken);
+    public Task RaiseAsync(TaskProgressEvent evt)
+        => raise(evt, false, CancellationToken);
+
+    /// <summary>
+    /// Publishes a progress event and waits until the consumer has handled it and come back for the
+    /// next one — the point at which any change it made to the plan is visible.
+    /// </summary>
+    /// <remarks>
+    /// Only a failed step needs this. The consumer decides skip-vs-cancel by mutating
+    /// <see cref="TaskPlan.Status"/>, and reading that before it has decided is precisely the bug
+    /// the legacy runner documents: deciding before the yield silently downgraded "Cancel the plan"
+    /// to "skip".
+    /// </remarks>
+    public Task RaiseAndAwaitDecisionAsync(TaskProgressEvent evt)
+        => raise(evt, true, CancellationToken);
 
     /// <summary>
     /// Index of the next step that still needs running at or after <paramref name="from"/>, or -1.
@@ -113,9 +129,9 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
 
         step.Status = TaskStepStatus.InProgress;
 
-        // Raising waits for the consumer (see RaiseAsync), so the step header is on screen before
-        // the model call below starts its own spinner. Without that ordering the spinner frame
-        // bleeds into the header — "▫ Three-stepping... · 0sStep 3/3: ...", observed live.
+        // Does not wait for the UI: the model should not be held up by rendering. Ordering is
+        // still guaranteed by the FIFO channel, and the spinner no longer contends because the
+        // consumer owns it outright during a plan (see ExecutePlanStepAsync).
         await ctx.RaiseAsync(TaskProgressEvent.StepStarted(ctx.Plan, step));
 
         PlanStepOutcome outcome;
@@ -176,7 +192,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                 step.Status = TaskStepStatus.Failed;
                 step.ErrorMessage = message.Error;
                 plan.Status = TaskPlanStatus.Cancelled;
-                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Cancelled."));
+                await ctx.RaiseAndAwaitDecisionAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Cancelled."));
                 await Finish(context, cancellationToken);
                 return;
 
@@ -186,7 +202,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
 
                 // Defer skip-vs-cancel to the consumer, then reconcile — matching the legacy runner,
                 // where deciding before the yield silently downgraded "Cancel the plan" to "skip".
-                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."));
+                await ctx.RaiseAndAwaitDecisionAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."));
 
                 if (plan.Status == TaskPlanStatus.Cancelled)
                 {

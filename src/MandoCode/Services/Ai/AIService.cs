@@ -873,7 +873,13 @@ public class AIService
 
         using var watchdog = AttachAgentStallWatchdog(responseCts);
 
-        _spinner.Start(spinnerMessage);
+        // An empty message means the caller owns the spinner. Plan steps do: the host already
+        // starts and stops one from the step-progress events, and a second spinner writing to the
+        // console at the same time is what produced frames bleeding into step headers.
+        if (!string.IsNullOrEmpty(spinnerMessage))
+        {
+            _spinner.Start(spinnerMessage);
+        }
 
         // Partial-trace accumulator: AgentFunctionMiddleware fires these events per tool call,
         // synchronously, regardless of whether the OUTER RunAsync call eventually succeeds or
@@ -1317,7 +1323,10 @@ public class AIService
                         stepHistory,
                         retryOperationName: "ExecutePlanStepAsync",
                         tokenLabel: stepLabel,
-                        spinnerMessage: $"Working on {stepLabel} — press Esc to cancel",
+                        // Empty: the host owns the spinner for the duration of a plan, driven by the
+                        // step-progress events. Two spinners on one console is what bled frames
+                        // into the step headers.
+                        spinnerMessage: "",
                         cancellationToken);
 
                     var response = string.IsNullOrEmpty(result.Text) ? "Step completed (no response content)." : result.Text;

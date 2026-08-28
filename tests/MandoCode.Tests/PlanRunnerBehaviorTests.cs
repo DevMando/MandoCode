@@ -167,4 +167,48 @@ public class PlanRunnerBehaviorTests
 
         Assert.Equal(["a", "c"], exec.Executed);
     }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public async Task ConsumerCancellingOnAFailedStep_StopsThePlan(string engine)
+    {
+        // The one place a runner must wait for the consumer. The consumer decides skip-vs-cancel by
+        // mutating plan.Status while handling StepFailed; reading it before the decision lands is
+        // the bug the legacy runner documents — "Cancel the plan" silently downgraded to "skip".
+        // Every other progress event is fire-and-forget so rendering never holds up the model, so
+        // this asserts the exception is still honoured.
+        var exec = new ScriptedPlanStepExecutor((instr, _) =>
+            instr == "boom" ? throw new InvalidOperationException("nope") : "ok");
+        var plan = MakePlan("fine", "boom", "never runs");
+        var runner = MakeRunner(engine, exec);
+
+        await foreach (var e in runner.ExecutePlanAsync(plan))
+        {
+            if (e.ProgressType == TaskProgressType.StepFailed) runner.CancelPlan(plan);
+        }
+
+        Assert.Equal(["fine", "boom"], exec.Executed);
+        Assert.Equal(TaskPlanStatus.Cancelled, plan.Status);
+    }
+
+    [Theory]
+    [MemberData(nameof(Engines))]
+    public async Task ProgressEvents_ArriveInOrder(string engine)
+    {
+        // Fire-and-forget is only safe because the transport is FIFO with a single reader: the
+        // display may trail the work, but it can never show it out of sequence.
+        var exec = new ScriptedPlanStepExecutor();
+        var events = await DrainAsync(MakeRunner(engine, exec), MakePlan("a", "b", "c"));
+
+        var types = events.Select(e => e.ProgressType).ToList();
+        Assert.Equal(TaskProgressType.PlanCreated, types.First());
+        Assert.Equal(TaskProgressType.PlanCompleted, types.Last());
+
+        // Each step's completion follows every earlier step's completion.
+        var completedSteps = events
+            .Where(e => e.ProgressType == TaskProgressType.StepCompleted)
+            .Select(e => e.CurrentStep)
+            .ToList();
+        Assert.Equal(completedSteps.OrderBy(n => n), completedSteps);
+    }
 }
