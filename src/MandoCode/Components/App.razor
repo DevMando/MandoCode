@@ -383,6 +383,10 @@
                     ? $"[green]Conversation restored ({restoredCount} messages) — continuing where you left off.[/]"
                     : "[dim]No previous session to continue for this folder — starting fresh.[/]");
                 AnsiConsole.WriteLine();
+
+                // Same gesture, so the same place: "continue where I left off" should mention a
+                // plan that was still running as well as the conversation.
+                ShowUnfinishedPlanNotice();
             }
 
             // Initialize imperative input with the shared state machine
@@ -895,8 +899,6 @@
 
     private async Task RunInteractiveLoopAsync()
     {
-        ShowUnfinishedPlanNotice();
-
         while (true)
         {
             // Show session token count right-aligned above prompt
@@ -1996,12 +1998,20 @@
     }
 
     /// <summary>
-    /// One line at startup when this project has an unfinished plan.
+    /// One line during <c>--continue</c> startup when this project has an unfinished plan.
     /// </summary>
     /// <remarks>
-    /// Discoverability, not decoration: someone whose plan died to a crash or a Ctrl+C has no
-    /// reason to guess that <c>/plan</c> exists, and the work is only worth recording if they find
-    /// out it was. Silent on the common path — no saved plan, nothing printed.
+    /// <para>
+    /// Shown only for <c>--continue</c>, because that is this app's existing "pick up where I left
+    /// off" gesture. Launching without it means a fresh session, and a plan from a previous one is
+    /// noise there. It also keeps the two halves of "where I left off" together: a resumed plan
+    /// runs with the conversation it came from rather than without it.
+    /// </para>
+    /// <para>
+    /// It notifies rather than resuming. Resuming writes files, and doing that automatically at
+    /// launch would let a plan the user had walked away from start changing their project before
+    /// they had read a single line.
+    /// </para>
     /// </remarks>
     private void ShowUnfinishedPlanNotice()
     {
