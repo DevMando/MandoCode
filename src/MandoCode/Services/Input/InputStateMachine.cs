@@ -160,7 +160,7 @@ public class InputStateMachine
     public static string GetCommandName(string input)
     {
         if (!IsCommand(input)) return input;
-        return input.TrimStart().Substring(1).ToLower();
+        return input.TrimStart().Substring(1).Trim().ToLowerInvariant();
     }
 
     public IEnumerable<string> GetAllCommands() => _commands.Keys;

@@ -5,7 +5,7 @@ using MandoCode.Services;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// Tests the versioned wrapper around MAF's checkpoint blob. Every field outside the payload is a
+/// Tests the versioned wrapper around the durable plan snapshot. Every field outside the payload is a
 /// refusal criterion, because the failure mode of resuming a stale or foreign checkpoint is
 /// re-running steps whose write_file already succeeded.
 /// </summary>
@@ -80,6 +80,18 @@ public class PlanCheckpointEnvelopeTests
         Assert.NotNull(reason);
         Assert.Contains("qwen3:8b", reason);
         Assert.Contains("gemma3:12b", reason);
+    }
+
+    [Fact]
+    public void DifferentDesktopAgentSession_IsRefused()
+    {
+        var reason = Make().FindIncompatibility(
+            "abc123abc123",
+            "qwen3:8b",
+            expectedPlanId: "another-agent");
+
+        Assert.NotNull(reason);
+        Assert.Contains("different agent session", reason);
     }
 
     [Fact]

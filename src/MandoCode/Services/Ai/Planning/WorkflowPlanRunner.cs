@@ -65,6 +65,17 @@ public sealed class WorkflowPlanRunner(
         CancellationToken cancellationToken = default)
         => RunAsync(PlanCheckpointStore.ToPlan(state), state.PreviousResults, cancellationToken);
 
+    /// <summary>
+    /// Continues a saved run using the same reconstructed plan instance the interactive host owns.
+    /// Failure decisions mutate that instance during progress-event handshakes, so constructing a
+    /// second plan inside the runner would make retry/cancel choices invisible to workflow triage.
+    /// </summary>
+    public IAsyncEnumerable<TaskProgressEvent> ResumeAsync(
+        TaskPlan plan,
+        PlanRunState state,
+        CancellationToken cancellationToken = default)
+        => RunAsync(plan, state.PreviousResults, cancellationToken);
+
     private async IAsyncEnumerable<TaskProgressEvent> RunAsync(
         TaskPlan plan,
         IReadOnlyList<string>? seedResults,

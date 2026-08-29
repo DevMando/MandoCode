@@ -208,15 +208,20 @@ public class TaskPlannerService : IPlanRunner
             }
         }
 
-        var allCompleted = plan.Steps.All(s =>
+        var allSettled = plan.Steps.All(s =>
             s.Status == TaskStepStatus.Completed || s.Status == TaskStepStatus.Skipped);
-
+        var anySkipped = plan.Steps.Any(s => s.Status == TaskStepStatus.Skipped);
         var anyFailed = plan.Steps.Any(s => s.Status == TaskStepStatus.Failed);
 
-        if (allCompleted && !anyFailed)
+        if (allSettled && !anyFailed)
         {
-            plan.Status = TaskPlanStatus.Completed;
-            plan.ExecutionSummary = $"Successfully completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps.";
+            plan.Status = anySkipped
+                ? TaskPlanStatus.CompletedWithIssues
+                : TaskPlanStatus.Completed;
+            plan.ExecutionSummary = anySkipped
+                ? $"Completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps; " +
+                  $"{plan.Steps.Count(s => s.Status == TaskStepStatus.Skipped)} step(s) were skipped after failure."
+                : $"Successfully completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps.";
             yield return TaskProgressEvent.PlanCompleted(plan);
         }
         else if (plan.Status != TaskPlanStatus.Cancelled)

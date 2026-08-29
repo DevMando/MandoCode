@@ -106,7 +106,8 @@ public class PlanHandoff
     // turn unwinds (see RunPendingPlanAsync). Last write wins — a model that proposes twice in one
     // turn simply replaces its own proposal, which is strictly better than the old behavior of
     // refusing the second one with a prose directive it could ignore anyway.
-    private (string Goal, PlanStepProposal[] Steps)? _pendingProposal;
+    private (string Goal, string? OriginalRequest, PlanStepProposal[] Steps)? _pendingProposal;
+    private string? _currentRequest;
 
     /// <summary>True when the model proposed a plan this turn that hasn't been run yet.</summary>
     public bool HasPendingProposal
@@ -114,10 +115,25 @@ public class PlanHandoff
         get { lock (_lock) return _pendingProposal != null; }
     }
 
+    /// <summary>
+    /// Supplies the request that opened the current model turn. A later proposal captures this
+    /// value so checkpoints retain the request's authoritative paths rather than only the model's
+    /// shortened goal.
+    /// </summary>
+    public void SetRequestContext(string? request)
+    {
+        lock (_lock)
+        {
+            _currentRequest = string.IsNullOrWhiteSpace(request) ? null : request;
+            if (_pendingProposal is { } pending)
+                _pendingProposal = (pending.Goal, _currentRequest, pending.Steps);
+        }
+    }
+
     /// <summary>Records a proposal for the host to run once the current turn finishes.</summary>
     public void SetPendingProposal(string goal, PlanStepProposal[] steps)
     {
-        lock (_lock) _pendingProposal = (goal, steps);
+        lock (_lock) _pendingProposal = (goal, _currentRequest, steps);
     }
 
     /// <summary>Drops any pending proposal — used when a turn ends without running one.</summary>
@@ -143,7 +159,7 @@ public class PlanHandoff
     /// </remarks>
     public async Task<string?> RunPendingPlanAsync(CancellationToken ct = default)
     {
-        (string Goal, PlanStepProposal[] Steps)? pending;
+        (string Goal, string? OriginalRequest, PlanStepProposal[] Steps)? pending;
         lock (_lock)
         {
             pending = _pendingProposal;
@@ -152,7 +168,11 @@ public class PlanHandoff
 
         if (pending == null) return null;
 
-        return await ProcessAsync(pending.Value.Goal, pending.Value.Steps, ct);
+        return await ProcessAsync(
+            pending.Value.Goal,
+            pending.Value.Steps,
+            ct,
+            pending.Value.OriginalRequest);
     }
 
     /// <summary>
@@ -163,7 +183,8 @@ public class PlanHandoff
     public async Task<string> ProcessAsync(
         string goal,
         PlanStepProposal[] proposals,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? originalRequest = null)
     {
         lock (_lock)
         {
@@ -185,7 +206,7 @@ public class PlanHandoff
 
             var plan = new TaskPlan
             {
-                OriginalRequest = goal,
+                OriginalRequest = string.IsNullOrWhiteSpace(originalRequest) ? goal : originalRequest,
                 Steps = steps,
                 Status = TaskPlanStatus.Pending
             };
@@ -220,6 +241,59 @@ public class PlanHandoff
         {
             lock (_lock) _isExecuting = false;
         }
+    }
+
+    /// <summary>
+    /// Marks a reconstructed plan as active and restores file-operation evidence from its saved
+    /// state. The returned scope must cover the whole resumed run so nested planning stays blocked
+    /// and new successful writes are appended to the restored evidence.
+    /// </summary>
+    public IDisposable BeginResumedExecution(IReadOnlyList<PlanFileOperation> savedFileOperations)
+    {
+        lock (_lock)
+        {
+            if (_isExecuting)
+                throw new InvalidOperationException("A plan is already executing.");
+
+            _isExecuting = true;
+            LastPlanExecutedWork = false;
+            _fileOperations.Clear();
+            foreach (var operation in savedFileOperations)
+                _fileOperations.Add((operation.Operation, operation.Path));
+        }
+
+        try
+        {
+            ExecutionStarted?.Invoke();
+            return new ResumedExecutionScope(this);
+        }
+        catch
+        {
+            lock (_lock) _isExecuting = false;
+            throw;
+        }
+    }
+
+    private void EndResumedExecution()
+    {
+        try
+        {
+            ExecutionFinished?.Invoke();
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _isExecuting = false;
+            }
+        }
+    }
+
+    private sealed class ResumedExecutionScope(PlanHandoff owner) : IDisposable
+    {
+        private PlanHandoff? _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.EndResumedExecution();
     }
 
     /// <summary>

@@ -591,6 +591,7 @@ public class InputStateMachineTests
     [InlineData("/help", "help")]
     [InlineData("/CLEAR", "clear")]      // lowercased
     [InlineData("  /Config", "config")]  // trimmed + lowered
+    [InlineData("/plan-resume  ", "plan-resume")] // trailing input whitespace is not command syntax
     [InlineData("hello", "hello")]       // not a command, returns as-is
     public void GetCommandName_ExtractsName(string input, string expected)
     {

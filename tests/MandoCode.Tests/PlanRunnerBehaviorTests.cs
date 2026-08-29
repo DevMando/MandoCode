@@ -152,7 +152,8 @@ public class PlanRunnerBehaviorTests
 
         Assert.Equal(["fine", "boom", "also fine"], exec.Executed);
         Assert.Equal(TaskStepStatus.Skipped, plan.Steps[1].Status);
-        Assert.Equal(TaskPlanStatus.Completed, plan.Status);
+        Assert.Equal(TaskPlanStatus.CompletedWithIssues, plan.Status);
+        Assert.Contains("1 step(s) were skipped", plan.ExecutionSummary);
     }
 
     [Theory]

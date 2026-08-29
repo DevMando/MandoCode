@@ -106,4 +106,44 @@ public class PlanHandoffTests
         Assert.Equal("ok", first);
         Assert.Equal("ok", second);
     }
+
+    [Fact]
+    public async Task PendingProposal_CapturesTheRequestThatProducedIt()
+    {
+        var handoff = new PlanHandoff();
+        TaskPlan? captured = null;
+        handoff.OnPlanRequested = (plan, _) =>
+        {
+            captured = plan;
+            return Task.FromResult("rejected");
+        };
+
+        handoff.SetRequestContext("In @Games/Pacman, replace only the renderer.");
+        handoff.SetPendingProposal(
+            "replace renderer",
+            [new PlanStepProposal("renderer", "replace renderer")]);
+
+        await handoff.RunPendingPlanAsync();
+
+        Assert.NotNull(captured);
+        Assert.Equal("In @Games/Pacman, replace only the renderer.", captured!.OriginalRequest);
+    }
+
+    [Fact]
+    public void ResumedExecution_RestoresEvidence_AndRecordsNewOperations()
+    {
+        var handoff = new PlanHandoff();
+
+        using (handoff.BeginResumedExecution(
+                   [new PlanFileOperation("write_file", "src/one.cs")]))
+        {
+            Assert.True(handoff.IsExecuting);
+            handoff.RecordFileOperation("edit_file", "src/two.cs");
+            Assert.Equal(2, handoff.FileOperations.Count);
+        }
+
+        Assert.False(handoff.IsExecuting);
+        Assert.Contains(handoff.FileOperations, op => op.Path == "src/one.cs");
+        Assert.Contains(handoff.FileOperations, op => op.Path == "src/two.cs");
+    }
 }

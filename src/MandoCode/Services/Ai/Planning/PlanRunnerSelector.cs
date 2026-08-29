@@ -21,7 +21,8 @@ public sealed class PlanRunnerSelector(
     TaskPlannerService legacyRunner,
     IPlanStepExecutor stepExecutor,
     PlanHandoff? planHandoff = null,
-    ProjectRootAccessor? projectRoot = null)
+    ProjectRootAccessor? projectRoot = null,
+    string? checkpointId = null)
 {
     private WorkflowPlanRunner? _workflowRunner;
 
@@ -49,13 +50,17 @@ public sealed class PlanRunnerSelector(
     {
         refusal = null;
         if (projectRoot == null) return null;
-        return PlanCheckpointStore.Load(projectRoot.ProjectRoot, config.GetEffectiveModelName(), out refusal);
+        return PlanCheckpointStore.Load(
+            projectRoot.ProjectRoot,
+            config.GetEffectiveModelName(),
+            out refusal,
+            checkpointId);
     }
 
     /// <summary>Forgets any recorded plan for this project.</summary>
     public void DiscardResumable()
     {
-        if (projectRoot != null) PlanCheckpointStore.Delete(projectRoot.ProjectRoot);
+        if (projectRoot != null) PlanCheckpointStore.Delete(projectRoot.ProjectRoot, checkpointId);
     }
 
     /// <summary>
@@ -68,7 +73,7 @@ public sealed class PlanRunnerSelector(
 
         if (PlanCheckpointStore.OutstandingSteps(state) == 0)
         {
-            PlanCheckpointStore.Delete(projectRoot.ProjectRoot);
+            PlanCheckpointStore.Delete(projectRoot.ProjectRoot, checkpointId);
             return;
         }
 
@@ -76,6 +81,7 @@ public sealed class PlanRunnerSelector(
             projectRoot.ProjectRoot,
             state,
             config.GetEffectiveModelName(),
-            planId: PlanCheckpointEnvelope.HashProjectRoot(projectRoot.ProjectRoot));
+            planId: checkpointId ?? PlanCheckpointEnvelope.HashProjectRoot(projectRoot.ProjectRoot),
+            checkpointId: checkpointId);
     }
 }

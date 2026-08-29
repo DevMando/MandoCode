@@ -76,6 +76,20 @@ public class PlanResumeContextTests
     }
 
     [Fact]
+    public async Task HostOwnedPlan_IsTheInstanceResumeMutates()
+    {
+        var saved = SavedMidPlan();
+        var plan = PlanCheckpointStore.ToPlan(saved);
+        var runner = new WorkflowPlanRunner(new ScriptedPlanStepExecutor());
+
+        await foreach (var _ in runner.ResumeAsync(plan, saved)) { }
+
+        Assert.Equal(TaskPlanStatus.Completed, plan.Status);
+        Assert.Equal(TaskStepStatus.Completed, plan.Steps[1].Status);
+        Assert.NotNull(plan.Steps[1].Result);
+    }
+
+    [Fact]
     public void TheSavedRecordCarriesTheVerbatimRequest()
     {
         // The CLI feeds this into AIService before resuming, because the process that received the

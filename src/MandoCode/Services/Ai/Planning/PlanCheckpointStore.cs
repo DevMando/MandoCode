@@ -9,10 +9,10 @@ namespace MandoCode.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One file per project root under <c>~/.mandocode/plans/</c>, using the same leaf+hash naming as
-/// <see cref="SessionResumeStore"/> so two folders both called "api" cannot collide. Written
-/// whole-file with write-then-rename, and best-effort throughout: persistence must never break a
-/// running plan.
+/// One file per project root and optional owner under <c>~/.mandocode/plans/</c>, using readable
+/// leaf names plus hashes so neither same-named projects nor Desktop agents sharing a project can
+/// collide. Written whole-file with write-then-rename, and best-effort throughout: persistence
+/// must never break a running plan.
 /// </para>
 /// <para>
 /// Resume works by reconstructing the plan and running it again — completed and skipped steps are
@@ -30,20 +30,31 @@ public static class PlanCheckpointStore
     private static string Folder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "plans");
 
-    /// <summary>Stable file path for a project root — readable leaf plus a hash of the full path.</summary>
-    public static string PathFor(string projectRoot)
+    /// <summary>Stable path for a project and optional owner — readable leaf plus identity hashes.</summary>
+    public static string PathFor(string projectRoot, string? checkpointId = null)
     {
         var full = Path.GetFullPath(projectRoot)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var hash = PlanCheckpointEnvelope.HashProjectRoot(full);
         var leaf = new string(Path.GetFileName(full).Where(char.IsLetterOrDigit).Take(24).ToArray());
-        return Path.Combine(Folder, leaf.Length > 0 ? $"{leaf}-{hash}.json" : $"{hash}.json");
+        var owner = string.IsNullOrWhiteSpace(checkpointId)
+            ? ""
+            : "-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(checkpointId)))[..12];
+        return Path.Combine(Folder, leaf.Length > 0
+            ? $"{leaf}-{hash}{owner}.json"
+            : $"{hash}{owner}.json");
     }
 
     /// <summary>
     /// Records the current state of a running plan. Overwrites any previous record for this project.
     /// </summary>
-    public static void Save(string projectRoot, PlanRunState state, string modelName, string planId)
+    public static void Save(
+        string projectRoot,
+        PlanRunState state,
+        string modelName,
+        string planId,
+        string? checkpointId = null)
     {
         try
         {
@@ -61,7 +72,7 @@ public static class PlanCheckpointStore
             if (json.Length > MaxBytes) return;
 
             Directory.CreateDirectory(Folder);
-            var path = PathFor(projectRoot);
+            var path = PathFor(projectRoot, checkpointId);
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, path, overwrite: true);
@@ -74,19 +85,25 @@ public static class PlanCheckpointStore
     /// or it is not safe to resume. <paramref name="refusal"/> explains a readable-but-unusable
     /// record so the caller can say why rather than silently offering nothing.
     /// </summary>
-    public static PlanRunState? Load(string projectRoot, string modelName, out string? refusal)
+    public static PlanRunState? Load(
+        string projectRoot,
+        string modelName,
+        out string? refusal,
+        string? checkpointId = null)
     {
         refusal = null;
         try
         {
-            var path = PathFor(projectRoot);
+            var path = PathFor(projectRoot, checkpointId);
             if (!File.Exists(path)) return null;
 
             var envelope = JsonSerializer.Deserialize<PlanCheckpointEnvelope>(File.ReadAllText(path));
             if (envelope == null) return null;
 
             refusal = envelope.FindIncompatibility(
-                PlanCheckpointEnvelope.HashProjectRoot(projectRoot), modelName);
+                PlanCheckpointEnvelope.HashProjectRoot(projectRoot),
+                modelName,
+                checkpointId);
             if (refusal != null) return null;
 
             return envelope.Payload.Deserialize<PlanRunState>();
@@ -100,20 +117,20 @@ public static class PlanCheckpointStore
     }
 
     /// <summary>Removes the record — the plan finished, was cancelled, or the user discarded it.</summary>
-    public static void Delete(string projectRoot)
+    public static void Delete(string projectRoot, string? checkpointId = null)
     {
         try
         {
-            var path = PathFor(projectRoot);
+            var path = PathFor(projectRoot, checkpointId);
             if (File.Exists(path)) File.Delete(path);
         }
         catch { }
     }
 
     /// <summary>True when a record exists for this project, without validating it.</summary>
-    public static bool Exists(string projectRoot)
+    public static bool Exists(string projectRoot, string? checkpointId = null)
     {
-        try { return File.Exists(PathFor(projectRoot)); }
+        try { return File.Exists(PathFor(projectRoot, checkpointId)); }
         catch { return false; }
     }
 

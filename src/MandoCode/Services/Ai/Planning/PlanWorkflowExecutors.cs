@@ -316,18 +316,20 @@ internal sealed class PlanFinalizerExecutor(PlanRunContext ctx)
             return;
         }
 
-        // Classification copied deliberately from the legacy runner, including its quirk that a
-        // plan whose steps were all skipped after failures still reports Completed. Changing it
-        // here would make the two engines disagree while both are selectable; it belongs in the
-        // phase that retires the legacy runner.
-        var allCompleted = plan.Steps.All(s =>
+        var allSettled = plan.Steps.All(s =>
             s.Status == TaskStepStatus.Completed || s.Status == TaskStepStatus.Skipped);
+        var anySkipped = plan.Steps.Any(s => s.Status == TaskStepStatus.Skipped);
         var anyFailed = plan.Steps.Any(s => s.Status == TaskStepStatus.Failed);
 
-        if (allCompleted && !anyFailed)
+        if (allSettled && !anyFailed)
         {
-            plan.Status = TaskPlanStatus.Completed;
-            plan.ExecutionSummary = $"Successfully completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps.";
+            plan.Status = anySkipped
+                ? TaskPlanStatus.CompletedWithIssues
+                : TaskPlanStatus.Completed;
+            plan.ExecutionSummary = anySkipped
+                ? $"Completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps; " +
+                  $"{plan.Steps.Count(s => s.Status == TaskStepStatus.Skipped)} step(s) were skipped after failure."
+                : $"Successfully completed {plan.CompletedStepsCount} of {plan.Steps.Count} steps.";
             await ctx.RaiseAsync(TaskProgressEvent.PlanCompleted(plan));
         }
         else

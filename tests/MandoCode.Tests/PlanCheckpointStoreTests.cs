@@ -106,4 +106,15 @@ public class PlanCheckpointStoreTests
         Assert.NotEqual(a, b);                                          // two folders called "api"
         Assert.Contains("api-", Path.GetFileName(a));                   // readable leaf retained
     }
+
+    [Fact]
+    public void DesktopAgentCheckpointPaths_DoNotCollideWithinOneProject()
+    {
+        var first = PlanCheckpointStore.PathFor(@"C:\work\api", "agent-one");
+        var second = PlanCheckpointStore.PathFor(@"C:\work\api", "agent-two");
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(first, PlanCheckpointStore.PathFor(@"C:\work\api\", "agent-one"));
+        Assert.NotEqual(first, PlanCheckpointStore.PathFor(@"C:\other\api", "agent-one"));
+    }
 }

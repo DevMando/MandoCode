@@ -6,15 +6,15 @@ using System.Text.Json.Serialization;
 namespace MandoCode.Services;
 
 /// <summary>
-/// Versioned wrapper around a MAF workflow checkpoint.
+/// Versioned wrapper around a durable plan-state snapshot.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The framework's own checkpoint payload is written opaque, inside <see cref="Payload"/>. It is
-/// never stored bare: a <c>Microsoft.Agents.AI.Workflows</c> version bump could change that format
-/// with no detection, and the failure mode is deserializing a stale shape into a plan that then
-/// runs <c>write_file</c>. Every field outside <see cref="Payload"/> exists to be a refusal
-/// criterion — see <see cref="FindIncompatibility"/>.
+/// The application-owned <see cref="PlanRunState"/> payload is never stored bare. A schema or
+/// workflow-topology change can alter what its cursor and statuses mean, and the dangerous failure
+/// mode is re-running a step whose <c>write_file</c> already succeeded. Every field outside
+/// <see cref="Payload"/> exists to identify or validate the saved run — see
+/// <see cref="FindIncompatibility"/>.
 /// </para>
 /// <para>
 /// This lands before the first checkpoint is ever written. Adding the envelope later would leave
@@ -56,7 +56,7 @@ public sealed record PlanCheckpointEnvelope
     [JsonPropertyName("createdUtc")]
     public DateTimeOffset CreatedUtc { get; init; }
 
-    /// <summary>The framework's checkpoint blob. Opaque here by design — never inspected.</summary>
+    /// <summary>The serialized <see cref="PlanRunState"/>. Kept as JSON until compatibility passes.</summary>
     [JsonPropertyName("payload")]
     public JsonElement Payload { get; init; }
 
@@ -79,7 +79,11 @@ public sealed record PlanCheckpointEnvelope
     /// </summary>
     /// <param name="projectRootHash">Hash of the project root being resumed into.</param>
     /// <param name="modelName">Model configured right now.</param>
-    public string? FindIncompatibility(string projectRootHash, string modelName)
+    /// <param name="expectedPlanId">Optional Desktop agent/session owner for collision isolation.</param>
+    public string? FindIncompatibility(
+        string projectRootHash,
+        string modelName,
+        string? expectedPlanId = null)
     {
         if (SchemaVersion != CurrentSchemaVersion)
         {
@@ -97,6 +101,12 @@ public sealed record PlanCheckpointEnvelope
         if (!string.Equals(ProjectRootHash, projectRootHash, StringComparison.OrdinalIgnoreCase))
         {
             return "This plan belongs to a different project folder.";
+        }
+
+        if (expectedPlanId != null &&
+            !string.Equals(PlanId, expectedPlanId, StringComparison.Ordinal))
+        {
+            return "This plan belongs to a different agent session.";
         }
 
         if (!string.Equals(ModelName, modelName, StringComparison.OrdinalIgnoreCase))

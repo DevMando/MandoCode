@@ -309,13 +309,13 @@ See the main [README](../../../README.md#diff-approvals) for user-facing documen
 
 ---
 
-## Migration to MAF Workflows (in progress)
+## MAF workflow planner
 
-The planner is being rebuilt on `Microsoft.Agents.AI.Workflows`. The driver is a single root cause:
-**the whole plan currently executes inside one `propose_plan` tool call.** Because the outer model's
-turn is still open, it never sees the steps run, treats the summary as "not started yet," and redoes
-the work — so `BuildManifest`, the App.razor stop directive, and the `PlanWorkCompleted` gate all
-exist to stop it. The watchdog pause and the prompt-gate release dance have the same origin.
+The optional workflow planner is built on `Microsoft.Agents.AI.Workflows`. Its first architectural
+change was removing one root cause: the old planner executed the whole plan inside the
+`propose_plan` tool call. Because the outer model turn was still open, it could not observe the work,
+treated the returned summary as "not started yet," and repeated it. `propose_plan` now returns a
+receipt, the turn drains, the host asks for approval, and only then does the selected runner execute.
 
 Decision: an **authored `WorkflowBuilder` graph**, not Magentic. Magentic's .NET manager is more
 local-model-tolerant than expected (prompt-injected schema, tolerant JSON extraction, 3 retries),
@@ -331,10 +331,10 @@ too: it routes via `handoff_to_*` tool calls that cannot be forced, the worst po
 | 1 | Freeze identity / checkpoint envelope / config key; extract `IPlanRunner` + `IPlanStepExecutor` | done |
 | 2 | Un-nest: `propose_plan` returns a receipt, the host runs the plan after the turn drains | done |
 | 3 | The graph behind `planner=workflow`: fixed topology, triage owns plan state | done |
-| 3b | Move approval and step decisions onto `RequestPort`s; make progress read-only | |
-| 4 | Checkpointing + resume | |
-| 5 | Retry / replan / forced-tool-use escalation | |
-| 6 | Flip the `planner` default, then delete the legacy runner | |
+| 3b | Show step instructions and support coherent pre-execution edits | done |
+| 4 | Checkpointing, resume, discard, and native Desktop recovery actions | done |
+| 5 | Retry, replan approval, deterministic `/plan <goal>`, and truthful partial status | done |
+| 6 | Flip the `planner` default, then delete the legacy runner | deferred pending release soak |
 
 Spike findings worth keeping:
 
@@ -373,14 +373,28 @@ workflow-executor identity from both the agent's `Id` and `Name`, and a checkpoi
 identity can never be resumed under another. `PlanExecutorIdsTests` holds a golden list precisely so
 a rename fails loudly.
 
+`/plan <goal>` bypasses the heuristic and uses a stateless proposal-only call. That call receives
+only `propose_plan`; it cannot read or change the project. If a provider ignores required tool
+choice, proposal generation falls back to schema-constrained JSON and then to a safe one-step host
+proposal. `/plan` without a goal inspects the current checkpoint, while `/plan-resume` and
+`/plan-discard` act on it.
+
+The workflow checkpoint stores the original plan, settled step results, the next workflow cursor,
+file-operation context, project root, model, planner engine, and fixed executor identities. Resume
+validates that envelope before running and never replays settled steps. Desktop exposes the same
+state through an Unfinished Plan card; the CLI exposes it through commands.
+
+On failure, the host offers retry, revise the remaining plan, skip, or cancel. A revision preserves
+the settled prefix and returns the replacement suffix to the user for editing and approval. Reaching
+the end with skipped work produces `CompletedWithIssues`, not an unqualified success.
+
 ---
 
 ## Future Improvements
 
 - [ ] Step dependency graph for parallel execution of independent steps
-- [~] Plan persistence for resuming interrupted plans across sessions — in progress, phase 4 above;
-      envelope and identity scheme already landed in phase 1
-- [~] User-editable plan before approval — in progress, phase 3 above; the approval view will also
-      show each step's `Instruction`, which today is never shown before the user approves it
+- [x] Plan persistence for resuming interrupted plans across sessions
+- [x] User-editable plans with visible instructions and dependent-suffix regeneration
+- [x] Retry, failure replanning with approval, skip/cancel decisions, and truthful partial status
 - [x] ~~Mid-generation progress signals~~ — shipped: `StreamingMode` config streams chunks as the model emits them (via `_agent.RunStreamingAsync`, buffered through `StreamBuffering` for the stall-watchdog heartbeat), with non-streaming still available as a fallback for models where streaming + auto-invoke proved unreliable.
 - [ ] Smarter `Required` vs `Auto` tool-choice on plan-step first turn (force a tool call on steps that the model drifts into prose on)

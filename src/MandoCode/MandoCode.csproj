@@ -13,11 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <!-- Prerelease tag while the step-narration change is being tested live, so the banner makes
-         it obvious which binary is running. UpdateCheckService's ParseStable rejects prerelease
-         tags and falls back to the numeric assembly version, so update checks are unaffected.
-         Drop the suffix before release. -->
-    <Version>0.15.0-stepdelta-test</Version>
+    <Version>0.15.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>

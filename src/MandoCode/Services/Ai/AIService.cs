@@ -454,6 +454,225 @@ public class AIService
         AIFunctionFactory.Create(method, new AIFunctionFactoryOptions { Name = name });
 
     /// <summary>
+    /// Generates a plan without entering the normal agent/tool loop. The throwaway client is
+    /// deliberately given exactly one tool and required to call a tool, so callers such as
+    /// <c>/plan &lt;goal&gt;</c> and failure replanning get a deterministic proposal rather than relying
+    /// on the normal agent's planning heuristic.
+    /// </summary>
+    public async Task<GeneratedPlan> GeneratePlanAsync(
+        string request,
+        string? revisionContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request))
+            throw new ArgumentException("A planning goal is required.", nameof(request));
+
+        var planningPlugin = new PlanningPlugin();
+        var proposePlan = NamedTool(planningPlugin.ProposePlan, "propose_plan");
+
+        using var httpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
+        {
+            BaseAddress = new Uri(_config.OllamaEndpoint),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
+        };
+        using IChatClient client = new OllamaApiClient(httpClient, _config.GetEffectiveModelName());
+
+        var system = revisionContext == null
+            ? "You are a software implementation planner. Break the user's goal into concrete, ordered, " +
+              "independently verifiable steps. You must call propose_plan exactly once. Do not perform work."
+            : "You are revising the unfinished portion of a software implementation plan because execution evidence " +
+              "or a user edit made the current remainder stale. Use the supplied context to replace only the requested " +
+              "remaining work with concrete, ordered, independently verifiable steps. Write every returned step as the " +
+              "actual work to execute. Never describe the act of revising the plan, say 'replace/update/revise step', " +
+              "or refer to old step numbers. You must call propose_plan exactly once. Do not perform work.";
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, system),
+            new(ChatRole.User, revisionContext == null
+                ? request
+                : $"Original request:\n{request}\n\nRevision context:\n{revisionContext}")
+        };
+
+        GeneratedPlanArguments? arguments = null;
+        try
+        {
+            var response = await client.GetResponseAsync(messages, new ChatOptions
+            {
+                Temperature = 0.2f,
+                MaxOutputTokens = _config.MaxTokens,
+                Tools = [proposePlan],
+                ToolMode = ChatToolMode.RequireSpecific("propose_plan")
+            }, cancellationToken);
+
+            var call = response.Messages
+                .SelectMany(message => message.Contents)
+                .OfType<FunctionCallContent>()
+                .FirstOrDefault(content => content.Name == "propose_plan");
+            if (call != null)
+                arguments = DeserializePlanArguments(JsonSerializer.Serialize(call.Arguments));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            // Some Ollama-compatible providers reject named tool choice even though they support
+            // tools. Fall through to schema-constrained JSON rather than making /plan heuristic.
+        }
+
+        if (TryMaterializePlan(arguments, out var generated)) return generated;
+
+        // Provider ignored/rejected forced tool choice. Ask for the same typed payload without
+        // tools, constrained by MEAI's exported JSON schema. This is still proposal-only.
+        try
+        {
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                PropertyNameCaseInsensitive = true
+            };
+            var jsonResponse = await client.GetResponseAsync(
+                [
+                    new ChatMessage(ChatRole.System,
+                        system + " Return only JSON matching the requested schema. Every step requires " +
+                        "a non-empty description and instruction."),
+                    messages[1]
+                ],
+                new ChatOptions
+                {
+                    Temperature = 0.2f,
+                    MaxOutputTokens = _config.MaxTokens,
+                    ResponseFormat = ChatResponseFormat.ForJsonSchema<GeneratedPlanArguments>(jsonOptions)
+                },
+                cancellationToken);
+            arguments = DeserializePlanArguments(jsonResponse.Text);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            // Last-resort host fallback below keeps the explicit command deterministic even for a
+            // provider that supports neither tool choice nor schema-constrained output.
+        }
+
+        if (TryMaterializePlan(arguments, out generated)) return generated;
+
+        var fallbackGoal = string.Join(" ", request
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        if (fallbackGoal.Length > 160) fallbackGoal = fallbackGoal[..157] + "...";
+        return new GeneratedPlan(
+            fallbackGoal,
+            [new PlanStepProposal("Complete the requested goal", request.Trim())]);
+    }
+
+    private sealed record GeneratedPlanArguments(string? Goal, PlanStepProposal[]? Steps);
+
+    private static GeneratedPlanArguments? DeserializePlanArguments(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        try { return JsonSerializer.Deserialize<GeneratedPlanArguments>(json, options); }
+        catch (JsonException)
+        {
+            // Tolerate providers that wrap otherwise-valid JSON in prose or a markdown fence.
+            var first = json.IndexOf('{');
+            var last = json.LastIndexOf('}');
+            if (first < 0 || last <= first) return null;
+            try { return JsonSerializer.Deserialize<GeneratedPlanArguments>(json[first..(last + 1)], options); }
+            catch (JsonException) { return null; }
+        }
+    }
+
+    private static bool TryMaterializePlan(
+        GeneratedPlanArguments? arguments,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GeneratedPlan? generated)
+    {
+        var goal = arguments?.Goal?.Trim();
+        var steps = arguments?.Steps?
+            .Where(step => !string.IsNullOrWhiteSpace(step.description) &&
+                           !string.IsNullOrWhiteSpace(step.instruction))
+            .Select(step => new PlanStepProposal(step.description.Trim(), step.instruction.Trim()))
+            .ToArray() ?? [];
+        generated = string.IsNullOrWhiteSpace(goal) || steps.Length == 0
+            ? null
+            : new GeneratedPlan(goal, steps);
+        return generated != null;
+    }
+
+    /// <summary>
+    /// Classifies a completed model response when the step model omitted its terminal marker. This
+    /// is a separate proposal-only call with exactly one required tool: it cannot touch the project
+    /// or continue the task, and it must return a structured success decision. Forced planning has
+    /// already established that the configured Ollama tool path honors RequireAny.
+    /// </summary>
+    private async Task<PlanStepVerification> VerifyPlanStepAsync(
+        string stepInstruction,
+        string stepResponse,
+        CancellationToken cancellationToken)
+    {
+        Task<string> ReportOutcome(bool success, string reason) =>
+            Task.FromResult(success ? "verified" : reason);
+
+        var reportTool = NamedTool(
+            (Func<bool, string, Task<string>>)ReportOutcome,
+            "report_plan_step_outcome");
+
+        using var httpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
+        {
+            BaseAddress = new Uri(_config.OllamaEndpoint),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
+        };
+        using IChatClient client = new OllamaApiClient(httpClient, _config.GetEffectiveModelName());
+
+        const int maxEvidenceChars = 12_000;
+        var evidence = stepResponse.Length <= maxEvidenceChars
+            ? stepResponse
+            : stepResponse[..6_000] + "\n...[middle truncated]...\n" + stepResponse[^6_000..];
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System,
+                "You are a strict plan-step verifier. You must call report_plan_step_outcome exactly once. " +
+                "Set success=true only when the response proves the exact step instruction was satisfied. " +
+                "A missing requested path, wrong path, wrong content, failed command, contradictory claim, " +
+                "or required check that could not be performed is failure. A same-named file elsewhere does " +
+                "not satisfy an exact requested path. Do not perform work and do not offer remediation."),
+            new(ChatRole.User,
+                $"Step instruction:\n{stepInstruction}\n\nStep response/evidence:\n{evidence}")
+        };
+
+        var response = await client.GetResponseAsync(messages, new ChatOptions
+        {
+            Temperature = 0,
+            MaxOutputTokens = Math.Min(_config.MaxTokens, 1024),
+            Tools = [reportTool],
+            ToolMode = ChatToolMode.RequireAny
+        }, cancellationToken);
+
+        var call = response.Messages
+            .SelectMany(message => message.Contents)
+            .OfType<FunctionCallContent>()
+            .FirstOrDefault(content => content.Name == "report_plan_step_outcome")
+            ?? throw new PlanStepReportedFailureException(
+                "The step finished, but its outcome could not be verified.");
+
+        var arguments = JsonSerializer.Deserialize<PlanStepVerificationArguments>(
+            JsonSerializer.Serialize(call.Arguments),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (arguments == null)
+            throw new PlanStepReportedFailureException(
+                "The step finished, but its structured verification result was invalid.");
+
+        var reason = string.IsNullOrWhiteSpace(arguments.Reason)
+            ? arguments.Success
+                ? "The verifier confirmed the step requirements."
+                : "The verifier found that the step requirements were not satisfied."
+            : arguments.Reason.Trim();
+        return new PlanStepVerification(arguments.Success, reason);
+    }
+
+    private sealed record PlanStepVerificationArguments(bool Success, string? Reason);
+    private sealed record PlanStepVerification(bool Success, string Reason);
+
+    /// <summary>
     /// The num_ctx stamped on outgoing chat requests: the configured context length for
     /// local models, 0 (leave the request untouched) for cloud models — their context
     /// lives server-side at the model's full window, so a local KV-cache size is
@@ -509,6 +728,7 @@ public class AIService
         // of STarfox/. The verbatim message (with App.razor's @file/@folder expansions)
         // is the ground truth for target paths.
         _currentTurnUserMessage = userMessage;
+        _planHandoff.SetRequestContext(userMessage);
 
         // Add message under lock, then release before the long AI call
         await _historyLock.WaitAsync(cancellationToken);
@@ -1220,6 +1440,10 @@ public class AIService
             sb.AppendLine("--- End of Previous Steps ---\n");
         }
 
+        sb.AppendLine("\n--- Required Step Outcome ---");
+        sb.AppendLine(PlanStepReport.Contract);
+        sb.AppendLine("--- End Required Step Outcome ---");
+
         return sb.ToString();
     }
 
@@ -1394,7 +1618,20 @@ public class AIService
             combined.AppendLine(processedResponse);
 
             if (!needsContinuation)
-                return combined.ToString().TrimEnd();
+            {
+                var report = PlanStepReport.Parse(combined.ToString());
+                if (report.Succeeded == false)
+                    throw new PlanStepReportedFailureException(report.FailureReason!);
+
+                if (report.Succeeded == null)
+                {
+                    var verification = await VerifyPlanStepAsync(
+                        stepInstruction, report.DisplayText, cancellationToken);
+                    if (!verification.Success)
+                        throw new PlanStepReportedFailureException(verification.Reason);
+                }
+                return report.DisplayText;
+            }
 
             continuations++;
             combined.AppendLine();
