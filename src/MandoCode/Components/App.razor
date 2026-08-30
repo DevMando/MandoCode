@@ -1216,7 +1216,7 @@
 
             // Check if this request needs task planning BEFORE injecting file content,
             // so that attached file size doesn't inflate the complexity heuristics
-            var needsPlanning = TaskPlanner.RequiresPlanning(input);
+            var planning = TaskPlanner.GetPlanningDecision(input);
 
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
@@ -1224,17 +1224,13 @@
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
 
-            // Heuristic fallback: for models that don't reliably self-invoke propose_plan,
-            // nudge them with a directive. The propose_plan call is still intercepted by
-            // the filter and handed to the approval UI via PlanHandoff.
-            if (needsPlanning)
+            if (planning.Required)
             {
-                processedInput += "\n\n[system: this request looks multi-step. " +
-                                  "Call propose_plan now with the breakdown before doing any work.]";
+                AnsiConsole.MarkupLine($"[dim]Planning automatically: {Spectre.Console.Markup.Escape(planning.Reason ?? "multi-step request")}.[/]");
+                await ForcePlanAsync(processedInput, input);
             }
-
-            // Process AI request with streaming (non-command input)
-            await ProcessDirectRequestAsync(processedInput);
+            else
+                await ProcessDirectRequestAsync(processedInput);
         }
     }
 
@@ -1656,7 +1652,7 @@
         }
     }
 
-    private async Task ProcessDirectRequestAsync(string input)
+    private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null)
     {
         // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
         // turn the user then cancelled would sit in the single slot and execute at the end of some
@@ -1677,7 +1673,10 @@
         try
         {
             var receivedFirstChunk = false;
-            var enumerator = AI.ChatStreamAsync(input, token).GetAsyncEnumerator(token);
+            var stream = string.IsNullOrWhiteSpace(hostInstruction)
+                ? AI.ChatStreamAsync(input, token)
+                : AI.ChatStreamWithHostInstructionAsync(input, hostInstruction, token);
+            var enumerator = stream.GetAsyncEnumerator(token);
 
             try
             {
@@ -2143,19 +2142,22 @@
         AnsiConsole.WriteLine();
     }
 
-    private async Task ForcePlanAsync(string goal)
+    private Task ForcePlanAsync(string goal) => ForcePlanAsync(goal, goal);
+
+    private async Task ForcePlanAsync(string planningRequest, string originalRequest)
     {
         _requestCts = new CancellationTokenSource();
         StartCancelKeyListener();
         var rejected = false;
         try
         {
+            AI.AppendUserNote(originalRequest);
             Spinner.Start("Creating plan...");
-            var proposal = await AI.GeneratePlanAsync(goal, cancellationToken: _requestCts.Token);
+            var proposal = await AI.GeneratePlanAsync(planningRequest, cancellationToken: _requestCts.Token);
             Spinner.Stop();
             _lastPlanOutcome = PlanTurnOutcome.None;
             var manifest = await PlanHandoff.ProcessAsync(
-                proposal.Goal, proposal.Steps, _requestCts.Token, originalRequest: goal);
+                proposal.Goal, proposal.Steps, _requestCts.Token, originalRequest: originalRequest);
             rejected = _lastPlanOutcome == PlanTurnOutcome.Rejected;
             if (_lastPlanOutcome == PlanTurnOutcome.Executed && !string.IsNullOrWhiteSpace(manifest))
                 AI.AppendAssistantNote(manifest);
@@ -2179,8 +2181,9 @@
         if (rejected)
         {
             await ProcessDirectRequestAsync(
-                goal + "\n\n[system: the user reviewed the forced plan and chose to skip stepwise " +
-                "execution. Answer the request directly now. Do not call propose_plan.]");
+                "Proceed with my original request directly.",
+                "The user reviewed the forced plan and chose to skip stepwise execution. " +
+                "Answer the request directly now. Do not call propose_plan.");
             PlanHandoff.ClearPendingProposal();
         }
     }
@@ -2265,8 +2268,9 @@
             try
             {
                 await ProcessDirectRequestAsync(
-                    "[system: the user reviewed your proposed plan and chose to skip stepwise "
-                  + "execution. Answer their original request directly now. Do not call propose_plan.]");
+                    "Continue with my original request.",
+                    "The user reviewed your proposed plan and chose to skip stepwise execution. "
+                  + "Answer their original request directly now. Do not call propose_plan.");
             }
             finally
             {
@@ -2908,13 +2912,12 @@
         }
         AnsiConsole.WriteLine();
 
-        var forcedPrompt =
-            $"[system: the user has explicitly forced skill '{skill.Name}' via /force-skill. " +
-            $"Follow these instructions exactly for this turn, even if they differ from your defaults.]\n\n" +
-            $"# Skill: {skill.Name}\n\n{skill.Body}";
+        var hostInstruction =
+            $"The user explicitly selected skill '{skill.Name}' via /force-skill. " +
+            $"Follow these instructions for this turn.\n\n# Skill: {skill.Name}\n\n{skill.Body}";
 
         _messages.Add(new ChatMsg { Role = "user", Text = $"/force-skill {skill.Name}" });
-        await ProcessDirectRequestAsync(forcedPrompt);
+        await ProcessDirectRequestAsync($"/force-skill {skill.Name}", hostInstruction);
     }
 
     private async Task HandleMcpListCommandAsync()

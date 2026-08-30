@@ -719,7 +719,18 @@ public class AIService
     /// NOTE: Non-streaming mode is the default for reliable function execution with local models —
     /// see <see cref="MandoCodeConfig.StreamingMode"/> and <see cref="InvokeAgentChatAsync"/>.
     /// </summary>
-    public async IAsyncEnumerable<string> ChatStreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<string> ChatStreamAsync(string userMessage, CancellationToken cancellationToken = default) =>
+        ChatStreamWithHostInstructionAsync(userMessage, null, cancellationToken);
+
+    /// <summary>
+    /// Streams a user turn with optional host-owned guidance carried as a real, transient
+    /// system-role message. The guidance is available for this turn and its continuations but is
+    /// removed afterward, so it cannot masquerade as user-authored text or affect later turns.
+    /// </summary>
+    public async IAsyncEnumerable<string> ChatStreamWithHostInstructionAsync(
+        string userMessage,
+        string? hostInstruction,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Capture the verbatim request for plan-step context. If this turn proposes a
         // plan, each step runs in its own fresh chat history and only sees the model's
@@ -730,21 +741,41 @@ public class AIService
         _currentTurnUserMessage = userMessage;
         _planHandoff.SetRequestContext(userMessage);
 
-        // Add message under lock, then release before the long AI call
+        ChatMessage? hostMessage = string.IsNullOrWhiteSpace(hostInstruction)
+            ? null
+            : new ChatMessage(ChatRole.System, hostInstruction);
+
+        // Add messages under lock, then release before the long AI call.
         await _historyLock.WaitAsync(cancellationToken);
-        try { _chatHistory.Add(new ChatMessage(ChatRole.User, userMessage)); }
+        try
+        {
+            if (hostMessage != null) _chatHistory.Add(hostMessage);
+            _chatHistory.Add(new ChatMessage(ChatRole.User, userMessage));
+        }
         finally { _historyLock.Release(); }
 
-        int continuations = 0;
-        while (true)
+        try
         {
-            var (response, needsContinuation) = await RunOneChatTurnAsync(continuations, cancellationToken);
-            yield return response;
+            int continuations = 0;
+            while (true)
+            {
+                var (response, needsContinuation) = await RunOneChatTurnAsync(continuations, cancellationToken);
+                yield return response;
 
-            if (!needsContinuation)
-                yield break;
+                if (!needsContinuation)
+                    break;
 
-            continuations++;
+                continuations++;
+            }
+        }
+        finally
+        {
+            if (hostMessage != null)
+            {
+                await _historyLock.WaitAsync(CancellationToken.None);
+                try { _chatHistory.Remove(hostMessage); }
+                finally { _historyLock.Release(); }
+            }
         }
     }
 
@@ -1786,6 +1817,16 @@ public class AIService
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         _chatHistory.Add(new ChatMessage(ChatRole.Assistant, text));
+    }
+
+    /// <summary>
+    /// Records a real user request that the host routed without entering the general chat loop,
+    /// such as deterministic plan generation.
+    /// </summary>
+    public void AppendUserNote(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _chatHistory.Add(new ChatMessage(ChatRole.User, text));
     }
 
     /// <summary>

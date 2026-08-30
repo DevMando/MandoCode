@@ -7,7 +7,7 @@ namespace MandoCode.Tests;
 
 /// <summary>
 /// Tests for the trimmed TaskPlannerService:
-///  - RequiresPlanning is now just two objective signals (3+ numbered items or >400 chars).
+///  - RequiresPlanning scores task shape while excluding questions and narrow work.
 ///  - FromProposals materialises typed tool-call args into TaskSteps (no text parsing).
 /// </summary>
 public class TaskPlannerServiceTests
@@ -132,12 +132,12 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
-    public void RequiresPlanning_LongMessage_ReturnsTrue()
+    public void RequiresPlanning_LongQuestion_ReturnsFalse()
     {
         var planner = MakePlanner();
-        var message = new string('a', 401);
+        var message = "What do you think about " + new string('a', 500) + "?";
 
-        Assert.True(planner.RequiresPlanning(message));
+        Assert.False(planner.RequiresPlanning(message));
     }
 
     [Fact]
@@ -149,6 +149,33 @@ public class TaskPlannerServiceTests
 
         Assert.False(planner.RequiresPlanning("create a function that does X"));
     }
+
+    [Theory]
+    [InlineData("Build a complete game with saving, menus, and tests")]
+    [InlineData("Refactor authentication across the API and Desktop app")]
+    [InlineData("Create the service, add tests, write documentation, and configure deployment")]
+    public void RequiresPlanning_BroadMultiDeliverableWork_ReturnsTrue(string request)
+    {
+        var decision = MakePlanner().GetPlanningDecision(request);
+
+        Assert.True(decision.Required);
+        Assert.NotNull(decision.Reason);
+        Assert.True(decision.Score >= 4);
+    }
+
+    [Theory]
+    [InlineData("What do you think about this folder?")]
+    [InlineData("Research the Xbox Series X")]
+    [InlineData("Fix this typo in README.md")]
+    [InlineData("Rename this method")]
+    [InlineData("Explain how authentication works across the API and Desktop")]
+    [InlineData("What should I know?\n1. Architecture?\n2. Testing?\n3. Deployment?")]
+    public void RequiresPlanning_ReadOnlyOrNarrowWork_ReturnsFalse(string request)
+        => Assert.False(MakePlanner().RequiresPlanning(request));
+
+    [Fact]
+    public void RequiresPlanning_ExplicitPlanRequest_ReturnsTrue()
+        => Assert.True(MakePlanner().RequiresPlanning("Break this down into steps before making changes"));
 
     [Fact]
     public void RequiresPlanning_Question_ReturnsFalse()
