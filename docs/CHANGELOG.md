@@ -4,11 +4,10 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**Plans can now survive real work instead of being an all-or-nothing suggestion.** MandoCode's new
-workflow planner runs each step as durable work the host can observe, pause, retry, revise, and
-resume after a restart. It remains opt-in for this release while we finish the long-running model
-soak and local-model token measurements. MandoCode also now ships .NET 10 and .NET 8 builds in the
-same package, with nothing for users to choose or configure.
+**Plans can now survive real work instead of being an all-or-nothing suggestion.** MandoCode runs
+each approved plan as durable work the host can observe, pause, retry, revise, and resume after a
+restart. The workflow planner is now the standard execution path for every plan. MandoCode also
+ships .NET 10 and .NET 8 builds in the same package, with nothing for users to choose or configure.
 
 ### Why this matters (plain-language summary)
 - **A plan no longer disappears with the process.** If MandoCode closes after step two, the first
@@ -21,22 +20,23 @@ same package, with nothing for users to choose or configure.
 - **Failures are reported honestly.** Retry, skip, revise, and cancel are distinct decisions. A run
   that reaches the end after skipping failed work says so instead of reporting an unqualified
   success.
-- **The rollout is controlled.** The workflow engine is selected with `planner=workflow`; the
-  existing planner remains available while soak and token-cost work finishes.
+- **Plan execution is consistent.** Every approved plan uses the same durable workflow, so retry,
+  cancellation, progress reporting, and recovery behave the same way regardless of how the plan
+  was created.
 - **There is nothing for you to do.** Existing installs keep working exactly as they did. If you
   update .NET later, the next `dotnet tool update -g MandoCode` quietly moves you onto the newer
   build. `mandocode --doctor` reports which runtime you're on if you're curious.
 - **.NET 8 stops getting security fixes in November 2026.** Rather than cut anyone off on a
   release they didn't expect, MandoCode carries both builds through that window and drops the
   .NET 8 one after it. The README says so now, so the removal is announced well ahead of time.
-- **Cost/risk: contained.** The framework and execution changes are substantial, which is why the
-  new planner is opt-in. Both target frameworks run the same suite, Desktop has its own host-level
-  coverage, and the approval boundary remains in front of every revised plan and file change.
+- **Cost/risk: contained.** The framework and execution changes are substantial, so both target
+  frameworks run the same suite, Desktop has its own host-level coverage, and the approval boundary
+  remains in front of every revised plan and file change.
 
 ### Added
-- **Durable workflow planning behind `planner=workflow`.** Each plan step moves through a Microsoft
-  Agent Framework workflow with checkpointed run state. `/plan`, `/plan-resume`, and
-  `/plan-discard` inspect and control unfinished work without replaying completed steps.
+- **Durable workflow planning.** Each plan step moves through a Microsoft Agent Framework workflow
+  with checkpointed run state. `/plan`, `/plan-resume`, and `/plan-discard` inspect and control
+  unfinished work without replaying completed steps.
 - **Deterministic `/plan <goal>`.** The command uses a proposal-only model call with no access to
   normal project tools. Providers that cannot honor forced tool choice fall back to constrained
   JSON and finally to a safe one-step proposal rather than silently ignoring the command.
@@ -82,21 +82,18 @@ same package, with nothing for users to choose or configure.
   tool result before it enters conversation history. This closes the failure mode where one broad
   listing could add hundreds of thousands of tokens and then be repeated by context retries.
 
-### Test coverage
-The suite now contains 623 cases per target and runs on both .NET 8 and .NET 10. New coverage locks
-down workflow topology, checkpoint envelopes and storage, resume context, retry behavior, plan
-revision, semantic step outcomes, proposal handoff, input handling, scoped directory references,
-bounded tool results, and version labels. Desktop's
-host suite adds 239 passing cases, and the planner was also exercised through real CLI terminal and
-Desktop sessions, including forced process termination between steps.
+### Validation
+The engine test suite runs on both .NET 8 and .NET 10. Coverage includes workflow topology,
+checkpoint storage, resume context, retry behavior, plan revision, semantic step outcomes, proposal
+handoff, input handling, scoped directory references, bounded tool results, and version labels.
+Desktop adds host-level coverage, and the planner was also exercised through real CLI and Desktop
+sessions, including forced process termination between steps.
 
 ### Internal
-- **Moved the AI orchestration layer off Semantic Kernel, onto Microsoft's newer Agent
-  Framework.** Done, on its own branch — no user-visible change. I built the new path alongside
-  the old one rather than swapping in one big step, verified every piece against real models
-  before switching over, and only removed Semantic Kernel once nothing in the codebase depended
-  on it anymore. Same models, same tools, same approval prompts — this is a foundation swap
-  underneath behavior that doesn't change.
+- **Moved AI orchestration from Semantic Kernel to Microsoft Agent Framework.** The chat layer now
+  uses the framework's agent and tool abstractions, while plan execution uses its workflow runtime.
+  Existing models, tools, and approval prompts remain in place; the change provides the durable
+  plan execution and recovery described above.
 - **Excluded OllamaSharp's source generator from the build.** The generator ships built against
   Roslyn 5.6, which is newer than the compiler in current Visual Studio and .NET SDK releases,
   so loading it failed the build with CS9057 on developer machines while floating CI runners
