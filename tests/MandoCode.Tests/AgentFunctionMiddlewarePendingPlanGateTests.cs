@@ -5,26 +5,33 @@ using Microsoft.Extensions.AI;
 namespace MandoCode.Tests;
 
 /// <summary>
-/// MAF-side sibling of the old PostPlanMutationGateTests' Kernel-driven cases (feat/agent-framework-migration,
-/// Phase 6, since deleted along with the rest of SK). Its PlanHandoff-manifest tests weren't
-/// duplicated here — PlanHandoff and TaskPlan are already framework-agnostic (confirmed during the
-/// migration survey), so those tests already exercise the same code this middleware calls into;
-/// there was nothing SK-specific in them to port.
+/// Successor to AgentFunctionMiddlewarePostPlanMutationGateTests, retargeted onto the pending-plan
+/// gate.
+///
+/// The original gate refused mutations for the REST of the turn after a plan had run, because the
+/// plan executed inside the propose_plan tool call: the outer model never saw the steps run, read
+/// the returned summary as "not started yet", and redid the work — observed live overwriting a
+/// finished build under an auto-approved session.
+///
+/// Deferring execution removes the post-plan turn entirely, so the window that needs guarding
+/// shrinks to "between propose_plan and the end of the reply" — the model must not race the plan
+/// it just queued. The incident these tests were written for is still the reason they exist, which
+/// is why they were retargeted rather than deleted.
 /// </summary>
-public class AgentFunctionMiddlewarePostPlanMutationGateTests
+public class AgentFunctionMiddlewarePendingPlanGateTests
 {
     private static AIFunction Fn(Delegate method, string name) =>
         AIFunctionFactory.Create(method, new AIFunctionFactoryOptions { Name = name });
 
     [Fact]
-    public async Task CompletedPlanScope_RefusesMutatingCall_WithoutInvokingIt()
+    public async Task PendingPlanScope_RefusesMutatingCall_WithoutInvokingIt()
     {
         var invoked = false;
         var middleware = new AgentFunctionMiddleware(5);
         var fn = Fn((string relativePath, string content) => { invoked = true; return "written"; }, "write_file");
 
         using var scope = middleware.BeginScope();
-        scope.MarkPlanWorkCompleted();
+        scope.MarkProposalPending();
 
         var result = await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
         {
@@ -33,7 +40,7 @@ public class AgentFunctionMiddlewarePostPlanMutationGateTests
         });
 
         Assert.False(invoked);
-        Assert.Contains("already completed", result?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("plan is queued", result?.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -41,14 +48,14 @@ public class AgentFunctionMiddlewarePostPlanMutationGateTests
     [InlineData("delete_file")]
     [InlineData("delete_folder")]
     [InlineData("create_folder")]
-    public async Task CompletedPlanScope_RefusesAllMutatingFunctions(string functionName)
+    public async Task PendingPlanScope_RefusesAllMutatingFunctions(string functionName)
     {
         var invoked = false;
         var middleware = new AgentFunctionMiddleware(5);
         var fn = Fn((string relativePath) => { invoked = true; return "ok"; }, functionName);
 
         using var scope = middleware.BeginScope();
-        scope.MarkPlanWorkCompleted();
+        scope.MarkProposalPending();
 
         await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments { ["relativePath"] = "Test" });
 
@@ -56,14 +63,15 @@ public class AgentFunctionMiddlewarePostPlanMutationGateTests
     }
 
     [Fact]
-    public async Task CompletedPlanScope_StillAllowsReads()
+    public async Task PendingPlanScope_StillAllowsReads()
     {
+        // The model may still want to look around before summarising; only writes would race the plan.
         var invoked = false;
         var middleware = new AgentFunctionMiddleware(5);
         var fn = Fn((string relativePath) => { invoked = true; return "file contents"; }, "read_file_contents");
 
         using var scope = middleware.BeginScope();
-        scope.MarkPlanWorkCompleted();
+        scope.MarkProposalPending();
 
         await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments { ["relativePath"] = "Test/index.html" });
 
@@ -73,13 +81,14 @@ public class AgentFunctionMiddlewarePostPlanMutationGateTests
     [Fact]
     public async Task FreshScope_AllowsMutationsAgain()
     {
+        // The plan runs between turns; by the next scope it has finished and the model is free again.
         var invoked = false;
         var middleware = new AgentFunctionMiddleware(5);
         var fn = Fn((string relativePath, string content) => { invoked = true; return "written"; }, "write_file");
 
         using (var planTurn = middleware.BeginScope())
         {
-            planTurn.MarkPlanWorkCompleted();
+            planTurn.MarkProposalPending();
         }
 
         using var nextTurn = middleware.BeginScope();
@@ -93,14 +102,16 @@ public class AgentFunctionMiddlewarePostPlanMutationGateTests
     }
 
     [Fact]
-    public async Task RejectedPlan_DoesNotEngageGate()
+    public async Task ScopeWithNoProposal_DoesNotEngageGate()
     {
+        // Successor to RejectedPlan_DoesNotEngageGate. A turn where nothing was proposed — including
+        // one where the user went on to reject the plan — must leave the model free to do the work
+        // directly.
         var invoked = false;
         var middleware = new AgentFunctionMiddleware(5);
         var fn = Fn((string relativePath, string content) => { invoked = true; return "written"; }, "write_file");
 
         using var scope = middleware.BeginScope();
-        scope.MarkPlanProcessed();
 
         await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn, new AIFunctionArguments
         {

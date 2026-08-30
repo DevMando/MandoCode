@@ -93,6 +93,9 @@ public enum TaskPlanStatus
     /// <summary>All steps completed successfully.</summary>
     Completed,
 
+    /// <summary>The plan reached the end, but one or more steps were skipped after a failure.</summary>
+    CompletedWithIssues,
+
     /// <summary>User cancelled the plan.</summary>
     Cancelled,
 

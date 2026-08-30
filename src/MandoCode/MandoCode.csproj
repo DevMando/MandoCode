@@ -55,7 +55,15 @@ Every change is covered by automated tests — the suite grew to 486 checks.
          agent-framework-migration.md. -->
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.9.0" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.18.0" />
+    <!-- Microsoft.Agents.AI and .Workflows must move in lockstep: Workflows 1.19.0 declares
+         Microsoft.Agents.AI (>= 1.19.0), so pairing it with 1.18.0 is an NU1605 downgrade —
+         and TreatWarningsAsErrors turns that into a build error, not a warning.
+         No <NoWarn> is needed: WorkflowBuilder, RequestPort, InProcessExecution,
+         CheckpointManager and FileSystemJsonCheckpointStore carry no [Experimental]
+         attribute in 1.19.0 (verified by reflection against the real assembly, not the docs
+         — cf. the PipelineCompactionStrategy note below). -->
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.19.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.19.0" />
     <!-- analyzers excluded: OllamaSharp's source generator is built against Roslyn 5.6,
          newer than the compiler in current VS and .NET SDK builds, so loading it fails the
          build with CS9057. It only generates code for [OllamaTool]-annotated types, which
@@ -67,6 +75,13 @@ Every change is covered by automated tests — the suite grew to 486 checks.
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="RazorConsole.Core" Version="0.5.0" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The plan workflow's executors, messages and run context are internal on purpose — they are
+         implementation detail of WorkflowPlanRunner, not API. The topology test needs to build the
+         graph directly, and later phases test executors in isolation. -->
+    <InternalsVisibleTo Include="MandoCode.Tests" />
   </ItemGroup>
 
   <ItemGroup>

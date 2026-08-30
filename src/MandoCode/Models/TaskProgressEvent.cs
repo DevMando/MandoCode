@@ -93,7 +93,9 @@ public class TaskProgressEvent : StreamEvent
         TotalSteps = plan.Steps.Count,
         CurrentStep = plan.Steps.Count,
         Plan = plan,
-        Message = "All steps completed successfully"
+        Message = plan.Status == TaskPlanStatus.CompletedWithIssues
+            ? "Plan reached the end with skipped or failed steps"
+            : "All steps completed successfully"
     };
 
     /// <summary>

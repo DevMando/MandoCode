@@ -47,11 +47,16 @@ public class PlanHandoff
 
     /// <summary>
     /// Raised immediately before plan approval + execution begins, and again when it ends
-    /// (success, rejection, or throw). The whole plan runs inside a single outer model call
-    /// (the propose_plan tool), so the outer call's stall watchdog would otherwise fire mid-plan
-    /// on a slow step and surface as a bogus "Cancelled by user." AIService subscribes to pause
-    /// that outer watchdog for the plan's duration — the plan's own per-step watchdogs cover stalls.
+    /// (success, rejection, or throw).
     /// </summary>
+    /// <remarks>
+    /// AIService used to subscribe to these to suspend the outer stall watchdog and the
+    /// request-timeout ceiling, because the whole plan ran inside the propose_plan tool call and a
+    /// slow step would otherwise trip a timer and surface as a bogus "Cancelled by user." Plans now
+    /// run after the turn unwinds, so no timer is running to suspend and that subscription is gone.
+    /// The events remain as a UI extension point — they're multicast, unlike
+    /// <see cref="OnPlanRequested"/>, so a host can observe plan activity without owning it.
+    /// </remarks>
     public event Action? ExecutionStarted;
     public event Action? ExecutionFinished;
 
@@ -69,6 +74,20 @@ public class PlanHandoff
     public bool LastPlanExecutedWork { get; private set; }
 
     /// <summary>
+    /// Files written, edited or deleted so far by the plan currently executing, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// Evidence recorded at the middleware choke point — the call actually ran and succeeded — not
+    /// the model's self-report. Captured into the workflow's durable state so a resumed run knows
+    /// what already exists on disk; without it, resuming would have no way to distinguish work that
+    /// completed from work that never started.
+    /// </remarks>
+    public IReadOnlyList<(string Operation, string Path)> FileOperations
+    {
+        get { lock (_lock) return [.. _fileOperations]; }
+    }
+
+    /// <summary>
     /// Called by AgentFunctionMiddleware after a successful filesystem-mutating call.
     /// No-ops outside plan execution so ordinary chat-turn writes don't pollute the
     /// next plan's manifest.
@@ -82,15 +101,90 @@ public class PlanHandoff
         }
     }
 
+    // Single-slot holder for a plan the model proposed during the current turn. The plan is NOT
+    // run here: propose_plan returns a receipt immediately and the host runs the plan after the
+    // turn unwinds (see RunPendingPlanAsync). Last write wins — a model that proposes twice in one
+    // turn simply replaces its own proposal, which is strictly better than the old behavior of
+    // refusing the second one with a prose directive it could ignore anyway.
+    private (string Goal, string? OriginalRequest, PlanStepProposal[] Steps)? _pendingProposal;
+    private string? _currentRequest;
+
+    /// <summary>True when the model proposed a plan this turn that hasn't been run yet.</summary>
+    public bool HasPendingProposal
+    {
+        get { lock (_lock) return _pendingProposal != null; }
+    }
+
     /// <summary>
-    /// Called by AgentFunctionMiddleware when the model invokes propose_plan.
-    /// Guards against recursive planning (the model calling propose_plan while a
-    /// previous plan is still running) by returning a short-circuit message.
+    /// Supplies the request that opened the current model turn. A later proposal captures this
+    /// value so checkpoints retain the request's authoritative paths rather than only the model's
+    /// shortened goal.
+    /// </summary>
+    public void SetRequestContext(string? request)
+    {
+        lock (_lock)
+        {
+            _currentRequest = string.IsNullOrWhiteSpace(request) ? null : request;
+            if (_pendingProposal is { } pending)
+                _pendingProposal = (pending.Goal, _currentRequest, pending.Steps);
+        }
+    }
+
+    /// <summary>Records a proposal for the host to run once the current turn finishes.</summary>
+    public void SetPendingProposal(string goal, PlanStepProposal[] steps)
+    {
+        lock (_lock) _pendingProposal = (goal, _currentRequest, steps);
+    }
+
+    /// <summary>Drops any pending proposal — used when a turn ends without running one.</summary>
+    public void ClearPendingProposal()
+    {
+        lock (_lock) _pendingProposal = null;
+    }
+
+    /// <summary>
+    /// Runs the proposal recorded during the turn that just ended, if there is one, and returns the
+    /// manifest the caller should place into chat history. Returns <c>null</c> when no plan was
+    /// proposed.
+    /// </summary>
+    /// <remarks>
+    /// This is the entry point hosts call after their chat turn has fully drained. It exists so the
+    /// plan is a <i>peer</i> of the chat turn rather than a child of a tool call — the change that
+    /// removes the need for the outer watchdog pause, the prompt-gate release dance, and the
+    /// post-plan mutation gate.
+    /// <para>
+    /// Hosts that previously relied on the plan running inside <c>propose_plan</c> must call this;
+    /// without it a proposed plan is simply never executed.
+    /// </para>
+    /// </remarks>
+    public async Task<string?> RunPendingPlanAsync(CancellationToken ct = default)
+    {
+        (string Goal, string? OriginalRequest, PlanStepProposal[] Steps)? pending;
+        lock (_lock)
+        {
+            pending = _pendingProposal;
+            _pendingProposal = null;
+        }
+
+        if (pending == null) return null;
+
+        return await ProcessAsync(
+            pending.Value.Goal,
+            pending.Value.Steps,
+            ct,
+            pending.Value.OriginalRequest);
+    }
+
+    /// <summary>
+    /// Runs an approved plan end to end and returns the manifest describing what happened.
+    /// Guards against recursive planning (a plan step proposing another plan) by returning a
+    /// short-circuit message.
     /// </summary>
     public async Task<string> ProcessAsync(
         string goal,
         PlanStepProposal[] proposals,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? originalRequest = null)
     {
         lock (_lock)
         {
@@ -112,7 +206,7 @@ public class PlanHandoff
 
             var plan = new TaskPlan
             {
-                OriginalRequest = goal,
+                OriginalRequest = string.IsNullOrWhiteSpace(originalRequest) ? goal : originalRequest,
                 Steps = steps,
                 Status = TaskPlanStatus.Pending
             };
@@ -147,6 +241,59 @@ public class PlanHandoff
         {
             lock (_lock) _isExecuting = false;
         }
+    }
+
+    /// <summary>
+    /// Marks a reconstructed plan as active and restores file-operation evidence from its saved
+    /// state. The returned scope must cover the whole resumed run so nested planning stays blocked
+    /// and new successful writes are appended to the restored evidence.
+    /// </summary>
+    public IDisposable BeginResumedExecution(IReadOnlyList<PlanFileOperation> savedFileOperations)
+    {
+        lock (_lock)
+        {
+            if (_isExecuting)
+                throw new InvalidOperationException("A plan is already executing.");
+
+            _isExecuting = true;
+            LastPlanExecutedWork = false;
+            _fileOperations.Clear();
+            foreach (var operation in savedFileOperations)
+                _fileOperations.Add((operation.Operation, operation.Path));
+        }
+
+        try
+        {
+            ExecutionStarted?.Invoke();
+            return new ResumedExecutionScope(this);
+        }
+        catch
+        {
+            lock (_lock) _isExecuting = false;
+            throw;
+        }
+    }
+
+    private void EndResumedExecution()
+    {
+        try
+        {
+            ExecutionFinished?.Invoke();
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _isExecuting = false;
+            }
+        }
+    }
+
+    private sealed class ResumedExecutionScope(PlanHandoff owner) : IDisposable
+    {
+        private PlanHandoff? _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.EndResumedExecution();
     }
 
     /// <summary>

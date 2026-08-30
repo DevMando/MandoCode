@@ -4,22 +4,54 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**Runs on .NET 10, still runs on .NET 8.** MandoCode now ships both builds in one package. The
-same `dotnet tool install -g MandoCode` gives a .NET 10 machine the .NET 10 build and a .NET 8
-machine the .NET 8 build, with nothing to choose and nothing to configure. Dependencies moved to
-current releases in the same pass.
+**Plans can now survive real work instead of being an all-or-nothing suggestion.** MandoCode's new
+workflow planner runs each step as durable work the host can observe, pause, retry, revise, and
+resume after a restart. It remains opt-in for this release while we finish the long-running model
+soak and local-model token measurements. MandoCode also now ships .NET 10 and .NET 8 builds in the
+same package, with nothing for users to choose or configure.
 
 ### Why this matters (plain-language summary)
+- **A plan no longer disappears with the process.** If MandoCode closes after step two, the first
+  two steps stay settled and the remaining work can resume instead of starting over. The CLI shows
+  the saved plan at startup and supports both Resume and Discard.
+- **The user stays in charge when the plan changes.** `/plan <goal>` forces a plan on demand. Before
+  execution, steps can be selected and edited in place; later steps are refreshed so a renamed file
+  or changed expected value does not leave the rest of the plan stale. If execution disproves the
+  plan, MandoCode can propose a revised remainder and waits for approval before using it.
+- **Failures are reported honestly.** Retry, skip, revise, and cancel are distinct decisions. A run
+  that reaches the end after skipping failed work says so instead of reporting an unqualified
+  success.
+- **The rollout is controlled.** The workflow engine is selected with `planner=workflow`; the
+  existing planner remains available while soak and token-cost work finishes.
 - **There is nothing for you to do.** Existing installs keep working exactly as they did. If you
   update .NET later, the next `dotnet tool update -g MandoCode` quietly moves you onto the newer
   build. `mandocode --doctor` reports which runtime you're on if you're curious.
 - **.NET 8 stops getting security fixes in November 2026.** Rather than cut anyone off on a
   release they didn't expect, MandoCode carries both builds through that window and drops the
   .NET 8 one after it. The README says so now, so the removal is announced well ahead of time.
-- **Cost/risk: low.** No feature or behavior changed. The full suite runs against both builds
-  independently, so a difference between them fails the build rather than reaching you.
+- **Cost/risk: contained.** The framework and execution changes are substantial, which is why the
+  new planner is opt-in. Both target frameworks run the same suite, Desktop has its own host-level
+  coverage, and the approval boundary remains in front of every revised plan and file change.
+
+### Added
+- **Durable workflow planning behind `planner=workflow`.** Each plan step moves through a Microsoft
+  Agent Framework workflow with checkpointed run state. `/plan`, `/plan-resume`, and
+  `/plan-discard` inspect and control unfinished work without replaying completed steps.
+- **Deterministic `/plan <goal>`.** The command uses a proposal-only model call with no access to
+  normal project tools. Providers that cannot honor forced tool choice fall back to constrained
+  JSON and finally to a safe one-step proposal rather than silently ignoring the command.
+- **Retry and replan after failure.** A failed step can be retried with revised instructions,
+  skipped, used as the starting point for a replacement suffix, or used to cancel the plan.
 
 ### Changed
+- **Plan execution is no longer nested inside `propose_plan`.** The model finishes proposing, the
+  host presents the plan, and execution begins only after that turn drains. This removes the root
+  cause of duplicate work, stale proposal state, and several spinner/cancellation workarounds.
+- **Plan review shows the instruction that will actually run.** The CLI step picker uses keyboard
+  rows and the same prompt component as chat, prefilled for in-place editing. Editing an earlier
+  step regenerates only the dependent suffix and returns the whole plan for review.
+- **Progress reports what each step is doing.** Step narration, retry state, completion counts, and
+  resumed execution all use the workflow's durable cursor rather than inferred step numbers.
 - **Targets .NET 8 and .NET 10.** The published package carries both, and NuGet selects the match
   for your machine at install time. `net10.0` is listed first, so it is the default target for
   Visual Studio F5 and for `dotnet run -f`.
@@ -30,7 +62,11 @@ current releases in the same pass.
   exists and when it goes away.
 
 ### Test coverage
-The full suite runs twice, once per build. 505 tests green on .NET 8 and 505 green on .NET 10.
+The suite now contains 618 cases per target and runs on both .NET 8 and .NET 10. New coverage locks
+down workflow topology, checkpoint envelopes and storage, resume context, retry behavior, plan
+revision, semantic step outcomes, proposal handoff, input handling, and version labels. Desktop's
+host suite adds 239 passing cases, and the planner was also exercised through real CLI terminal and
+Desktop sessions, including forced process termination between steps.
 
 ### Internal
 - **Moved the AI orchestration layer off Semantic Kernel, onto Microsoft's newer Agent

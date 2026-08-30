@@ -164,6 +164,19 @@ class Program
                 return new TaskPlannerService(aiService, cfg);
             });
 
+            // Which engine actually runs a plan is decided per plan, not here — see
+            // PlanRunnerSelector, which re-reads the `planner` key so the choice can be flipped
+            // mid-session without losing history.
+            services.AddSingleton<IPlanStepExecutor>(provider =>
+                new AiServicePlanStepExecutor(provider.GetRequiredService<AIService>()));
+
+            services.AddSingleton(provider => new PlanRunnerSelector(
+                provider.GetRequiredService<MandoCodeConfig>(),
+                provider.GetRequiredService<TaskPlannerService>(),
+                provider.GetRequiredService<IPlanStepExecutor>(),
+                provider.GetRequiredService<PlanHandoff>(),
+                provider.GetRequiredService<ProjectRootAccessor>()));
+
             // Register MusicPlayerService as singleton
             services.AddSingleton(provider =>
             {

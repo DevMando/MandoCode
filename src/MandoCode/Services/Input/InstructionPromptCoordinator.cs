@@ -18,13 +18,14 @@ public sealed class InstructionPromptCoordinator
 
     public bool IsActive { get; private set; }
     public string Prompt { get; private set; } = string.Empty;
+    public string InitialValue { get; private set; } = string.Empty;
 
     /// <summary>
     /// Fires when <see cref="IsActive"/> changes so App.razor can re-render.
     /// </summary>
     public event Action? StateChanged;
 
-    public Task<string> RequestAsync(string prompt)
+    public Task<string> RequestAsync(string prompt, string? initialValue = null)
     {
         TaskCompletionSource<string> tcs;
         lock (_gate)
@@ -36,6 +37,7 @@ public sealed class InstructionPromptCoordinator
             tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             _tcs = tcs;
             Prompt = prompt;
+            InitialValue = initialValue ?? string.Empty;
             IsActive = true;
         }
 
@@ -52,6 +54,7 @@ public sealed class InstructionPromptCoordinator
             _tcs = null;
             IsActive = false;
             Prompt = string.Empty;
+            InitialValue = string.Empty;
         }
 
         StateChanged?.Invoke();

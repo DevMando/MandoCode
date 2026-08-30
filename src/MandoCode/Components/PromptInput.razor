@@ -6,7 +6,9 @@
 <TextInput @bind-Value="_inputValue"
            OnInput="HandleInput"
            OnSubmit="HandleSubmit"
-           Placeholder="@("type / for commands, @ for files")"
+           Label="@Label"
+           LabelColor="@LabelColor"
+           Placeholder="@Placeholder"
            ValueColor="@(new Color(255, 200, 80))"
            PlaceholderColor="Color.Grey"
            BorderColor="Color.Green"
@@ -22,19 +24,25 @@
     [Parameter] public EventCallback<string> OnAutocompleteRequested { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string InitialValue { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public Color LabelColor { get; set; } = Color.Green;
+    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files";
+    [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
+    [Parameter] public bool AllowEmpty { get; set; }
 
     [Inject] private InputStateMachine SM { get; set; } = default!;
 
     private string _inputValue = "";
     private DateTime _lastInputAt = DateTime.MinValue;
     private int _lastLength = 0;
+    private bool _initialValueApplied;
 
     protected override void OnParametersSet()
     {
-        if (!string.IsNullOrEmpty(InitialValue))
+        if (!_initialValueApplied && !string.IsNullOrEmpty(InitialValue))
         {
             _inputValue = InitialValue;
-            InitialValue = ""; // Consume it so it doesn't re-apply on next render
+            _initialValueApplied = true;
         }
     }
 
@@ -55,13 +63,14 @@
 
         _inputValue = sanitized;
 
-        var action = SM.UpdateText(sanitized);
+        var action = ChatFeaturesEnabled ? SM.UpdateText(sanitized) : InputAction.Noop;
 
         _lastInputAt = DateTime.UtcNow;
         _lastLength = sanitized.Length;
 
         // When autocomplete triggers, hand off to imperative mode
-        if (action == InputAction.ShowCommandDropdown || action == InputAction.ShowFileDropdown)
+        if (ChatFeaturesEnabled &&
+            (action == InputAction.ShowCommandDropdown || action == InputAction.ShowFileDropdown))
         {
             await OnAutocompleteRequested.InvokeAsync(sanitized);
         }
@@ -70,7 +79,7 @@
     private void HandleSubmit(string value)
     {
         if (Disabled) return;
-        if (string.IsNullOrWhiteSpace(value)) return;
+        if (!AllowEmpty && string.IsNullOrWhiteSpace(value)) return;
 
         // Paste-burst guard: a Submit firing within 30ms of the last OnInput is the '\r'
         // from a paste burst, not a real user Enter. Humans can't reach Enter that fast.
@@ -78,11 +87,13 @@
         if (sinceInput < 30)
         {
             SetValue(value);
-            SM.UpdateText(value);
+            if (ChatFeaturesEnabled)
+                SM.UpdateText(value);
             return;
         }
 
-        SM.SubmitInput(value);
+        if (ChatFeaturesEnabled)
+            SM.SubmitInput(value);
 
         var submitted = value;
         _inputValue = "";

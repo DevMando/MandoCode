@@ -81,6 +81,6 @@ public class StreamBufferingTests
             await StreamBuffering.BufferAsync(
                 CancelAwareStream(),
                 onChunk: () => cts.Cancel(),   // cancel after the first chunk
-                cts.Token));
+                cancellationToken: cts.Token));
     }
 }
