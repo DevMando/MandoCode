@@ -44,6 +44,15 @@ same package, with nothing for users to choose or configure.
   skipped, used as the starting point for a replacement suffix, or used to cancel the plan.
 
 ### Changed
+- **Automatic planning now follows task shape instead of message length.** MandoCode plans
+  high-confidence work such as three-step checklists, cross-cutting changes, and requests with
+  multiple deliverables. Questions, research, explanations, and narrow edits remain direct, and
+  the CLI explains why an automatic plan was selected. `/plan <goal>` remains the explicit
+  override.
+- **The host now starts automatic plans directly.** It no longer hides a planning directive inside
+  the user's message and waits for the model to call `propose_plan`. Rejected-plan follow-ups and
+  forced skills use transient system-role guidance that cannot be confused with user-authored text
+  or leak into later turns.
 - **Plan execution is no longer nested inside `propose_plan`.** The model finishes proposing, the
   host presents the plan, and execution begins only after that turn drains. This removes the root
   cause of duplicate work, stale proposal state, and several spinner/cancellation workarounds.
@@ -62,6 +71,10 @@ same package, with nothing for users to choose or configure.
   exists and when it goes away.
 
 ### Fixed
+- **Session token totals now use provider-reported usage only.** The previous display added rough
+  character-based estimates for file and tool payloads to prompt counts that already included
+  those payloads. Reads, search, and attachments no longer inflate the visible total or trigger
+  estimate-only UI updates.
 - **Broad project roots can no longer flood a model with a recursive file listing.** Directory
   references such as `@MandoCode/` now tell the agent to keep subsequent reads and listings inside
   that directory, and the listing tool accepts that directory as an explicit scope. Recursive

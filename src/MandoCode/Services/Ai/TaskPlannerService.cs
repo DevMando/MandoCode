@@ -8,10 +8,15 @@ namespace MandoCode.Services;
 /// Service for executing multi-step plans. Plans are proposed by the model via
 /// the propose_plan tool (see <see cref="PlanningPlugin"/>) and materialised by
 /// <see cref="FromProposals"/>. A slim deterministic heuristic (<see cref="RequiresPlanning"/>)
-/// only exists for local models that don't reliably self-invoke the tool.
+/// lets the host route high-confidence multi-step requests without relying on a tool call.
 /// </summary>
 public class TaskPlannerService : IPlanRunner
 {
+    public readonly record struct PlanningDecision(bool Required, int Score, string? Reason)
+    {
+        public static PlanningDecision No => new(false, 0, null);
+    }
+
     private readonly IPlanStepExecutor _stepExecutor;
     private readonly MandoCodeConfig _config;
     private readonly object _planStatusLock = new();
@@ -36,32 +41,92 @@ public class TaskPlannerService : IPlanRunner
     }
 
     /// <summary>
-    /// Deterministic planning signal for models that can't be trusted to self-invoke
-    /// propose_plan. Only fires on near-zero-false-positive signals; everything else
-    /// defers to the model's judgement.
+    /// Backward-compatible boolean view of the explainable planning decision.
     /// </summary>
-    public bool RequiresPlanning(string userMessage)
+    public bool RequiresPlanning(string userMessage) => GetPlanningDecision(userMessage).Required;
+
+    public PlanningDecision GetPlanningDecision(string userMessage)
     {
         if (!_config.EnableTaskPlanning)
-            return false;
+            return PlanningDecision.No;
 
         if (string.IsNullOrWhiteSpace(userMessage))
-            return false;
+            return PlanningDecision.No;
 
         var trimmed = userMessage.Trim();
+
+        // Questions and read-only investigations remain conversational even when formatted as a
+        // numbered list. A concrete mutation verb opts back into the scored task path below.
+        const RegexOptions decisionOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+        var startsReadOnly = Regex.IsMatch(trimmed,
+            @"^\s*(what|why|how|explain|review|inspect|research|summarize|analyse|analyze|compare|find|locate|show|list)\b",
+            decisionOptions);
+        var containsMutation = Regex.IsMatch(trimmed,
+            @"\b(build|create|implement|add|update|fix|refactor|migrate|replace|remove|delete|scaffold|set\s+up|convert|integrate)\b",
+            decisionOptions);
+        if (startsReadOnly && !containsMutation)
+            return PlanningDecision.No;
 
         // Signal 1: Explicit multi-step intent — 3+ numbered items.
         var numberedItems = Regex
             .Matches(trimmed, @"^\s*\d+[\.\)]\s+", RegexOptions.Multiline)
             .Count;
         if (numberedItems >= 3)
-            return true;
+            return new PlanningDecision(true, 5, "three or more requested steps");
 
-        // Signal 2: Very long requests — users don't write 400+ chars for lookups.
-        if (trimmed.Length > 400)
-            return true;
+        // Other requests use task shape rather than raw message length.
+        return ScorePlanningRequest(trimmed);
+    }
 
-        return false;
+    private static PlanningDecision ScorePlanningRequest(string request)
+    {
+        const RegexOptions options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+        var mutationMatches = Regex.Matches(request,
+            @"\b(build|create|implement|add|update|fix|refactor|migrate|replace|remove|delete|scaffold|set\s+up|convert|integrate)\b",
+            options).Count;
+        var readOnlyIntent = Regex.IsMatch(request,
+            @"^\s*(what|why|how|explain|review|inspect|research|summarize|analyse|analyze|compare|find|locate|show|list)\b",
+            options);
+        if (readOnlyIntent && mutationMatches == 0)
+            return PlanningDecision.No;
+
+        if (Regex.IsMatch(request,
+            @"\b(make|create|write|give me|propose)\s+(a\s+)?plan\b|\bbreak\s+(this|it)\s+(down\s+)?into\s+steps\b",
+            options))
+            return new PlanningDecision(true, 5, "an explicit request for a plan");
+
+        var broadScope = mutationMatches > 0 && Regex.IsMatch(request,
+            @"\b(complete|entire|whole|end[- ]to[- ]end|from scratch|application|app|game|service|system|project)\b",
+            options);
+        var crossCutting = mutationMatches > 0 && Regex.IsMatch(request,
+            @"\b(across|throughout|multiple|several|both)\b|\b(API|CLI|Desktop|database|frontend|backend)\b.*\b(and|plus)\b.*\b(API|CLI|Desktop|database|frontend|backend)\b",
+            options);
+
+        var deliverableGroups = 0;
+        if (mutationMatches > 0) deliverableGroups++;
+        if (Regex.IsMatch(request, @"\b(test|tests|testing|coverage)\b", options)) deliverableGroups++;
+        if (Regex.IsMatch(request, @"\b(document|documentation|docs|README)\b", options)) deliverableGroups++;
+        if (Regex.IsMatch(request, @"\b(deploy|deployment|CI|pipeline|release)\b", options)) deliverableGroups++;
+        if (Regex.IsMatch(request, @"\b(UI|frontend|API|database|authentication|authorization|saving|menus?)\b", options)) deliverableGroups++;
+
+        var narrowTarget = Regex.IsMatch(request,
+            @"\b(typo|single file|one file|one method|this method|one property|this property|rename)\b",
+            options);
+        var score = (broadScope ? 2 : 0)
+                  + (crossCutting ? 2 : 0)
+                  + (deliverableGroups >= 3 ? 2 : 0)
+                  + (mutationMatches >= 3 ? 1 : 0)
+                  - (narrowTarget ? 2 : 0);
+        var hasScopeSignal = broadScope || crossCutting || deliverableGroups >= 3;
+        if (score < 4 || !hasScopeSignal)
+            return new PlanningDecision(false, score, null);
+
+        var reason = crossCutting
+            ? "cross-cutting work across multiple areas"
+            : deliverableGroups >= 3
+                ? "multiple deliverables were requested"
+                : "a broad multi-part implementation";
+        return new PlanningDecision(true, score, reason);
     }
 
     /// <summary>
