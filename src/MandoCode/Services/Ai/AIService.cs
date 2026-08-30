@@ -1921,6 +1921,35 @@ public class AIService
     }
 
     /// <summary>
+    /// Compacts the completed conversation into a deterministic recap without clearing the visible
+    /// transcript, approval state, or token totals. This is the user-invoked counterpart to the
+    /// automatic overflow recovery path: it gives the next request a smaller context while keeping
+    /// the important conversation trail available to the model.
+    /// </summary>
+    /// <returns><c>true</c> when there was enough conversation history to compact.</returns>
+    public async Task<bool> CompactHistoryAsync()
+    {
+        await _historyLock.WaitAsync();
+        try
+        {
+            // A system prompt plus zero or one conversational message has nothing meaningful to
+            // reduce. Keeping it verbatim is more faithful than wrapping it in a recap.
+            if (_chatHistory.Count <= 2) return false;
+
+            var recap = SynthesizeHistorySummary(_chatHistory, startIndex: 1, maxChars: 6000);
+            if (string.IsNullOrWhiteSpace(recap) || recap == "(no prior activity captured)") return false;
+
+            _chatHistory.Clear();
+            _chatHistory.Add(new ChatMessage(ChatRole.System, _systemPrompt));
+            _chatHistory.Add(new ChatMessage(ChatRole.User,
+                "[Conversation recap — prior turns were compacted at the user's request. " +
+                "Use this as context and continue naturally: ]\n" + recap));
+            return true;
+        }
+        finally { _historyLock.Release(); }
+    }
+
+    /// <summary>
     /// Exposes the token tracker for external consumers (e.g., App.razor display).
     /// </summary>
     public TokenTrackingService TokenTracker => _tokenTracker;

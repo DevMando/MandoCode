@@ -304,31 +304,6 @@ public class MandoCodeConfig
     [JsonPropertyName("enableTaskPlanning")]
     public bool EnableTaskPlanning { get; set; } = true;
 
-    /// <summary>Planner engine: the original in-tool-call runner.</summary>
-    public const string PlannerEngineLegacy = "legacy";
-
-    /// <summary>Planner engine: the MAF workflow graph (lands in a later phase).</summary>
-    public const string PlannerEngineWorkflow = "workflow";
-
-    /// <summary>
-    /// Which planner engine to use, or <c>null</c> for whatever this build defaults to.
-    /// Distinct from <see cref="EnableTaskPlanning"/>, which decides whether there is a planner
-    /// at all.
-    /// </summary>
-    /// <remarks>
-    /// Nullable on purpose, and it must stay that way. When the default eventually flips to
-    /// <see cref="PlannerEngineWorkflow"/>, a null here still means "follow the build" while an
-    /// explicit "legacy" still means "the user chose this" — so the flip is a one-line change with
-    /// no config migration and no version bump. With a non-nullable default the two states are
-    /// indistinguishable, and <c>Migrate()</c> would have to guess, exactly as it already has to
-    /// for ModelResponseTimeoutSeconds. Also written only when set, so older builds — whose reader
-    /// has no UnmappedMemberHandling and whose Save() reserializes the whole object — don't
-    /// silently drop a key they never knew about.
-    /// </remarks>
-    [JsonPropertyName("planner")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? PlannerEngine { get; set; }
-
     /// <summary>
     /// Enable fallback parsing for function calls output as JSON text.
     /// Some local models output function calls as text instead of proper tool calls.

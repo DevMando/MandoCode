@@ -939,13 +939,28 @@
                     return;
                 }
 
+                if (command == "compact")
+                {
+                    if (await AI.CompactHistoryAsync())
+                    {
+                        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+                        catch { /* persistence must never break the chat */ }
+                        AnsiConsole.MarkupLine("[green]Conversation context compacted into a recap. The visible transcript is unchanged.[/]");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine("[dim]Not enough conversation context to compact yet.[/]");
+                    }
+                    continue;
+                }
+
                 if (command == "clear")
                 {
                     await AI.ClearHistoryAsync();
                     StateMachine.ClearHistory();
                     SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
                     Console.Clear();
-                    AnsiConsole.WriteLine("Conversation cleared.");
+                    AnsiConsole.MarkupLine("[yellow]Conversation context wiped completely. Start a new conversation.[/]");
                     continue;
                 }
 
@@ -1009,7 +1024,8 @@
                     table.AddRow("/plan <goal>", "Force a step-by-step plan (no goal shows an unfinished plan)");
                     table.AddRow("/plan-resume", "Continue an unfinished plan");
                     table.AddRow("/plan-discard", "Forget an unfinished plan");
-                    table.AddRow("/clear", "Clear conversation history");
+                    table.AddRow("/compact", "Compress context into a recap; keeps the transcript");
+                    table.AddRow("/clear", "Wipe all conversation context and start fresh");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
                     AnsiConsole.WriteLine();
@@ -2041,15 +2057,6 @@
         if (!string.IsNullOrWhiteSpace(arg) && arg is not "resume" and not "discard")
         {
             await ForcePlanAsync(arg);
-            return;
-        }
-
-        if (!PlanRunners.SupportsResume)
-        {
-            AnsiConsole.MarkupLine(
-                "[yellow]Plans are only resumable on the workflow planner.[/]");
-            AnsiConsole.MarkupLine("[dim]Enable it with:[/] /config set planner workflow");
-            AnsiConsole.WriteLine();
             return;
         }
 

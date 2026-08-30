@@ -10,9 +10,8 @@ namespace MandoCode.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Drop-in alternative to <see cref="TaskPlannerService"/> behind the <c>planner</c> config key, so
-/// both engines can be A/B'd against real local models from the same session. It emits the same
-/// <see cref="TaskProgressEvent"/> stream, so neither front-end changes.
+/// The application's plan runner. It emits the standard <see cref="TaskProgressEvent"/> stream,
+/// so neither front-end needs workflow-specific handling.
 /// </para>
 /// <para>
 /// Topology is fixed — intake, step runner, triage, finalizer — regardless of how many steps the
