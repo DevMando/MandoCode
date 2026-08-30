@@ -59,7 +59,6 @@ public class AgentFunctionMiddleware
 
     private readonly ProjectRootAccessor? _projectRootAccessor;
     private string? ProjectRoot => _projectRootAccessor?.ProjectRoot;
-    private readonly TokenTrackingService? _tokenTracker;
     private readonly PlanHandoff? _planHandoff;
 
     private readonly AsyncLocal<InvocationScope?> _currentScope = new();
@@ -80,14 +79,12 @@ public class AgentFunctionMiddleware
     public AgentFunctionMiddleware(
         int defaultDeduplicationWindowSeconds,
         ProjectRootAccessor? projectRootAccessor = null,
-        TokenTrackingService? tokenTracker = null,
         PlanHandoff? planHandoff = null,
         long resultCharBudget = 400_000)
     {
         _readDeduplicationWindow = TimeSpan.FromSeconds(2);
         _writeDeduplicationWindow = TimeSpan.FromSeconds(defaultDeduplicationWindowSeconds);
         _projectRootAccessor = projectRootAccessor;
-        _tokenTracker = tokenTracker;
         _planHandoff = planHandoff;
         _defaultResultCharBudget = resultCharBudget;
     }
@@ -445,8 +442,6 @@ public class AgentFunctionMiddleware
 
             _recentCalls[callKey] = (DateTime.UtcNow, deliveredResult);
             CleanupOldEntries();
-
-            EstimateFileOperationTokens(functionName, context.Arguments, resultStr);
 
             var isError = resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
             UpdateScopeForCompletedCall(context, functionName, resultStr, isError);
@@ -984,56 +979,6 @@ public class AgentFunctionMiddleware
         var bytes = Encoding.UTF8.GetBytes(content);
         var hashBytes = SHA256.HashData(bytes);
         return Convert.ToHexString(hashBytes.AsSpan(0, 8));
-    }
-
-    private void EstimateFileOperationTokens(string functionName, AIFunctionArguments arguments, string? resultStr)
-    {
-        if (_tokenTracker == null) return;
-
-        try
-        {
-            switch (functionName)
-            {
-                case "read_file_contents":
-                    if (!string.IsNullOrEmpty(resultStr))
-                    {
-                        arguments.TryGetValue("relativePath", out var readPath);
-                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, $"Read {readPath}");
-                    }
-                    break;
-                case "write_file":
-                    if (arguments.TryGetValue("content", out var contentObj) && contentObj != null)
-                    {
-                        var content = contentObj.ToString() ?? "";
-                        if (content.Length > 0)
-                        {
-                            arguments.TryGetValue("relativePath", out var writePath);
-                            _tokenTracker.RecordEstimatedUsage(content.Length, $"Write {writePath}");
-                        }
-                    }
-                    break;
-                case "search_text_in_files":
-                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
-                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "Search");
-                    break;
-                case "list_all_project_files":
-                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
-                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "List");
-                    break;
-                case "search_web":
-                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
-                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "WebSearch");
-                    break;
-                case "fetch_webpage":
-                    if (!string.IsNullOrEmpty(resultStr) && resultStr.Length > 100)
-                        _tokenTracker.RecordEstimatedUsage(resultStr.Length, "WebFetch");
-                    break;
-            }
-        }
-        catch
-        {
-            // Token estimation is non-critical
-        }
     }
 
     private void CleanupOldEntries()

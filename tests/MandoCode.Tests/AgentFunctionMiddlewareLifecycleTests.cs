@@ -240,7 +240,7 @@ public class AgentFunctionMiddlewareLifecycleTests
         {
             OnPlanRequested = (_, _) => { ran = true; return Task.FromResult("plan executed"); }
         };
-        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var middleware = new AgentFunctionMiddleware(0, planHandoff: handoff);
         var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
         using var scope = middleware.BeginScope();
@@ -274,7 +274,7 @@ public class AgentFunctionMiddlewareLifecycleTests
         {
             OnPlanRequested = (plan, _) => { executed = plan; return Task.FromResult("done"); }
         };
-        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var middleware = new AgentFunctionMiddleware(0, planHandoff: handoff);
         var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
         using var scope = middleware.BeginScope();
@@ -304,7 +304,7 @@ public class AgentFunctionMiddlewareLifecycleTests
         {
             OnPlanRequested = (_, _) => Task.FromResult("plan executed")
         };
-        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var middleware = new AgentFunctionMiddleware(0, planHandoff: handoff);
         var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
         using var scope = middleware.BeginScope();
@@ -331,7 +331,7 @@ public class AgentFunctionMiddlewareLifecycleTests
     {
         // A step's own model call can reach propose_plan. Nested planning is always a runaway.
         var handoff = new PlanHandoff();
-        var middleware = new AgentFunctionMiddleware(0, null, null, handoff);
+        var middleware = new AgentFunctionMiddleware(0, planHandoff: handoff);
         var fn = Fn((string goal, string steps) => "should never run — intercepted", "propose_plan");
 
         string? nested = null;

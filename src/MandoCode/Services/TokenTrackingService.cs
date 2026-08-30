@@ -10,7 +10,6 @@ public class TokenTrackingService
 {
     private long _totalPromptTokens;
     private long _totalCompletionTokens;
-    private long _totalEstimatedTokens;
     private TokenUsageInfo? _lastOperation;
 
     /// <summary>
@@ -19,12 +18,11 @@ public class TokenTrackingService
     public event Action<TokenUsageInfo>? OnTokensUpdated;
 
     /// <summary>
-    /// Total tokens consumed in the current session (real + estimated).
+    /// Total tokens reported by model responses in the current session.
     /// </summary>
     public long TotalSessionTokens =>
         Interlocked.Read(ref _totalPromptTokens) +
-        Interlocked.Read(ref _totalCompletionTokens) +
-        Interlocked.Read(ref _totalEstimatedTokens);
+        Interlocked.Read(ref _totalCompletionTokens);
 
     /// <summary>
     /// Total real prompt tokens recorded from model responses.
@@ -35,11 +33,6 @@ public class TokenTrackingService
     /// Total real completion tokens recorded from model responses.
     /// </summary>
     public long TotalCompletionTokens => Interlocked.Read(ref _totalCompletionTokens);
-
-    /// <summary>
-    /// Total estimated tokens from file operations.
-    /// </summary>
-    public long TotalEstimatedTokens => Interlocked.Read(ref _totalEstimatedTokens);
 
     /// <summary>
     /// The most recent operation's token info.
@@ -59,28 +52,7 @@ public class TokenTrackingService
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             OperationLabel = label,
-            IsEstimate = false,
             GenerationSeconds = generationSeconds
-        };
-
-        _lastOperation = info;
-        OnTokensUpdated?.Invoke(info);
-    }
-
-    /// <summary>
-    /// Records an estimated token count using the chars/4 heuristic.
-    /// </summary>
-    public void RecordEstimatedUsage(int charCount, string label)
-    {
-        var estimatedTokens = Math.Max(1, charCount / 4);
-        Interlocked.Add(ref _totalEstimatedTokens, estimatedTokens);
-
-        var info = new TokenUsageInfo
-        {
-            PromptTokens = estimatedTokens,
-            CompletionTokens = 0,
-            OperationLabel = label,
-            IsEstimate = true
         };
 
         _lastOperation = info;
@@ -94,7 +66,6 @@ public class TokenTrackingService
     {
         Interlocked.Exchange(ref _totalPromptTokens, 0);
         Interlocked.Exchange(ref _totalCompletionTokens, 0);
-        Interlocked.Exchange(ref _totalEstimatedTokens, 0);
         _lastOperation = null;
     }
 
