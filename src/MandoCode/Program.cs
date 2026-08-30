@@ -164,15 +164,13 @@ class Program
                 return new TaskPlannerService(aiService, cfg);
             });
 
-            // Which engine actually runs a plan is decided per plan, not here — see
-            // PlanRunnerSelector, which re-reads the `planner` key so the choice can be flipped
-            // mid-session without losing history.
+            // Plans always run through the workflow runner; TaskPlannerService above remains the
+            // decision heuristic and proposal mapper.
             services.AddSingleton<IPlanStepExecutor>(provider =>
                 new AiServicePlanStepExecutor(provider.GetRequiredService<AIService>()));
 
             services.AddSingleton(provider => new PlanRunnerSelector(
                 provider.GetRequiredService<MandoCodeConfig>(),
-                provider.GetRequiredService<TaskPlannerService>(),
                 provider.GetRequiredService<IPlanStepExecutor>(),
                 provider.GetRequiredService<PlanHandoff>(),
                 provider.GetRequiredService<ProjectRootAccessor>()));

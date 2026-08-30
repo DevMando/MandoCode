@@ -311,7 +311,7 @@ See the main [README](../../../README.md#diff-approvals) for user-facing documen
 
 ## MAF workflow planner
 
-The optional workflow planner is built on `Microsoft.Agents.AI.Workflows`. Its first architectural
+The workflow planner is built on `Microsoft.Agents.AI.Workflows`. Its first architectural
 change was removing one root cause: the old planner executed the whole plan inside the
 `propose_plan` tool call. Because the outer model turn was still open, it could not observe the work,
 treated the returned summary as "not started yet," and repeated it. `propose_plan` now returns a
@@ -328,13 +328,13 @@ too: it routes via `handoff_to_*` tool calls that cannot be forced, the worst po
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Spike the real 1.19.0 assembly | done |
-| 1 | Freeze identity / checkpoint envelope / config key; extract `IPlanRunner` + `IPlanStepExecutor` | done |
+| 1 | Freeze identity / checkpoint envelope; extract `IPlanRunner` + `IPlanStepExecutor` | done |
 | 2 | Un-nest: `propose_plan` returns a receipt, the host runs the plan after the turn drains | done |
-| 3 | The graph behind `planner=workflow`: fixed topology, triage owns plan state | done |
+| 3 | Fixed workflow graph: triage owns plan state | done |
 | 3b | Show step instructions and support coherent pre-execution edits | done |
 | 4 | Checkpointing, resume, discard, and native Desktop recovery actions | done |
 | 5 | Retry, replan approval, deterministic `/plan <goal>`, and truthful partial status | done |
-| 6 | Flip the `planner` default, then delete the legacy runner | deferred pending release soak |
+| 6 | Make the workflow runner the only supported engine | done |
 
 Spike findings worth keeping:
 
@@ -362,11 +362,8 @@ Graph-authoring notes (all learned the hard way against the real assembly):
 - `InProcessExecution.RunStreamingAsync`'s third positional parameter is `sessionId`, not the
   cancellation token.
 
-`planner` selects the engine (`legacy` | `workflow` | `default`) and is re-read per plan by
-`PlanRunnerSelector`, so it can be flipped mid-session without losing history — which is what makes
-an honest A/B against a local model practical. `PlanRunnerBehaviorTests` runs every behavioral case
-against **both** engines: while both are selectable, any divergence would make that A/B
-uninterpretable, since a behavior difference would be indistinguishable from a model difference.
+`PlanRunnerSelector` always selects the workflow runner. There is no `planner` configuration key or
+legacy-engine fallback; `PlanRunnerBehaviorTests` exercises the production workflow behavior.
 
 Executor and agent identities are fixed in `PlanExecutorIds` and must not drift: MAF derives
 workflow-executor identity from both the agent's `Id` and `Name`, and a checkpoint written under one

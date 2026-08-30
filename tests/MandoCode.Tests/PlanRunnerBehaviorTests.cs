@@ -14,11 +14,10 @@ namespace MandoCode.Tests;
 /// </summary>
 public class PlanRunnerBehaviorTests
 {
-    public static TheoryData<string> Engines => new() { "legacy", "workflow" };
+    public static TheoryData<string> Engines => new() { "workflow" };
 
     private static IPlanRunner MakeRunner(string engine, IPlanStepExecutor executor) => engine switch
     {
-        "legacy" => new TaskPlannerService(executor, new MandoCodeConfig()),
         "workflow" => new WorkflowPlanRunner(executor),
         _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "unknown planner engine"),
     };
