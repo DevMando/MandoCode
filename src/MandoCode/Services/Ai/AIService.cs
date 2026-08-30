@@ -416,7 +416,7 @@ public class AIService
         // pin the stall watchdog paused. The old middleware only fires for calls already routed
         // through the discarded agent, so nothing fires twice; it becomes collectible once those finish.
         _agentFunctionMiddleware = new AgentFunctionMiddleware(
-            _config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _tokenTracker, _planHandoff, _config.ToolResultCharBudget);
+            _config.FunctionDeduplicationWindowSeconds, _projectRootAccessor, _planHandoff, _config.ToolResultCharBudget);
         _agentFunctionMiddleware.OnFunctionInvoked += call => OnFunctionInvoked?.Invoke(call);
         _agentFunctionMiddleware.OnFunctionCompleted += result => OnFunctionCompleted?.Invoke(result);
         _agentFunctionMiddleware.OnFunctionStarted += () => _completionTracker.RegisterStart();

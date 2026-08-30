@@ -26,13 +26,8 @@ public record TokenUsageInfo
     public string OperationLabel { get; init; } = "";
 
     /// <summary>
-    /// True when the token count is an estimate (e.g. chars/4 heuristic) rather than a real count.
-    /// </summary>
-    public bool IsEstimate { get; init; }
-
-    /// <summary>
     /// Time in seconds the model spent generating output tokens (from Ollama EvalDuration).
-    /// Null when unavailable or for estimated operations.
+    /// Null when unavailable.
     /// </summary>
     public double? GenerationSeconds { get; init; }
 

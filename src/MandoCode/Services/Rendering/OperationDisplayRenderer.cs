@@ -13,14 +13,10 @@ namespace MandoCode.Services;
 public class OperationDisplayRenderer
 {
     private readonly ProjectRootAccessor _projectRoot;
-    private readonly MandoCodeConfig _config;
-    private readonly TokenTrackingService _tokenTracker;
 
-    public OperationDisplayRenderer(ProjectRootAccessor projectRoot, MandoCodeConfig config, TokenTrackingService tokenTracker)
+    public OperationDisplayRenderer(ProjectRootAccessor projectRoot)
     {
         _projectRoot = projectRoot;
-        _config = config;
-        _tokenTracker = tokenTracker;
     }
 
     private string FileLink(string relativePath) =>
@@ -54,15 +50,7 @@ public class OperationDisplayRenderer
 
             case "Read":
                 sb.AppendLine($"\u001b[32m●\u001b[0m \u001b[1mRead(\u001b[0m{FileLink(e.FilePath)}\u001b[1m)\u001b[0m");
-                if (_config.EnableTokenTracking && _tokenTracker.LastOperation is { IsEstimate: true } readOp
-                    && readOp.OperationLabel.StartsWith("Read"))
-                {
-                    sb.AppendLine($"  ⎿  \u001b[2mRead {e.LineCount} lines ~{TokenTrackingService.FormatTokenCount(readOp.PromptTokens)} tokens\u001b[0m");
-                }
-                else
-                {
-                    sb.AppendLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
-                }
+                sb.AppendLine($"  ⎿  \u001b[2mRead {e.LineCount} lines\u001b[0m");
                 break;
 
             case "Delete":

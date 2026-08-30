@@ -1521,12 +1521,6 @@
                 contextBlocks.AppendLine();
                 totalExpansionChars += content.Length;
 
-                // Track estimated tokens for @file references
-                if (Config.EnableTokenTracking)
-                {
-                    TokenTracker.RecordEstimatedUsage(content.Length, $"@{filePath}");
-                }
-
                 // Show consistent operation display for @file reads
                 var lineCount = content.Split('\n').Length;
                 var readDisplay = new OperationDisplayEvent
@@ -1784,7 +1778,7 @@
                         if (Config.EnableTokenTracking)
                         {
                             var lastOp = TokenTracker.LastOperation;
-                            if (lastOp != null && !lastOp.IsEstimate)
+                            if (lastOp != null)
                             {
                                 var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
                                 var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
