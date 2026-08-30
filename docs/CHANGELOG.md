@@ -61,10 +61,19 @@ same package, with nothing for users to choose or configure.
 - **README prerequisites now ask for the .NET 10 SDK**, with a note that the .NET 8 fallback
   exists and when it goes away.
 
+### Fixed
+- **Broad project roots can no longer flood a model with a recursive file listing.** Directory
+  references such as `@MandoCode/` now tell the agent to keep subsequent reads and listings inside
+  that directory, and the listing tool accepts that directory as an explicit scope. Recursive
+  listings are capped with a useful follow-up hint, while the middleware truncates any oversized
+  tool result before it enters conversation history. This closes the failure mode where one broad
+  listing could add hundreds of thousands of tokens and then be repeated by context retries.
+
 ### Test coverage
-The suite now contains 618 cases per target and runs on both .NET 8 and .NET 10. New coverage locks
+The suite now contains 623 cases per target and runs on both .NET 8 and .NET 10. New coverage locks
 down workflow topology, checkpoint envelopes and storage, resume context, retry behavior, plan
-revision, semantic step outcomes, proposal handoff, input handling, and version labels. Desktop's
+revision, semantic step outcomes, proposal handoff, input handling, scoped directory references,
+bounded tool results, and version labels. Desktop's
 host suite adds 239 passing cases, and the planner was also exercised through real CLI terminal and
 Desktop sessions, including forced process termination between steps.
 

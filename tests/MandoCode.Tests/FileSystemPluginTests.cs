@@ -26,6 +26,35 @@ public class FileSystemPluginTests : IDisposable
         try { Directory.Delete(_tempRoot, recursive: true); } catch { }
     }
 
+    [Fact]
+    public async Task ListAllProjectFiles_WithDirectoryScope_StaysInsideReferencedDirectory()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tempRoot, "README.md"), "root readme");
+        var referenced = Path.Combine(_tempRoot, "MandoCode");
+        Directory.CreateDirectory(Path.Combine(referenced, "src"));
+        await File.WriteAllTextAsync(Path.Combine(referenced, "README.md"), "project readme");
+        await File.WriteAllTextAsync(Path.Combine(referenced, "src", "Program.cs"), "class Program {}");
+
+        var result = await _plugin.ListAllProjectFiles("MandoCode");
+
+        Assert.Contains("MandoCode/README.md", result);
+        Assert.Contains("MandoCode/src/Program.cs", result);
+        Assert.DoesNotContain("\nREADME.md", "\n" + result);
+    }
+
+    [Fact]
+    public async Task ListAllProjectFiles_LargeTree_ReturnsBoundedActionableListing()
+    {
+        for (var i = 0; i <= FileSystemPlugin.MaxFileListingEntries; i++)
+            await File.WriteAllTextAsync(Path.Combine(_tempRoot, $"file-{i:D4}.txt"), "x");
+
+        var result = await _plugin.ListAllProjectFiles();
+
+        Assert.Contains("[truncated:", result);
+        Assert.Contains("relativeDirectory", result);
+        Assert.True(result.Length <= FileSystemPlugin.MaxFileListingChars + 300, $"Listing was {result.Length:N0} chars.");
+    }
+
     // ──────────────────────────────────────────────
     //  CRLF tolerance
     // ──────────────────────────────────────────────

@@ -1548,6 +1548,7 @@
                         dirListing = dirListing.Substring(0, 4_000) + "\n... [truncated]";
 
                     contextBlocks.AppendLine($"Directory: {filePath}/");
+                    contextBlocks.AppendLine(FileAutocompleteProvider.BuildDirectoryScopeInstruction(filePath));
                     contextBlocks.AppendLine("Contents:");
                     contextBlocks.AppendLine(dirListing);
                     contextBlocks.AppendLine();

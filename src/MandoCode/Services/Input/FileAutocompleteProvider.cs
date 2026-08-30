@@ -19,6 +19,12 @@ public class FileAutocompleteProvider
         _ignoreDirectories = ignoreDirectories;
     }
 
+    public static string BuildDirectoryScopeInstruction(string relativePath) =>
+        $"Scope instruction: The user explicitly referenced '{relativePath}/'. Keep file operations " +
+        $"inside that directory by prefixing relative paths with '{relativePath}/'. To inspect it " +
+        $"recursively, call list_all_project_files with relativeDirectory='{relativePath}'. Do not " +
+        "list the entire project root for this request.";
+
     /// <summary>
     /// Gets all project file paths (relative, forward-slash normalized). Lazy-loads and caches.
     /// </summary>

@@ -75,6 +75,18 @@ public class InvocationScopeTests
     }
 
     [Fact]
+    public void RemainingResultChars_TracksUndeliveredBudget()
+    {
+        var scope = new InvocationScope(100);
+
+        Assert.Equal(100, scope.RemainingResultChars);
+        scope.RecordResultChars(35);
+        Assert.Equal(65, scope.RemainingResultChars);
+        scope.RecordResultChars(100);
+        Assert.Equal(0, scope.RemainingResultChars);
+    }
+
+    [Fact]
     public void RecordRead_AfterWrite_ResetsModifiedFlag()
     {
         // After writing, then reading, a *subsequent* read without another write
