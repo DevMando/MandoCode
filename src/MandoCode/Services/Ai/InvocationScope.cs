@@ -83,6 +83,7 @@ public class InvocationScope : IDisposable
 
     public long ResultCharBudget { get; }
     public long TotalResultChars { get; private set; }
+    public long RemainingResultChars => Math.Max(0, ResultCharBudget - Interlocked.Read(ref _totalResultCharsAtomic));
 
     /// <summary>
     /// True once tool results have eaten more than <see cref="ResultCharBudget"/>.

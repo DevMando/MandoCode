@@ -430,7 +430,20 @@ public class AgentFunctionMiddleware
                 _ => result.ToString() ?? string.Empty
             };
 
-            _recentCalls[callKey] = (DateTime.UtcNow, result);
+            // The budget used to be checked only before the NEXT tool call. A single enormous
+            // result (most visibly a recursive file listing from a broad project root) could
+            // therefore enter chat history whole and overflow the provider before the circuit
+            // had another chance to run. Bound the result before it is cached, counted, or
+            // returned to MAF so oversized payloads never reach the model.
+            var deliveredResult = result;
+            var activeScope = _currentScope.Value;
+            if (activeScope != null && resultStr.Length > activeScope.RemainingResultChars)
+            {
+                resultStr = TruncateToRemainingBudget(resultStr, activeScope.RemainingResultChars);
+                deliveredResult = resultStr;
+            }
+
+            _recentCalls[callKey] = (DateTime.UtcNow, deliveredResult);
             CleanupOldEntries();
 
             EstimateFileOperationTokens(functionName, context.Arguments, resultStr);
@@ -439,7 +452,7 @@ public class AgentFunctionMiddleware
             UpdateScopeForCompletedCall(context, functionName, resultStr, isError);
 
             CompleteWith(functionName, resultStr, success: !isError);
-            return result;
+            return deliveredResult;
         }
         catch (Exception ex)
         {
@@ -447,6 +460,19 @@ public class AgentFunctionMiddleware
             CompleteWith(functionName, $"Error: {ex.Message}", success: false);
             return errorMsg;
         }
+    }
+
+    private static string TruncateToRemainingBudget(string result, long remainingChars)
+    {
+        if (remainingChars <= 0) return string.Empty;
+        if (result.Length <= remainingChars) return result;
+
+        var limit = (int)Math.Min(int.MaxValue, remainingChars);
+        const string marker = "\n... [tool result truncated before delivery because this turn's tool-result budget was reached]";
+        if (limit <= marker.Length)
+            return marker[..limit];
+
+        return result[..(limit - marker.Length)] + marker;
     }
 
     private void CompleteWith(string functionName, string result, bool success)
@@ -905,7 +931,10 @@ public class AgentFunctionMiddleware
             case "read_file_contents":
                 return arguments.TryGetValue("relativePath", out var readPath) ? $"Reading {readPath}" : "Reading file";
             case "list_all_project_files":
-                return "Listing all project files";
+                return arguments.TryGetValue("relativeDirectory", out var directory) &&
+                       !string.IsNullOrWhiteSpace(directory?.ToString())
+                    ? $"Listing files under {directory}"
+                    : "Listing all project files";
             case "list_files_match_glob_pattern":
                 return arguments.TryGetValue("pattern", out var pattern) ? $"Finding files matching '{pattern}'" : "Listing files";
             case "edit_file":

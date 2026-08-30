@@ -12,6 +12,9 @@ namespace MandoCode.Plugins;
 /// </summary>
 public class FileSystemPlugin
 {
+    public const int MaxFileListingChars = 20_000;
+    public const int MaxFileListingEntries = 1_000;
+
     private readonly ProjectRootAccessor ProjectRootAccessor;
     private readonly SpinnerService? _spinner;
     private string ProjectRoot => ProjectRootAccessor.ProjectRoot;
@@ -41,26 +44,64 @@ public class FileSystemPlugin
     }
 
     /// <summary>
-    /// Lists all project files recursively, excluding ignored directories.
+    /// Lists project files recursively, optionally scoped to one directory, excluding ignored directories.
     /// </summary>
-    [Description("Lists all project files recursively, excluding ignored directories. Returns one relative file path per line. Use list_files_match_glob_pattern instead if you only need specific file types.")]
-    public async Task<string> ListAllProjectFiles()
+    [Description("Lists project files recursively, excluding ignored directories. Pass relativeDirectory when the user referenced a specific folder (for example, 'MandoCode'); never list the whole project root for an @directory request. Output is capped; use list_files_match_glob_pattern if you only need specific file types.")]
+    public async Task<string> ListAllProjectFiles(
+        [Description("Optional directory relative to the project root. Use the user's @directory path here. Empty means the entire project.")] string relativeDirectory = "")
     {
         try
         {
-            var files = await Task.Run(() => GetAllFilesCached());
-            var relativeFiles = files.Select(f => Path.GetRelativePath(ProjectRoot, f)).ToList();
+            var scopePath = string.IsNullOrWhiteSpace(relativeDirectory)
+                ? ProjectRoot
+                : GetFullPath(relativeDirectory);
+
+            if (!Directory.Exists(scopePath))
+                return $"Error: Directory not found: {relativeDirectory}";
+
+            var files = await Task.Run(() => string.IsNullOrWhiteSpace(relativeDirectory)
+                ? GetAllFilesCached()
+                : GetAllFiles(scopePath));
+            var relativeFiles = files
+                .Select(f => Path.GetRelativePath(ProjectRoot, f).Replace('\\', '/'))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             if (!relativeFiles.Any())
             {
-                return "No files found in the project.";
+                return string.IsNullOrWhiteSpace(relativeDirectory)
+                    ? "No files found in the project."
+                    : $"No files found under directory: {relativeDirectory}";
             }
 
-            return string.Join("\n", relativeFiles);
+            var listing = new StringBuilder();
+            var shown = 0;
+            foreach (var file in relativeFiles)
+            {
+                var requiredChars = file.Length + (listing.Length == 0 ? 0 : 1);
+                if (shown >= MaxFileListingEntries || listing.Length + requiredChars > MaxFileListingChars)
+                    break;
+
+                if (listing.Length > 0) listing.Append('\n');
+                listing.Append(file);
+                shown++;
+            }
+
+            if (shown < relativeFiles.Count)
+            {
+                var scopeLabel = string.IsNullOrWhiteSpace(relativeDirectory)
+                    ? "the project root"
+                    : $"'{relativeDirectory}'";
+                listing.Append($"\n... [truncated: showing {shown:N0} of {relativeFiles.Count:N0} files under {scopeLabel}. " +
+                               "Call list_all_project_files with a narrower relativeDirectory, or use " +
+                               "list_files_match_glob_pattern for a specific file type.]");
+            }
+
+            return listing.ToString();
         }
         catch (Exception ex)
         {
-            return $"Error listing files: {ex.Message}";
+            return $"Error listing files under '{relativeDirectory}': {ex.Message}";
         }
     }
 

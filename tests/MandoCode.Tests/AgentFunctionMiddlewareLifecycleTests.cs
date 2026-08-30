@@ -64,6 +64,23 @@ public class AgentFunctionMiddlewareLifecycleTests
     }
 
     [Fact]
+    public async Task OversizedSingleToolResult_IsTruncatedBeforeItReachesTheModel()
+    {
+        const int budget = 100;
+        var middleware = new AgentFunctionMiddleware(0, resultCharBudget: budget);
+        var fn = Fn(() => new string('x', 10_000), "large_result");
+
+        using var scope = middleware.BeginScope();
+        var result = (await AgentMiddlewareTestHelpers.InvokeAsync(middleware, fn))?.ToString();
+
+        Assert.NotNull(result);
+        Assert.Equal(budget, result!.Length);
+        Assert.Contains("tool result truncated", result);
+        Assert.Equal(budget, scope.TotalResultChars);
+        Assert.True(scope.BudgetExhausted);
+    }
+
+    [Fact]
     public async Task PendingCount_ReturnsToZero_WhenApprovalCallbackThrows()
     {
         var middleware = new AgentFunctionMiddleware(5);
