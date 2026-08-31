@@ -51,6 +51,12 @@ public class AIService
     // list by BuildAgent. See BuildAgent's doc comment.
     private readonly Dictionary<string, IReadOnlyList<AIFunction>> _mcpAgentToolsByServer = new();
 
+    // Host applications can contribute local UI tools without making the reusable engine depend
+    // on a particular frontend. The CLI leaves this empty; Desktop uses it for its preview pane.
+    // Like MCP tools, these are folded into every rebuilt agent so /config changes never make a
+    // host capability disappear mid-session.
+    private IReadOnlyList<AIFunction> _hostTools = Array.Empty<AIFunction>();
+
     // Tool name -> server name, rebuilt from _mcpAgentToolsByServer whenever it changes. Feeds
     // AgentFunctionMiddleware.McpServerNameResolver — MAF tools have no plugin-name prefix to
     // check the way SK's PluginName.StartsWith("mcp_") did, so the middleware needs this map.
@@ -297,6 +303,16 @@ public class AIService
     }
 
     /// <summary>
+    /// Replaces the optional tools supplied by the host application and rebuilds the agent so
+    /// they participate in normal MAF function calling and fallback execution.
+    /// </summary>
+    public void SetHostTools(IEnumerable<AIFunction>? tools)
+    {
+        _hostTools = tools?.ToArray() ?? Array.Empty<AIFunction>();
+        BuildAgent();
+    }
+
+    /// <summary>
     /// Builds the MAF <see cref="_agent"/>: an <see cref="OllamaApiClient"/> wrapped as an
     /// <see cref="AIAgent"/>, with every plugin function bound as a plain <see cref="AIFunction"/>
     /// under the exact snake_case name the system prompt and any user skills already reference
@@ -368,6 +384,10 @@ public class AIService
         // without a rebuild.
         var skillsPlugin = new SkillsPlugin(_skillLoader);
         tools.Add(NamedTool(skillsPlugin.LoadSkill, "load_skill"));
+
+        // Host tools are intentionally platform-neutral AIFunctions. The engine owns their
+        // normal middleware/event pipeline; the host owns their implementation and UI effects.
+        tools.AddRange(_hostTools);
 
         // MCP tools — whatever AttachMcpPluginsAsync has discovered so far. Read-only here;
         // AttachMcpPluginsAsync owns reconciling this dictionary against active/removed servers
