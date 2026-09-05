@@ -12,7 +12,8 @@ public static partial class PlanStepReport
     public const string Contract =
         "At the very end of your final response, report the step outcome on its own line. " +
         "Use [PLAN_STEP_RESULT:SUCCESS] only when this step's instruction and verification are " +
-        "actually satisfied. If anything required is missing, incorrect, or unverifiable, use " +
+        "actually satisfied, supported by tool results from inspecting the deliverable and running its " +
+        "acceptance checks. Include concrete paths and check results in your response. If anything required is missing, incorrect, or unverifiable, use " +
         "[PLAN_STEP_RESULT:FAILED] followed by a concise reason. Never call a failed verification success.";
 
     public static PlanStepReportResult Parse(string response)

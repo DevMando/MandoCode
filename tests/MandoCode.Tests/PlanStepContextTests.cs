@@ -54,13 +54,13 @@ public class PlanStepContextTests
     }
 
     [Fact]
-    public void IncludesOnlyLastTwoPreviousStepResults()
+    public void IncludesEarlierDecisionsAndRecentResults()
     {
         var results = new List<string> { "result one", "result two", "result three" };
 
         var context = AIService.BuildStepContext(SystemPrompt, "do the thing", results);
 
-        Assert.DoesNotContain("result one", context);
+        Assert.Contains("result one", context);
         Assert.Contains("result two", context);
         Assert.Contains("result three", context);
     }

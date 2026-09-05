@@ -11,8 +11,8 @@ namespace MandoCode.Services;
 /// <para>
 /// One file per project root and optional owner under <c>~/.mandocode/plans/</c>, using readable
 /// leaf names plus hashes so neither same-named projects nor Desktop agents sharing a project can
-/// collide. Written whole-file with write-then-rename, and best-effort throughout: persistence
-/// must never break a running plan.
+/// collide. Written whole-file with write-then-rename. Save failures are reported to the runner,
+/// which emits a visible warning and continues execution.
 /// </para>
 /// <para>
 /// Resume works by reconstructing the plan and running it again — completed and skipped steps are
@@ -25,6 +25,8 @@ namespace MandoCode.Services;
 public static class PlanCheckpointStore
 {
     /// <summary>Safety valve — a plan record is small; anything this large is corrupt.</summary>
+    private static readonly object WriteLock = new();
+
     private const int MaxBytes = 4 * 1024 * 1024;
 
     private static string Folder => Path.Combine(
@@ -69,15 +71,19 @@ public static class PlanCheckpointStore
             };
 
             var json = JsonSerializer.Serialize(envelope);
-            if (json.Length > MaxBytes) return;
+            if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxBytes)
+                throw new IOException("Plan checkpoint exceeds the size limit.");
 
-            Directory.CreateDirectory(Folder);
-            var path = PathFor(projectRoot, checkpointId);
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, path, overwrite: true);
+            lock (WriteLock)
+            {
+                Directory.CreateDirectory(Folder);
+                var path = PathFor(projectRoot, checkpointId);
+                var tmp = path + ".tmp";
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, path, overwrite: true);
+            }
         }
-        catch { /* persistence must never break the plan */ }
+        catch (Exception ex) { throw new IOException("Could not save plan progress. Resume may repeat work or be unavailable.", ex); }
     }
 
     /// <summary>
@@ -96,6 +102,11 @@ public static class PlanCheckpointStore
         {
             var path = PathFor(projectRoot, checkpointId);
             if (!File.Exists(path)) return null;
+            if (new FileInfo(path).Length > MaxBytes)
+            {
+                refusal = "The saved plan exceeds the checkpoint size limit. Discard it and create a new plan.";
+                return null;
+            }
 
             var envelope = JsonSerializer.Deserialize<PlanCheckpointEnvelope>(File.ReadAllText(path));
             if (envelope == null) return null;
@@ -110,8 +121,7 @@ public static class PlanCheckpointStore
         }
         catch
         {
-            // Truncated or corrupt: treat as absent rather than surfacing an error. A plan record is
-            // a convenience, and a half-written one is indistinguishable from no record at all.
+            refusal = "The saved plan could not be read. Progress recovery is unavailable; inspect existing work before starting again.";
             return null;
         }
     }
@@ -154,6 +164,9 @@ public static class PlanCheckpointStore
                 : TaskStepStatus.Pending,
             Result = s.Result,
             ErrorMessage = s.Error,
+            Evidence = s.Evidence,
+            VerificationPending = s.VerificationPending,
+            RepairAttempts = s.RepairAttempts,
         })],
     };
 

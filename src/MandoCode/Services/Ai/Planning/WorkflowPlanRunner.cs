@@ -62,7 +62,7 @@ public sealed class WorkflowPlanRunner(
     public IAsyncEnumerable<TaskProgressEvent> ResumeAsync(
         PlanRunState state,
         CancellationToken cancellationToken = default)
-        => RunAsync(PlanCheckpointStore.ToPlan(state), state.PreviousResults, cancellationToken);
+        => ResumeAsync(PlanCheckpointStore.ToPlan(state), state, cancellationToken);
 
     /// <summary>
     /// Continues a saved run using the same reconstructed plan instance the interactive host owns.
@@ -80,6 +80,9 @@ public sealed class WorkflowPlanRunner(
         IReadOnlyList<string>? seedResults,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var runToken = lifetime.Token;
+        var drained = false;
         var channel = Channel.CreateUnbounded<Signal>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -99,7 +102,14 @@ public sealed class WorkflowPlanRunner(
         }
 
         var ctx = new PlanRunContext(
-            plan, _stepExecutor, RaiseAsync, cancellationToken, _planHandoff, _onStateSaved, seedResults);
+            plan, _stepExecutor, RaiseAsync, runToken, _planHandoff, _onStateSaved, seedResults);
+        void RecordMutation()
+        {
+            var cursor = ctx.NextRunnableIndex(0);
+            ctx.RecordState(PlanRunState.From(plan, cursor < 0 ? plan.Steps.Count : cursor,
+                ctx.PreviousResults, _planHandoff?.FileOperations ?? []));
+        }
+        if (_planHandoff != null) _planHandoff.FileOperationRecorded += RecordMutation;
         var workflow = BuildWorkflow(ctx);
 
         var pump = Task.Run(async () =>
@@ -108,20 +118,26 @@ public sealed class WorkflowPlanRunner(
             {
                 // Named: the third positional parameter is sessionId, not the token.
                 await using var run = await InProcessExecution.RunStreamingAsync(
-                    workflow, new StartPlanRun(), cancellationToken: cancellationToken);
+                    workflow, new StartPlanRun(), cancellationToken: runToken);
 
-                await foreach (var evt in run.WatchStreamAsync(cancellationToken))
+                await foreach (var evt in run.WatchStreamAsync(runToken))
                 {
-                    if (evt is WorkflowOutputEvent or WorkflowErrorEvent) break;
+                    if (evt is WorkflowErrorEvent error)
+                        throw new InvalidOperationException($"Plan workflow failed: {error}");
+                    if (evt is WorkflowOutputEvent) break;
                 }
 
                 // WatchStreamAsync can return before the run has actually quiesced — verified in the
                 // Phase 0 spike, where a tool call landed after the stream had ended. Declaring the
                 // plan finished here would report success while its steps were still writing files.
-                while (await run.GetStatusAsync(CancellationToken.None) == RunStatus.Running)
+                while (await run.GetStatusAsync(runToken) == RunStatus.Running)
                 {
-                    await Task.Delay(25, CancellationToken.None);
+                    await Task.Delay(25, runToken);
                 }
+            }
+            catch (OperationCanceledException) when (runToken.IsCancellationRequested)
+            {
+                plan.Status = TaskPlanStatus.Cancelled;
             }
             finally
             {
@@ -139,11 +155,22 @@ public sealed class WorkflowPlanRunner(
                 // status it set is now visible to triage.
                 signal.Ack?.TrySetResult();
             }
+            drained = true;
         }
         finally
         {
-            // Surfaces executor faults rather than letting them vanish into the background task.
-            await pump;
+            // A break or an exception in the consumer skips the post-yield acknowledgement.
+            // Cancel BEFORE awaiting the producer, releasing every outstanding handshake.
+            if (!drained)
+            {
+                plan.Status = TaskPlanStatus.Cancelled;
+                lifetime.Cancel();
+            }
+            try { await pump; }
+            finally
+            {
+                if (_planHandoff != null) _planHandoff.FileOperationRecorded -= RecordMutation;
+            }
         }
     }
 

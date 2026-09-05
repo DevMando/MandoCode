@@ -52,7 +52,7 @@ internal sealed class PlanRunContext(
 
         // Also handed to the host, which persists it so an interrupted plan can be resumed.
         // Best-effort: a failure to record progress must not stop the plan making it.
-        try { onStateSaved?.Invoke(state); } catch { }
+        RecordState(state);
 
         return context.QueueStateUpdateAsync(
             PlanWorkflowMessages.StateKey, state, PlanWorkflowMessages.StateScope, ct);
@@ -66,6 +66,15 @@ internal sealed class PlanRunContext(
     /// would run blind to everything earlier steps produced, which is exactly the context the
     /// remaining work usually depends on.
     /// </remarks>
+    public void RecordState(PlanRunState state)
+    {
+        try { onStateSaved?.Invoke(state); PersistenceError = null; }
+        catch (Exception ex) { PersistenceError = ex.Message; }
+    }
+
+    public string? PersistenceError { get; private set; }
+    private string? _reportedPersistenceError;
+
     public List<string> PreviousResults { get; } = [.. seedResults ?? []];
 
     /// <summary>How many times each step index has been retried after failing.</summary>
@@ -73,7 +82,7 @@ internal sealed class PlanRunContext(
     /// Capped so a step that fails identically every time cannot loop forever. The user is asked
     /// each time, so this is a backstop against a mistake rather than against the user.
     /// </remarks>
-    public Dictionary<int, int> RetryCounts { get; } = [];
+    public Dictionary<int, int> VerificationRetryCounts { get; } = [];
 
     /// <summary>Maximum retries of a single step within one run.</summary>
     public const int MaxRetriesPerStep = 3;
@@ -90,8 +99,16 @@ internal sealed class PlanRunContext(
     /// without the wait, a step's model call starts its own spinner while the step header is still
     /// being drawn and the spinner frame bleeds into it.
     /// </remarks>
-    public Task RaiseAsync(TaskProgressEvent evt, bool waitForConsumer = true)
-        => raise(evt, waitForConsumer, CancellationToken);
+    public async Task RaiseAsync(TaskProgressEvent evt, bool waitForConsumer = true)
+    {
+        if (PersistenceError != null && PersistenceError != _reportedPersistenceError)
+        {
+            _reportedPersistenceError = PersistenceError;
+            await raise(new TaskProgressEvent { ProgressType = TaskProgressType.PersistenceWarning,
+                Plan = Plan, Message = PersistenceError }, true, CancellationToken);
+        }
+        await raise(evt, waitForConsumer, CancellationToken);
+    }
 
     /// <summary>
     /// Index of the next step that still needs running at or after <paramref name="from"/>, or -1.
@@ -160,6 +177,7 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
         }
 
         step.Status = TaskStepStatus.InProgress;
+        await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
 
         // Raising waits for the consumer (see RaiseAsync), so the step header is on screen before
         // the model call below starts its own spinner. Without that ordering the spinner frame
@@ -169,8 +187,18 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
         PlanStepOutcome outcome;
         try
         {
-            var result = await ctx.StepExecutor.ExecuteStepAsync(
-                step.Instruction, ctx.PreviousResults, ctx.CancellationToken);
+            ctx.CancellationToken.ThrowIfCancellationRequested();
+            var result = await ctx.StepExecutor.ExecuteAttemptAsync(
+                step, ctx.PreviousResults, async activity =>
+                {
+                    await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
+                    await ctx.RaiseAsync(new TaskProgressEvent
+                    {
+                        ProgressType = TaskProgressType.StepActivity, Plan = ctx.Plan,
+                        CurrentStep = step.StepNumber, TotalSteps = ctx.Plan.Steps.Count,
+                        Message = activity
+                    });
+                }, ctx.CancellationToken);
             outcome = new PlanStepOutcome(message.StepIndex, PlanStepOutcomeKind.Completed, result, null);
         }
         catch (OperationCanceledException) when (ctx.CancellationToken.IsCancellationRequested)
@@ -182,6 +210,10 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
             // "Cancel plan" chosen at a diff-approval prompt mid-step. Unambiguous: stop everything.
             outcome = new PlanStepOutcome(
                 message.StepIndex, PlanStepOutcomeKind.Cancelled, null, "Plan cancelled by user from diff approval.");
+        }
+        catch (PlanVerificationUnavailableException ex)
+        {
+            outcome = new PlanStepOutcome(message.StepIndex, PlanStepOutcomeKind.VerificationUnavailable, null, ex.Message);
         }
         catch (Exception ex)
         {
@@ -215,6 +247,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
         {
             case PlanStepOutcomeKind.Completed:
                 step.Result = message.Result;
+                step.ErrorMessage = null;
                 step.Status = TaskStepStatus.Completed;
                 ctx.PreviousResults.Add($"Step {step.StepNumber} ({step.Description}): {message.Result}");
                 await ctx.RaiseAsync(TaskProgressEvent.StepCompleted(plan, step, message.Result));
@@ -228,13 +261,19 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                 await Finish(context, cancellationToken);
                 return;
 
+            case PlanStepOutcomeKind.VerificationUnavailable:
             case PlanStepOutcomeKind.Failed:
                 step.Status = TaskStepStatus.Failed;
                 step.ErrorMessage = message.Error;
 
+                await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
+
                 // Defer skip-vs-cancel to the consumer, then reconcile — matching the legacy runner,
                 // where deciding before the yield silently downgraded "Cancel the plan" to "skip".
-                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."));
+                var failureEvent = TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed.");
+                var verificationOnly = message.Kind == PlanStepOutcomeKind.VerificationUnavailable;
+                if (verificationOnly) failureEvent.ProgressType = TaskProgressType.StepVerificationUnavailable;
+                await ctx.RaiseAsync(failureEvent);
 
                 if (plan.Status == TaskPlanStatus.Cancelled)
                 {
@@ -247,19 +286,41 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                 // the same index rather than advancing, which is what the cursor would otherwise do.
                 if (step.Status == TaskStepStatus.Pending)
                 {
-                    var attempts = ctx.RetryCounts.TryGetValue(message.StepIndex, out var n) ? n : 0;
+                    if (step.Evidence != null && step.Evidence.Instruction != step.Instruction)
+                    {
+                        step.VerificationPending = false;
+                        step.RepairAttempts = 0;
+                        verificationOnly = false;
+                    }
+                    var attempts = verificationOnly
+                        ? ctx.VerificationRetryCounts.GetValueOrDefault(message.StepIndex)
+                        : step.RepairAttempts;
                     if (attempts < PlanRunContext.MaxRetriesPerStep)
                     {
-                        ctx.RetryCounts[message.StepIndex] = attempts + 1;
-                        step.ErrorMessage = null;
+                        if (verificationOnly) ctx.VerificationRetryCounts[message.StepIndex] = attempts + 1;
+                        else step.RepairAttempts = attempts + 1;
                         await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
                         await context.SendMessageAsync(
                             new RunPlanStep(message.StepIndex), PlanExecutorIds.StepRunner, cancellationToken);
                         return;
                     }
 
-                    // Out of retries: fall through and treat it as skipped rather than looping.
+                    // Stop at the unresolved step. Never silently skip it after recovery exhaustion.
                     step.Status = TaskStepStatus.Failed;
+                    plan.Status = TaskPlanStatus.Paused;
+                    plan.ExecutionSummary = $"Step {step.StepNumber} paused after {attempts} recovery attempts. {step.ErrorMessage}";
+                    await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
+                    await Finish(context, cancellationToken);
+                    return;
+                }
+
+                if (verificationOnly && step.Status != TaskStepStatus.Skipped)
+                {
+                    plan.Status = TaskPlanStatus.Paused;
+                    plan.ExecutionSummary = $"Verification of step {step.StepNumber} is unavailable. Evidence is saved for verification-only retry.";
+                    await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
+                    await Finish(context, cancellationToken);
+                    return;
                 }
 
                 // Either the consumer skipped it, or there was no interactive consumer at all. Both
@@ -308,6 +369,14 @@ internal sealed class PlanFinalizerExecutor(PlanRunContext ctx)
         PlanRunFinished message, IWorkflowContext context, CancellationToken cancellationToken = default)
     {
         var plan = ctx.Plan;
+
+        if (plan.Status == TaskPlanStatus.Paused)
+        {
+            await ctx.RaiseAsync(new TaskProgressEvent { ProgressType = TaskProgressType.PlanPaused,
+                Plan = plan, Message = plan.ExecutionSummary, TotalSteps = plan.Steps.Count });
+            await context.YieldOutputAsync(TaskPlanStatus.Paused.ToString(), cancellationToken);
+            return;
+        }
 
         if (plan.Status == TaskPlanStatus.Cancelled)
         {
