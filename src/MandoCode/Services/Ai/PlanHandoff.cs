@@ -92,6 +92,8 @@ public class PlanHandoff
     /// No-ops outside plan execution so ordinary chat-turn writes don't pollute the
     /// next plan's manifest.
     /// </summary>
+    public event Action? FileOperationRecorded;
+
     public void RecordFileOperation(string operation, string relativePath)
     {
         lock (_lock)
@@ -99,6 +101,7 @@ public class PlanHandoff
             if (!_isExecuting) return;
             _fileOperations.Add((operation, relativePath));
         }
+        FileOperationRecorded?.Invoke();
     }
 
     // Single-slot holder for a plan the model proposed during the current turn. The plan is NOT
@@ -314,7 +317,7 @@ public class PlanHandoff
 
         foreach (var step in plan.Steps)
         {
-            var marker = step.Status switch
+            var marker = step.VerificationPending ? "[awaiting verification]" : step.Status switch
             {
                 TaskStepStatus.Completed => "[done]",
                 TaskStepStatus.Failed => "[FAILED]",
@@ -343,8 +346,8 @@ public class PlanHandoff
         }
 
         sb.AppendLine();
-        sb.Append("IMPORTANT: All work above is ALREADY DONE — the files exist on disk. " +
-                  "Do NOT recreate, rewrite, or re-verify them with tool calls. Respond to the " +
+        sb.Append("IMPORTANT: Preserve the recorded changes. Only steps marked done are verified complete; " +
+                  "awaiting-verification steps still need a verdict. Do NOT recreate or rewrite work. Respond to the " +
                   "user now with a brief summary of the outcome. If they want changes, they will " +
                   "ask in a follow-up message.");
         return sb.ToString();

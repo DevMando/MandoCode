@@ -77,6 +77,10 @@ public class TaskStep
     /// Error message if the step failed.
     /// </summary>
     public string? ErrorMessage { get; set; }
+
+    public PlanStepEvidence? Evidence { get; set; }
+    public bool VerificationPending { get; set; }
+    public int RepairAttempts { get; set; }
 }
 
 /// <summary>
@@ -100,7 +104,10 @@ public enum TaskPlanStatus
     Cancelled,
 
     /// <summary>Plan execution failed.</summary>
-    Failed
+    Failed,
+
+    /// <summary>Recovery needs user attention; outstanding work remains resumable.</summary>
+    Paused
 }
 
 /// <summary>

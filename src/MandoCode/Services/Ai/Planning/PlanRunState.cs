@@ -86,6 +86,10 @@ public sealed record PlanStepState
     [JsonPropertyName("error")]
     public string? Error { get; init; }
 
+    public PlanStepEvidence? Evidence { get; init; }
+    public bool VerificationPending { get; init; }
+    public int RepairAttempts { get; init; }
+
     public static PlanStepState From(TaskStep step) => new()
     {
         Number = step.StepNumber,
@@ -94,6 +98,9 @@ public sealed record PlanStepState
         Status = step.Status,
         Result = step.Result,
         Error = step.ErrorMessage,
+        Evidence = step.Evidence,
+        VerificationPending = step.VerificationPending,
+        RepairAttempts = step.RepairAttempts,
     };
 }
 

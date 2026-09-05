@@ -2388,6 +2388,10 @@
         {
             AnsiConsole.MarkupLine("[yellow]Plan was cancelled.[/]");
         }
+        else if (plan.Status == TaskPlanStatus.Paused)
+        {
+            AnsiConsole.MarkupLine("[yellow]Plan paused; outstanding work remains saved.[/]");
+        }
         else
         {
             AnsiConsole.MarkupLine("[red]Plan completed with errors.[/]");
@@ -2591,6 +2595,36 @@
     {
         switch (progressEvent.ProgressType)
         {
+            case TaskProgressType.StepActivity:
+                Spinner.UpdateActivity(progressEvent.Message ?? "Checking step...");
+                break;
+
+            case TaskProgressType.StepVerificationUnavailable:
+                Spinner.Stop();
+                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Verification unavailable.")}[/]");
+                if (ct.IsCancellationRequested) break;
+                string verificationChoice;
+                using (KeyCoordinator.Suppress())
+                {
+                    verificationChoice = AnsiConsole.Prompt(new SelectionPrompt<string>()
+                        .Title("Verification unavailable. Implementation will not run again.")
+                        .AddChoices("Retry verification", "Pause plan"));
+                }
+                if (verificationChoice == "Retry verification")
+                    plan.Steps.First(s => s.StepNumber == progressEvent.CurrentStep).Status = TaskStepStatus.Pending;
+                else plan.Status = TaskPlanStatus.Paused;
+                break;
+
+            case TaskProgressType.PlanPaused:
+                Spinner.Stop();
+                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Plan paused.")}[/]");
+                AnsiConsole.MarkupLine("[dim]Outstanding work is saved. Use /plan-resume to continue.[/]");
+                break;
+
+            case TaskProgressType.PersistenceWarning:
+                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Plan progress could not be saved.")}[/]");
+                break;
+
             case TaskProgressType.StepStarted:
                 Spinner.Stop();
                 _recentReadCount = 0;

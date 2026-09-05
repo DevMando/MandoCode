@@ -1,3 +1,5 @@
+using MandoCode.Models;
+
 namespace MandoCode.Services;
 
 /// <summary>
@@ -25,6 +27,10 @@ public interface IPlanStepExecutor
         string stepInstruction,
         List<string> previousResults,
         CancellationToken cancellationToken = default);
+
+    Task<string> ExecuteAttemptAsync(TaskStep step, List<string> previousResults,
+        Func<string, Task> activity, CancellationToken cancellationToken = default)
+        => ExecuteStepAsync(step.Instruction, previousResults, cancellationToken);
 
     /// <summary>
     /// Waits for tool calls still in flight from the step just finished to settle, so the next
@@ -58,4 +64,8 @@ public sealed class AiServicePlanStepExecutor(AIService aiService) : IPlanStepEx
 
     public Task WaitForQuiescenceAsync(TimeSpan timeout)
         => _aiService.CompletionTracker.WaitForAllCompletionsAsync(timeout);
+
+    public Task<string> ExecuteAttemptAsync(TaskStep step, List<string> previousResults,
+        Func<string, Task> activity, CancellationToken cancellationToken = default)
+        => _aiService.ExecutePlanAttemptAsync(step, previousResults, activity, cancellationToken);
 }

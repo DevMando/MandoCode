@@ -131,5 +131,10 @@ public enum TaskProgressType
     PlanCompleted,
 
     /// <summary>The plan has been cancelled by the user.</summary>
-    PlanCancelled
+    PlanCancelled,
+
+    PersistenceWarning,
+    StepActivity,
+    StepVerificationUnavailable,
+    PlanPaused
 }

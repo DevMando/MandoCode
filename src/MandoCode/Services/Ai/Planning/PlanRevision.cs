@@ -91,5 +91,8 @@ public static class PlanRevision
         target.Status = source.Status;
         target.Result = source.Result;
         target.ErrorMessage = source.ErrorMessage;
+        target.Evidence = source.Evidence;
+        target.VerificationPending = source.VerificationPending;
+        target.RepairAttempts = source.RepairAttempts;
     }
 }

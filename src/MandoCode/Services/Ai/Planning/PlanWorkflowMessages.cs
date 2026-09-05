@@ -50,6 +50,8 @@ internal enum PlanStepOutcomeKind
     /// <summary>Step threw. Whether this skips the step or ends the plan is the consumer's call.</summary>
     Failed,
 
+    VerificationUnavailable,
+
     /// <summary>Cancellation token tripped, or the user cancelled the plan from a diff prompt.</summary>
     Cancelled,
 }

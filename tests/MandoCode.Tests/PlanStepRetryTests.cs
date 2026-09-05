@@ -81,9 +81,10 @@ public class PlanStepRetryTests
         var attempts = exec.Executed.Count(i => i == "doomed");
         Assert.Equal(PlanRunContext.MaxRetriesPerStep + 1, attempts);   // first try plus the retries
 
-        // Once out of retries it is treated as skipped, and the plan moves on.
-        Assert.Equal(TaskStepStatus.Skipped, plan.Steps[0].Status);
-        Assert.Contains("after", exec.Executed);
+        // Exhaustion pauses at the unresolved step instead of silently skipping required work.
+        Assert.Equal(TaskStepStatus.Failed, plan.Steps[0].Status);
+        Assert.Equal(TaskPlanStatus.Paused, plan.Status);
+        Assert.DoesNotContain("after", exec.Executed);
     }
 
     [Fact]
