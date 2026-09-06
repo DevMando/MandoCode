@@ -318,7 +318,7 @@ public class FileSystemPlugin
                 var nSecond = normalizedContent.IndexOf(normalizedOld, nIndex + normalizedOld.Length, StringComparison.Ordinal);
                 if (nSecond >= 0)
                 {
-                    return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+                    return $"Error in {relativePath}: " + MandoCode.Services.AmbiguousEditGuidance.Describe(content, old_text);
                 }
 
                 // Apply replacement in the normalized domain, then re-apply the file's original
@@ -336,7 +336,7 @@ public class FileSystemPlugin
                 var secondIndex = content.IndexOf(old_text, index + old_text.Length, StringComparison.Ordinal);
                 if (secondIndex >= 0)
                 {
-                    return $"Error: Found multiple occurrences of the specified text in {relativePath}. Provide a larger, more unique text fragment to match.";
+                    return $"Error in {relativePath}: " + MandoCode.Services.AmbiguousEditGuidance.Describe(content, old_text);
                 }
                 finalContent = content[..index] + new_text + content[(index + old_text.Length)..];
             }

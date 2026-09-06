@@ -8,6 +8,84 @@ namespace MandoCode.Tests;
 
 public class PlanVerificationRecoveryTests
 {
+    [Theory]
+    [InlineData("{\"success\":true,\"reason\":\"Checks passed\"}", PlanVerificationStatus.Passed)]
+    [InlineData("```json\n{\"success\":false,\"reason\":\"Collision test failed\"}\n```", PlanVerificationStatus.Failed)]
+    public async Task TextVerdictsAreAcceptedWithoutRequiringToolEnvelope(string payload, PlanVerificationStatus expected)
+    {
+        using var client = new Client((_, _, _) => Task.FromResult(Text(payload)));
+        var result = await PlanStepVerifier.VerifyAsync(client, new("step", "claim", "evidence"), TimeSpan.FromSeconds(1), 4096);
+        Assert.Equal(expected, result.Status);
+        Assert.Equal(1, client.Calls);
+    }
+
+    [Theory]
+    [InlineData("{\"success\":true,\"success\":false,\"reason\":\"ambiguous\"}", "Duplicate")]
+    [InlineData("{\"success\":\"true\",\"reason\":\"wrong type\"}", "field types")]
+    [InlineData("{\"success\":true}", "missing")]
+    [InlineData("Looks good!", "Invalid JSON")]
+    [InlineData("{\"success\":true,\"reason\":\"yes\"}{\"success\":false,\"reason\":\"no\"}", "Invalid JSON")]
+    public async Task InvalidVerdictsNeverPassAndExposeSpecificDiagnostics(string payload, string diagnosis)
+    {
+        using var client = new Client((_, _, _) => Task.FromResult(Text(payload)));
+        var result = await PlanStepVerifier.VerifyAsync(client, new("step", "claim", "evidence"), TimeSpan.FromSeconds(1), 4096);
+        Assert.Equal(PlanVerificationStatus.Unavailable, result.Status);
+        Assert.Contains(diagnosis, result.Reason);
+        Assert.Contains("Attempt 3 (plain JSON)", result.Reason);
+        Assert.Equal(3, client.Calls);
+    }
+
+    [Fact]
+    public async Task TruncatedVerdictCannotPassAndNextStrategyGetsLargerBudget()
+    {
+        using var client = new Client((n, options, _) =>
+        {
+            if (n == 1)
+            {
+                Assert.Equal(2048, options!.MaxOutputTokens);
+                var response = Text("{\"success\":true,\"reason\":\"partial\"}");
+                response.FinishReason = ChatFinishReason.Length;
+                return Task.FromResult(response);
+            }
+            Assert.Equal(4096, options!.MaxOutputTokens);
+            Assert.Null(options.Tools);
+            Assert.NotNull(options.ResponseFormat);
+            return Task.FromResult(Text("{\"success\":false,\"reason\":\"Test failed\"}"));
+        });
+        var result = await PlanStepVerifier.VerifyAsync(client, new("step", "claim", "evidence"), TimeSpan.FromSeconds(1), 4096);
+        Assert.Equal(PlanVerificationStatus.Failed, result.Status);
+        Assert.Equal(2, client.Calls);
+    }
+
+    [Fact]
+    public async Task UnsupportedToolAndSchemaModesUsePlainJsonOnce()
+    {
+        using var client = new Client((n, options, _) =>
+        {
+            if (n < 3) throw new InvalidOperationException("Unsupported response mode");
+            Assert.Null(options!.Tools);
+            Assert.Null(options.ResponseFormat);
+            return Task.FromResult(Text("{\"success\":true,\"reason\":\"Checks passed\"}"));
+        });
+        var result = await PlanStepVerifier.VerifyAsync(client, new("step", "claim", "evidence"), TimeSpan.FromSeconds(1), 4096);
+        Assert.Equal(PlanVerificationStatus.Passed, result.Status);
+        Assert.Equal(3, client.Calls);
+    }
+
+    [Fact]
+    public async Task ConflictingToolAndTextVerdictsCannotPass()
+    {
+        using var client = new Client((_, _, _) =>
+        {
+            var response = Verdict(true, "Passed");
+            response.Messages[0].Contents.Add(new TextContent("{\"success\":false,\"reason\":\"Failed\"}"));
+            return Task.FromResult(response);
+        });
+        var result = await PlanStepVerifier.VerifyAsync(client, new("step", "claim", "evidence"), TimeSpan.FromSeconds(1), 4096);
+        Assert.Equal(PlanVerificationStatus.Unavailable, result.Status);
+        Assert.Contains("conflict", result.Reason);
+    }
+
     private static TaskPlan Plan() => new() { OriginalRequest = "Build movement", Steps =
         [new TaskStep { StepNumber = 1, Instruction = "Implement intersection turns", Description = "Movement" }] };
 
@@ -62,7 +140,7 @@ public class PlanVerificationRecoveryTests
     {
         using var client = new Client((n, options, _) =>
         {
-            if (n < 3) return Task.FromResult(Text("No tool call"));
+            if (n < 2) return Task.FromResult(Text("No tool call"));
             Assert.Null(options!.Tools);
             Assert.NotNull(options.ResponseFormat);
             return Task.FromResult(Text("{\"success\":true,\"reason\":\"41 checks passed\"}"));
@@ -71,7 +149,7 @@ public class PlanVerificationRecoveryTests
         var plan = Plan();
         await foreach (var _ in new WorkflowPlanRunner(executor).ExecutePlanAsync(plan)) { }
         Assert.Single(executor.Executions);
-        Assert.Equal(3, client.Calls);
+        Assert.Equal(2, client.Calls);
         Assert.Equal(TaskPlanStatus.Completed, plan.Status);
     }
 

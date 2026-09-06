@@ -214,6 +214,7 @@ public class PlanHandoff
                 Status = TaskPlanStatus.Pending
             };
 
+            PlanFinalQuality.Ensure(plan);
             ExecutionStarted?.Invoke();
             string summary;
             try

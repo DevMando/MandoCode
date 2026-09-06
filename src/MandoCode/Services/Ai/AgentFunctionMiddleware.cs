@@ -113,6 +113,12 @@ public class AgentFunctionMiddleware
         Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
         CancellationToken cancellationToken)
     {
+        if (_currentScope.Value is { EvidenceOnly: true } evidenceScope &&
+            (!evidenceScope.TryConsumeEvidenceCall() ||
+             !PlanEvidenceFollowup.Allows(context.Function.Name, context.Arguments, evidenceScope.EvidenceCheckCommands)))
+            return "This automatic follow-up only permits file inspection and previously observed acceptance commands. " +
+                "Do not change files, tests, or scope. Report the blocker so the user can decide.";
+
         if (context.Function.Name == "propose_plan" && _planHandoff != null)
         {
             return HandleProposePlan(context);
@@ -787,7 +793,7 @@ public class AgentFunctionMiddleware
         {
             var second = fileContent.IndexOf(oldText, index + oldText.Length, StringComparison.Ordinal);
             if (second >= 0)
-                return (null, "Found multiple occurrences of old_text. Provide a larger, more unique fragment.");
+                return (null, AmbiguousEditGuidance.Describe(fileContent, oldText));
 
             return (fileContent[..index] + newText + fileContent[(index + oldText.Length)..], null);
         }
@@ -800,7 +806,7 @@ public class AgentFunctionMiddleware
 
         var nSecond = nContent.IndexOf(nOld, nIndex + nOld.Length, StringComparison.Ordinal);
         if (nSecond >= 0)
-            return (null, "Found multiple occurrences of old_text. Provide a larger, more unique fragment.");
+            return (null, AmbiguousEditGuidance.Describe(fileContent, oldText));
 
         var nNew = newText.Replace("\r\n", "\n").Replace("\r", "\n");
         var normalizedUpdated = nContent[..nIndex] + nNew + nContent[(nIndex + nOld.Length)..];

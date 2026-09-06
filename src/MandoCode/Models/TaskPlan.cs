@@ -81,6 +81,10 @@ public class TaskStep
     public PlanStepEvidence? Evidence { get; set; }
     public bool VerificationPending { get; set; }
     public int RepairAttempts { get; set; }
+    public List<string> AcceptanceCriteria { get; set; } = [];
+    public bool EvidenceFollowupUsed { get; set; }
+    // Null supports checkpoints created before explicit phase metadata existed.
+    public bool? IsFinalQualityPhase { get; set; }
 }
 
 /// <summary>
