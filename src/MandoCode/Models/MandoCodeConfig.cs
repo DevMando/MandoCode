@@ -304,10 +304,6 @@ public class MandoCodeConfig
     [JsonPropertyName("enableTaskPlanning")]
     public bool EnableTaskPlanning { get; set; } = true;
 
-    /// <summary>Opt-in independent model verification. Default uses executor checks and recovery.</summary>
-    [JsonPropertyName("strictPlanVerification")]
-    public bool StrictPlanVerification { get; set; } = false;
-
     /// <summary>
     /// Enable fallback parsing for function calls output as JSON text.
     /// Some local models output function calls as text instead of proper tool calls.

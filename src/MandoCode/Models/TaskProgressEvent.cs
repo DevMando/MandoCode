@@ -135,6 +135,5 @@ public enum TaskProgressType
 
     PersistenceWarning,
     StepActivity,
-    StepVerificationUnavailable,
     PlanPaused
 }

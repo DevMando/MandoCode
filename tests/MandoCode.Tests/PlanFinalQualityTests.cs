@@ -89,12 +89,12 @@ public class PlanFinalQualityTests
     }
 
     [Fact]
-    public async Task QualityFailureUsesTargetedRecoveryWithoutIndependentVerifier()
+    public async Task QualityFailureUsesTargetedRecovery()
     {
         var step = PlanFinalQuality.Ensure(Implementation()).Steps[^1];
         await Assert.ThrowsAsync<PlanStepReportedFailureException>(() => PlanStepRecovery.RunAsync(step,
             (instruction, _) => Task.FromResult(new PlanStepEvidence(instruction, "Restart test failed", "exit 1", ReportedFailure: "Restart loses pellets")),
-            (_, _) => throw new Exception("No separate verifier"), _ => Task.CompletedTask, strictVerification: false));
+            _ => Task.CompletedTask));
         Assert.Equal("Restart loses pellets", step.ErrorMessage);
         Assert.NotNull(step.Evidence);
         Assert.False(step.VerificationPending);

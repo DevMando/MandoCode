@@ -27,10 +27,6 @@ namespace MandoCode.Services;
 /// </summary>
 public class InvocationScope : IDisposable
 {
-    public bool EvidenceOnly { get; set; }
-    public HashSet<string> EvidenceCheckCommands { get; } = new(StringComparer.Ordinal);
-    private int _evidenceCalls;
-    public bool TryConsumeEvidenceCall() => Interlocked.Increment(ref _evidenceCalls) <= 8;
     // Both sets use OrdinalIgnoreCase so Windows path variants (Src/foo.cs vs src/foo.cs)
     // are treated as the same file — matches OS semantics and keeps the two maps aligned.
     private readonly HashSet<string> _readKeys = new(StringComparer.OrdinalIgnoreCase);

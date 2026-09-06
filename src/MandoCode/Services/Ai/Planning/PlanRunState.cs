@@ -90,7 +90,6 @@ public sealed record PlanStepState
     public bool VerificationPending { get; init; }
     public int RepairAttempts { get; init; }
     public List<string> AcceptanceCriteria { get; init; } = [];
-    public bool EvidenceFollowupUsed { get; init; }
     public bool? IsFinalQualityPhase { get; init; }
 
     public static PlanStepState From(TaskStep step) => new()
@@ -105,7 +104,6 @@ public sealed record PlanStepState
         VerificationPending = step.VerificationPending,
         RepairAttempts = step.RepairAttempts,
         AcceptanceCriteria = [.. step.AcceptanceCriteria],
-        EvidenceFollowupUsed = step.EvidenceFollowupUsed,
         IsFinalQualityPhase = step.IsFinalQualityPhase,
     };
 }

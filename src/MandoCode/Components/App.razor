@@ -2525,7 +2525,6 @@
         var trimmed = revised.Trim();
         step.Instruction = trimmed;
         step.AcceptanceCriteria = [trimmed];
-        step.EvidenceFollowupUsed = false;
         // A stale label makes the review table misleading, so always derive it from the edited text.
         step.Description = trimmed.Length > 60 ? trimmed[..57] + "..." : trimmed;
 
@@ -2600,22 +2599,6 @@
         {
             case TaskProgressType.StepActivity:
                 Spinner.UpdateActivity(progressEvent.Message ?? "Checking step...");
-                break;
-
-            case TaskProgressType.StepVerificationUnavailable:
-                Spinner.Stop();
-                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Verification unavailable.")}[/]");
-                if (ct.IsCancellationRequested) break;
-                string verificationChoice;
-                using (KeyCoordinator.Suppress())
-                {
-                    verificationChoice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                        .Title("Verification unavailable. Implementation will not run again.")
-                        .AddChoices("Retry verification", "Pause plan"));
-                }
-                if (verificationChoice == "Retry verification")
-                    plan.Steps.First(s => s.StepNumber == progressEvent.CurrentStep).Status = TaskStepStatus.Pending;
-                else plan.Status = TaskPlanStatus.Paused;
                 break;
 
             case TaskProgressType.PlanPaused:

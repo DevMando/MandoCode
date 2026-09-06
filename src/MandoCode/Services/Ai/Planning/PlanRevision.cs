@@ -95,7 +95,6 @@ public static class PlanRevision
         target.VerificationPending = source.VerificationPending;
         target.RepairAttempts = source.RepairAttempts;
         target.AcceptanceCriteria = [.. source.AcceptanceCriteria];
-        target.EvidenceFollowupUsed = source.EvidenceFollowupUsed;
         target.IsFinalQualityPhase = source.IsFinalQualityPhase;
     }
 }
