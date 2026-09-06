@@ -28,6 +28,16 @@ public class AIService
     // straight to _agent.RunAsync with no conversion — see ExecuteAgentModelCallAsync.
     private readonly List<ChatMessage> _chatHistory;
     private string _systemPrompt;
+    private string? _visionIdentity;
+    private ModelVisionSupport _visionSupport;
+    private long _modelInspectionVersion;
+    private string ModelIdentity => OllamaSetupHelper.BuildUrl(_config.OllamaEndpoint, "api/show") + "\n" + _config.GetEffectiveModelName();
+
+    public ModelVisionSupport VisionSupport => _visionIdentity == ModelIdentity
+        ? _visionSupport : ModelVisionSupport.Unknown;
+
+    // A host must also implement actual image delivery before exposing screenshot tools.
+    public bool SupportsImageInput => VisionSupport == ModelVisionSupport.Supported;
 
     // MAF agent — the live chat path (feat/agent-framework-migration).
     private AIAgent? _agent;
@@ -185,6 +195,7 @@ public class AIService
     {
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
         _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch, _config.AgentName) + "\n\n" + ShellEnvironment.SystemPromptRules;
+        _systemPrompt += "\n\n" + VisionSupport.AgentInstruction();
         if (!string.IsNullOrEmpty(skillIndex))
         {
             _systemPrompt += "\n\n" + skillIndex;
@@ -208,6 +219,7 @@ public class AIService
     public async Task ReinitializeAsync(MandoCodeConfig config)
     {
         _config = config;
+        if (_visionIdentity != ModelIdentity) await ValidateModelAsync();
         RebuildSystemPrompt();
         BuildAgent();
         await AttachMcpPluginsAsync();
@@ -224,6 +236,7 @@ public class AIService
     public async Task RefreshSettingsAsync(MandoCodeConfig config)
     {
         _config = config;
+        if (_visionIdentity != ModelIdentity) await ValidateModelAsync();
         RebuildSystemPrompt();
 
         // The history-preserving path still has the OLD system prompt as message 0 —
@@ -665,9 +678,17 @@ public class AIService
     /// </summary>
     public async Task<(bool IsValid, string? ErrorMessage)> ValidateModelAsync()
     {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        return await ValidateModelAsync(client);
+    }
+
+    internal async Task<(bool IsValid, string? ErrorMessage)> ValidateModelAsync(HttpClient client)
+    {
+        var identity = ModelIdentity;
+        var version = Interlocked.Increment(ref _modelInspectionVersion);
+        var support = ModelVisionSupport.Unknown;
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             var modelName = _config.GetEffectiveModelName();
 
             // Check if model exists and get its info
@@ -681,12 +702,26 @@ public class AIService
                 return (false, $"Model '{modelName}' not found. Run: ollama pull {modelName}");
             }
 
-            // Model exists and is available — Ollama handles tool support at the API level
+            // Successful validation must stay successful when older servers omit metadata.
+            support = ModelVisionCapabilities.Parse(await response.Content.ReadAsStringAsync());
             return (true, null);
         }
         catch (Exception ex)
         {
             return (false, $"Could not validate model: {ex.Message}");
+        }
+        finally
+        {
+            // A late response from a previous model must never overwrite the current state.
+            if (identity == ModelIdentity && version == Interlocked.Read(ref _modelInspectionVersion))
+            {
+                _visionIdentity = identity;
+                _visionSupport = support;
+                RebuildSystemPrompt();
+                if (_chatHistory.Count > 0 && _chatHistory[0].Role == ChatRole.System)
+                    _chatHistory[0] = new ChatMessage(ChatRole.System, _systemPrompt);
+                BuildAgent();
+            }
         }
     }
 

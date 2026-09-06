@@ -72,6 +72,7 @@ public static class PlanToolEvidence
                 needsExecutionCheck |= extension is not (".md" or ".txt" or ".rst");
             }
             else if (call.Name is "execute_command" ||
+                PreviewToolPolicy.IsFreshObservation(call.Name, result.Result?.ToString() ?? "") ||
                 call.Name.Contains("test", StringComparison.OrdinalIgnoreCase) ||
                 call.Name.Contains("browser", StringComparison.OrdinalIgnoreCase))
             {
