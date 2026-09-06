@@ -14,12 +14,12 @@ public static class PlanRevision
         var replacement = TaskPlannerService.FromProposals(revision.Steps);
         for (var i = 0; i < replacement.Count; i++) replacement[i].StepNumber = failedIndex + i + 1;
 
-        return new TaskPlan
+        return PlanFinalQuality.ForRevision(current, new TaskPlan
         {
             OriginalRequest = current.OriginalRequest,
             Status = TaskPlanStatus.Pending,
             Steps = [.. prefix, .. replacement]
-        };
+        });
     }
 
     /// <summary>Builds a full review candidate while preserving every step through the edited one.</summary>
@@ -32,12 +32,12 @@ public static class PlanRevision
         var replacement = TaskPlannerService.FromProposals(revision.Steps);
         for (var i = 0; i < replacement.Count; i++) replacement[i].StepNumber = editedIndex + i + 2;
 
-        return new TaskPlan
+        return PlanFinalQuality.ForRevision(current, new TaskPlan
         {
             OriginalRequest = current.OriginalRequest,
             Status = TaskPlanStatus.Pending,
             Steps = [.. prefix, .. replacement]
-        };
+        });
     }
 
     /// <summary>
@@ -94,5 +94,8 @@ public static class PlanRevision
         target.Evidence = source.Evidence;
         target.VerificationPending = source.VerificationPending;
         target.RepairAttempts = source.RepairAttempts;
+        target.AcceptanceCriteria = [.. source.AcceptanceCriteria];
+        target.EvidenceFollowupUsed = source.EvidenceFollowupUsed;
+        target.IsFinalQualityPhase = source.IsFinalQualityPhase;
     }
 }

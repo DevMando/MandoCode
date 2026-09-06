@@ -2434,6 +2434,7 @@
         foreach (var step in plan.Steps)
         {
             var instruction = step.Instruction ?? "";
+            if (step.AcceptanceCriteria.Count > 0) instruction += "\n\n" + PlanAcceptance.Describe(step);
             // Wrapped rather than truncated: a clipped instruction is the same problem as showing
             // none — you cannot approve what you cannot read.
             table.AddRow(
@@ -2523,6 +2524,8 @@
 
         var trimmed = revised.Trim();
         step.Instruction = trimmed;
+        step.AcceptanceCriteria = [trimmed];
+        step.EvidenceFollowupUsed = false;
         // A stale label makes the review table misleading, so always derive it from the edited text.
         step.Description = trimmed.Length > 60 ? trimmed[..57] + "..." : trimmed;
 

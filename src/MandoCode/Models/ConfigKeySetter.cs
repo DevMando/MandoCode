@@ -144,7 +144,12 @@ public static class ConfigKeySetter
 
             case "planner":
             case "plannerengine":
-                return Fail("Error: The workflow planner is always enabled and cannot be changed.");
+                return Fail("Error: The workflow planner is always enabled. Use strictPlanVerification true or false to select step verification.");
+            case "strictplanverification":
+                if (!bool.TryParse(value, out var strict))
+                    return Fail("Error: strictPlanVerification must be true or false.");
+                config.StrictPlanVerification = strict;
+                return new(true, strict ? "Strict per-step verification enabled." : "Straightforward execution enabled; executor checks and recovery remain active.");
 
             case "streaming":
             case "responsestreaming":
@@ -253,6 +258,7 @@ public static class ConfigKeySetter
         maxContinuations     {config.MaxAutoContinuations}  ({MandoCodeConfig.MinMaxAutoContinuations}-{MandoCodeConfig.MaxMaxAutoContinuations})
         renderTimeout        {config.MarkdownRenderTimeoutSeconds}s  ({MandoCodeConfig.MinMarkdownRenderTimeoutSeconds}-{MandoCodeConfig.MaxMarkdownRenderTimeoutSeconds})
         taskPlanning         {config.EnableTaskPlanning}
+        strictPlanVerification {config.StrictPlanVerification}
         diffApprovals        {config.EnableDiffApprovals}
         webSearch            {config.EnableWebSearch}
         tavilyKey            {(string.IsNullOrWhiteSpace(config.TavilyApiKey) ? "not set" : MandoCodeConfig.MaskApiKey(config.TavilyApiKey))}  (Tavily API key for reliable web search — free at https://app.tavily.com; "clear" to remove)

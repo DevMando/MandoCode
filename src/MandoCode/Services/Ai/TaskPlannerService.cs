@@ -158,6 +158,7 @@ public class TaskPlannerService : IPlanRunner
                 StepNumber = i + 1,
                 Description = desc.Length > 60 ? desc[..57] + "..." : desc,
                 Instruction = instr,
+                AcceptanceCriteria = PlanAcceptance.Normalize(p.acceptanceCriteria, instr),
                 Status = TaskStepStatus.Pending
             };
         }).ToList();
