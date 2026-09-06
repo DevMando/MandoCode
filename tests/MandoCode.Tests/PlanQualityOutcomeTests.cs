@@ -8,21 +8,6 @@ namespace MandoCode.Tests;
 
 public class PlanQualityOutcomeTests
 {
-    [Fact]
-    public async Task StrictReadOnlyFollowupPreservesCompletedQualityOutcome()
-    {
-        var calls = 0;
-        var result = await PlanStepRecovery.RunAsync(Quality(),
-            (instruction, _) => Task.FromResult(new PlanStepEvidence(instruction, "Passed tests", "test exit 0", ExplicitSuccess: true)),
-            (_, _) => Task.FromResult(++calls == 1
-                ? new PlanVerificationResult(PlanVerificationStatus.Failed, "Read HUD code", true)
-                : new PlanVerificationResult(PlanVerificationStatus.Passed, "Confirmed")),
-            _ => Task.CompletedTask, gatherEvidence: (instruction, _) =>
-                Task.FromResult(new PlanStepEvidence(instruction, "HUD inspected", "read HUD")));
-        Assert.Equal("HUD inspected", result);
-        Assert.Equal(2, calls);
-    }
-
     private static TaskStep Quality() => PlanFinalQuality.Ensure(new TaskPlan { Steps =
         [new TaskStep { StepNumber = 1, Instruction = "Implement game" }] }).Steps[^1];
 
@@ -31,7 +16,7 @@ public class PlanQualityOutcomeTests
     {
         async Task<string> Run(TaskStep step) => await PlanStepRecovery.RunAsync(step,
             (instruction, _) => Task.FromResult(new PlanStepEvidence(instruction, "A defect exists. I'll investigate.", "read file")),
-            (_, _) => throw new Exception("No verifier"), _ => Task.CompletedTask, strictVerification: false);
+            _ => Task.CompletedTask);
         var quality = Quality();
         await Assert.ThrowsAsync<PlanStepReportedFailureException>(() => Run(quality));
         Assert.NotNull(quality.Evidence);
@@ -45,7 +30,7 @@ public class PlanQualityOutcomeTests
     {
         var result = await PlanStepRecovery.RunAsync(Quality(),
             (instruction, _) => Task.FromResult(new PlanStepEvidence(instruction, "28 checks passed", "test exit 0", ExplicitSuccess: true)),
-            (_, _) => throw new Exception("No verifier"), _ => Task.CompletedTask, strictVerification: false);
+            _ => Task.CompletedTask);
         Assert.Equal("28 checks passed", result);
     }
 
@@ -69,7 +54,7 @@ public class PlanQualityOutcomeTests
         await Assert.ThrowsAsync<PlanStepReportedFailureException>(() => PlanStepRecovery.RunAsync(Quality(),
             (instruction, _) => Task.FromResult(new PlanStepEvidence(instruction, "Everything passed", "", ExplicitSuccess: true,
                 TestExitCodes: new Dictionary<string, int> { ["node smoke-test.js"] = 1 })),
-            (_, _) => throw new Exception("No verifier"), _ => Task.CompletedTask, strictVerification: false));
+            _ => Task.CompletedTask));
     }
 
     [Theory]

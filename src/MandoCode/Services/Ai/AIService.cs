@@ -565,8 +565,7 @@ public class AIService
         }
 
         if (TryMaterializePlan(arguments, out var generated))
-            return !_config.StrictPlanVerification ? generated : await PlanQualityReview.ReviewAsync(client, generated, request, repository, revisionContext,
-                _config.MaxTokens, cancellationToken);
+            return generated;
 
         // Provider ignored/rejected forced tool choice. Ask for the same typed payload without
         // tools, constrained by MEAI's exported JSON schema. This is still proposal-only.
@@ -602,8 +601,7 @@ public class AIService
         }
 
         if (TryMaterializePlan(arguments, out generated))
-            return !_config.StrictPlanVerification ? generated : await PlanQualityReview.ReviewAsync(client, generated, request, repository, revisionContext,
-                _config.MaxTokens, cancellationToken);
+            return generated;
 
         throw new InvalidOperationException(
             "The model could not produce a valid plan. No work was started. " +
@@ -648,26 +646,6 @@ public class AIService
             ? null
             : new GeneratedPlan(goal, steps);
         return generated != null;
-    }
-
-    /// <summary>
-    /// Verifies every completed step against observed tool results, including explicit success claims. This
-    /// is a separate proposal-only call with exactly one required tool: it cannot touch the project
-    /// or continue the task, and it must return a structured success decision. Forced planning has
-    /// already established that the configured Ollama tool path honors RequireAny.
-    /// </summary>
-    private async Task<PlanVerificationResult> VerifyPlanStepAsync(
-        PlanStepEvidence evidence, Func<string, Task> activity, CancellationToken cancellationToken)
-    {
-        using var httpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
-        {
-            BaseAddress = new Uri(_config.OllamaEndpoint),
-            Timeout = System.Threading.Timeout.InfiniteTimeSpan
-        };
-        using IChatClient client = new OllamaApiClient(httpClient, _config.GetEffectiveModelName());
-        return await PlanStepVerifier.VerifyAsync(client, evidence,
-            TimeSpan.FromSeconds(Math.Max(1, _config.ModelResponseTimeoutSeconds)),
-            Math.Min(_config.MaxTokens, 4096), activity, cancellationToken);
     }
 
     /// <summary>
@@ -1509,29 +1487,11 @@ public class AIService
         => PlanStepRecovery.RunAsync(step,
             (instruction, ct) => ExecutePlanStepWorkAsync(instruction, previousResults, ct, step.Evidence?.FileVersions?.Keys,
                 qualityPhase: PlanFinalQuality.IsQualityStep(step)),
-            (evidence, ct) => VerifyPlanStepAsync(evidence, activity, ct), activity, cancellationToken,
-            (instruction, ct) => GatherPlanEvidenceAsync(instruction, previousResults, step.Evidence, ct),
-            strictVerification: _config.StrictPlanVerification);
-
-    private async Task<PlanStepEvidence> GatherPlanEvidenceAsync(string instruction, List<string> previousResults,
-        PlanStepEvidence? previous, CancellationToken ct)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Min(60, Math.Max(1, _config.ModelResponseTimeoutSeconds))));
-        try
-        {
-            return await ExecutePlanStepWorkAsync(instruction, previousResults, deadline.Token,
-                previous?.FileVersions?.Keys, true, previous?.CheckCommands);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new PlanStepReportedFailureException("The bounded evidence follow-up timed out. No further automatic attempts will run.");
-        }
-    }
+            activity, cancellationToken);
 
     private async Task<PlanStepEvidence> ExecutePlanStepWorkAsync(string stepInstruction, List<string> previousResults,
         CancellationToken cancellationToken, IEnumerable<string>? previousEvidencePaths,
-        bool evidenceOnly = false, string[]? allowedCheckCommands = null, bool qualityPhase = false)
+        bool qualityPhase = false)
     {
         var qualityContinuationUsed = false;
         var contextBuilder = new System.Text.StringBuilder(
@@ -1574,8 +1534,6 @@ public class AIService
             // Each continuation gets a fresh scope so the budget and dedup-set reset.
             using (var scope = _agentFunctionMiddleware!.BeginScope())
             {
-                scope.EvidenceOnly = evidenceOnly;
-                if (evidenceOnly) scope.EvidenceCheckCommands.UnionWith(allowedCheckCommands ?? []);
                 try
                 {
                     var baseSpinnerMessage = $"Working on {stepLabel} — press Esc to cancel";
@@ -1637,7 +1595,6 @@ public class AIService
                 }
                 // Provider-side context-window rejection — recoverable via synthetic-summary restart.
                 catch (Exception ex) when (IsContextOverflowError(ex)
-                                            && !evidenceOnly
                                             && _config.EnableAutoContinuation
                                             && continuations < _config.MaxAutoContinuations)
                 {
@@ -1650,7 +1607,6 @@ public class AIService
 
                 // Decide whether to auto-continue (while scope is still live so BudgetExhausted reads correctly).
                 if (!contextOverflowRecovery
-                    && !evidenceOnly
                     && scope.BudgetExhausted
                     && _config.EnableAutoContinuation
                     && continuations < _config.MaxAutoContinuations)
@@ -1717,7 +1673,6 @@ public class AIService
                     PlanToolEvidence.AssessFreshness(evidenceHistory),
                     report.Succeeded == false ? report.FailureReason : null,
                     PlanToolEvidence.SnapshotFileVersions(evidenceHistory, _projectRootAccessor.ProjectRoot, previousEvidencePaths),
-                    CheckCommands: PlanEvidenceFollowup.CheckCommands(evidenceHistory),
                     ExplicitSuccess: report.Succeeded,
                     TestExitCodes: qualityPhase ? PlanQualityOutcome.CaptureTests(evidenceHistory) : null);
             }

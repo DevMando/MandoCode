@@ -113,12 +113,6 @@ public class AgentFunctionMiddleware
         Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
         CancellationToken cancellationToken)
     {
-        if (_currentScope.Value is { EvidenceOnly: true } evidenceScope &&
-            (!evidenceScope.TryConsumeEvidenceCall() ||
-             !PlanEvidenceFollowup.Allows(context.Function.Name, context.Arguments, evidenceScope.EvidenceCheckCommands)))
-            return "This automatic follow-up only permits file inspection and previously observed acceptance commands. " +
-                "Do not change files, tests, or scope. Report the blocker so the user can decide.";
-
         if (context.Function.Name == "propose_plan" && _planHandoff != null)
         {
             return HandleProposePlan(context);

@@ -168,7 +168,6 @@ public static class PlanCheckpointStore
             VerificationPending = s.VerificationPending,
             RepairAttempts = s.RepairAttempts,
             AcceptanceCriteria = [.. s.AcceptanceCriteria],
-            EvidenceFollowupUsed = s.EvidenceFollowupUsed,
             IsFinalQualityPhase = s.IsFinalQualityPhase,
         })],
     };

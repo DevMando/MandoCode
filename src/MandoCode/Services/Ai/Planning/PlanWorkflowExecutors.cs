@@ -77,13 +77,6 @@ internal sealed class PlanRunContext(
 
     public List<string> PreviousResults { get; } = [.. seedResults ?? []];
 
-    /// <summary>How many times each step index has been retried after failing.</summary>
-    /// <remarks>
-    /// Capped so a step that fails identically every time cannot loop forever. The user is asked
-    /// each time, so this is a backstop against a mistake rather than against the user.
-    /// </remarks>
-    public Dictionary<int, int> VerificationRetryCounts { get; } = [];
-
     /// <summary>Maximum retries of a single step within one run.</summary>
     public const int MaxRetriesPerStep = 3;
 
@@ -211,10 +204,6 @@ internal sealed class PlanStepRunnerExecutor(PlanRunContext ctx)
             outcome = new PlanStepOutcome(
                 message.StepIndex, PlanStepOutcomeKind.Cancelled, null, "Plan cancelled by user from diff approval.");
         }
-        catch (PlanVerificationUnavailableException ex)
-        {
-            outcome = new PlanStepOutcome(message.StepIndex, PlanStepOutcomeKind.VerificationUnavailable, null, ex.Message);
-        }
         catch (Exception ex)
         {
             outcome = new PlanStepOutcome(message.StepIndex, PlanStepOutcomeKind.Failed, null, ex.Message);
@@ -261,7 +250,6 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                 await Finish(context, cancellationToken);
                 return;
 
-            case PlanStepOutcomeKind.VerificationUnavailable:
             case PlanStepOutcomeKind.Failed:
                 step.Status = TaskStepStatus.Failed;
                 step.ErrorMessage = message.Error;
@@ -270,10 +258,7 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
 
                 // Defer skip-vs-cancel to the consumer, then reconcile — matching the legacy runner,
                 // where deciding before the yield silently downgraded "Cancel the plan" to "skip".
-                var failureEvent = TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed.");
-                var verificationOnly = message.Kind == PlanStepOutcomeKind.VerificationUnavailable;
-                if (verificationOnly) failureEvent.ProgressType = TaskProgressType.StepVerificationUnavailable;
-                await ctx.RaiseAsync(failureEvent);
+                await ctx.RaiseAsync(TaskProgressEvent.StepFailed(plan, step, message.Error ?? "Step failed."));
 
                 if (plan.Status == TaskPlanStatus.Cancelled)
                 {
@@ -290,15 +275,11 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                     {
                         step.VerificationPending = false;
                         step.RepairAttempts = 0;
-                        verificationOnly = false;
                     }
-                    var attempts = verificationOnly
-                        ? ctx.VerificationRetryCounts.GetValueOrDefault(message.StepIndex)
-                        : step.RepairAttempts;
+                    var attempts = step.RepairAttempts;
                     if (attempts < PlanRunContext.MaxRetriesPerStep)
                     {
-                        if (verificationOnly) ctx.VerificationRetryCounts[message.StepIndex] = attempts + 1;
-                        else step.RepairAttempts = attempts + 1;
+                        step.RepairAttempts = attempts + 1;
                         await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
                         await context.SendMessageAsync(
                             new RunPlanStep(message.StepIndex), PlanExecutorIds.StepRunner, cancellationToken);
@@ -309,15 +290,6 @@ internal sealed class PlanTriageExecutor(PlanRunContext ctx)
                     step.Status = TaskStepStatus.Failed;
                     plan.Status = TaskPlanStatus.Paused;
                     plan.ExecutionSummary = $"Step {step.StepNumber} paused after {attempts} recovery attempts. {step.ErrorMessage}";
-                    await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
-                    await Finish(context, cancellationToken);
-                    return;
-                }
-
-                if (verificationOnly && step.Status != TaskStepStatus.Skipped)
-                {
-                    plan.Status = TaskPlanStatus.Paused;
-                    plan.ExecutionSummary = $"Verification of step {step.StepNumber} is unavailable. Evidence is saved for verification-only retry.";
                     await ctx.SaveStateAsync(context, message.StepIndex, cancellationToken);
                     await Finish(context, cancellationToken);
                     return;

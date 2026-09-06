@@ -2,17 +2,17 @@ using MandoCode.Models;
 
 namespace MandoCode.Services;
 
-/// <summary>Execution is never repeated to recover from a verifier transport or format failure.</summary>
+/// <summary>
+/// The executor owns its acceptance checks; completion is not gated on a second model.
+/// Only mechanical signals derived from tool history can fail a step here.
+/// </summary>
 public static class PlanStepRecovery
 {
     public static async Task<string> RunAsync(
         TaskStep step,
         Func<string, CancellationToken, Task<PlanStepEvidence>> execute,
-        Func<PlanStepEvidence, CancellationToken, Task<PlanVerificationResult>> verify,
         Func<string, Task> activity,
-        CancellationToken ct = default,
-        Func<string, CancellationToken, Task<PlanStepEvidence>>? gatherEvidence = null,
-        bool strictVerification = true)
+        CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var criteria = PlanAcceptance.Normalize(step.AcceptanceCriteria, step.Instruction).ToArray();
@@ -45,71 +45,44 @@ public static class PlanStepRecovery
 
         var evidence = step.Evidence!;
         ct.ThrowIfCancellationRequested();
-        if (PlanFinalQuality.IsQualityStep(step) && PlanQualityOutcome.Failure(evidence) is string qualityFailure)
-        {
-            await activity($"Saving incomplete quality phase {step.StepNumber}");
-            step.VerificationPending = false;
-            step.ErrorMessage = qualityFailure;
-            throw new PlanStepReportedFailureException(qualityFailure);
-        }
-        if (!strictVerification)
-        {
-            // Save before advancing, including when resuming a previously pending verification.
-            // The executor owns acceptance checks; a second model is not a completion gate.
-            await activity($"Saving step {step.StepNumber} result");
-            step.VerificationPending = false;
-            if (!string.IsNullOrWhiteSpace(evidence.ReportedFailure))
-            {
-                step.ErrorMessage = evidence.ReportedFailure;
-                throw new PlanStepReportedFailureException(evidence.ReportedFailure);
-            }
-            step.ErrorMessage = null;
-            return evidence.Response;
-        }
-        // The host persists evidence when this activity is raised, before any verifier call.
-        await activity($"Verifying step {step.StepNumber}");
-        PlanVerificationResult result;
-        var failure = evidence.FreshnessFailure ?? evidence.ReportedFailure;
-        if (failure != null)
-            result = new(PlanVerificationStatus.Failed, failure,
-                evidence.FreshnessFailure != null && evidence.CheckCommands is { Length: > 0 });
-        else if (string.IsNullOrWhiteSpace(evidence.ToolEvidence))
-            result = new(PlanVerificationStatus.Failed, "No tool evidence was captured. Inspect the deliverable and run its acceptance checks.");
-        else
-            result = await verify(evidence, ct);
 
-        if (result.Status == PlanVerificationStatus.Unavailable)
-            throw new PlanVerificationUnavailableException(result.Reason);
-
-        if (result.Status == PlanVerificationStatus.Failed && result.CanGatherEvidence &&
-            !step.EvidenceFollowupUsed && gatherEvidence != null)
-        {
-            step.EvidenceFollowupUsed = true;
-            await activity($"Checking missing evidence for step {step.StepNumber} (one follow-up)");
-            var followup = (await gatherEvidence(step.Instruction + "\n\n" + PlanAcceptance.Describe(step) +
-                "\nCollect only the missing evidence below. Do not change source, tests, dependencies, or scope. " +
-                "Use file reads or a previously observed check command. If changes or a user decision are needed, " +
-                "report the blocker instead of acting.\nMissing evidence:\n" + result.Reason, ct))
-                with { Instruction = step.Instruction, AcceptanceCriteria = criteria };
-            if (PlanFinalQuality.IsQualityStep(step))
-            {
-                // Read-only verification follow-ups do not replace the executor's completed outcome.
-                followup = PlanQualityOutcome.Merge(evidence, followup) with
-                { ExplicitSuccess = followup.ExplicitSuccess ?? evidence.ExplicitSuccess };
-            }
-            step.Evidence = MergeEvidence(evidence, followup);
-            step.VerificationPending = true;
-            return await RunAsync(step, execute, verify, activity, ct, gatherEvidence, strictVerification);
-        }
-
+        // Save before advancing, including when resuming a previously pending attempt.
+        await activity($"Saving step {step.StepNumber} result");
         step.VerificationPending = false;
-        if (result.Status == PlanVerificationStatus.Failed)
+
+        if (Failure(step, evidence) is string failure)
         {
-            step.ErrorMessage = result.Reason;
-            throw new PlanStepReportedFailureException(result.Reason);
+            step.ErrorMessage = failure;
+            throw new PlanStepReportedFailureException(failure);
         }
         step.ErrorMessage = null;
         return evidence.Response;
+    }
+
+    /// <summary>
+    /// The step's mechanical completion gates, in order of how actionable the repair instruction is.
+    /// Every signal comes from the executor's own report or from observed tool history — never from
+    /// a judgement about whether the work was any good.
+    /// </summary>
+    private static string? Failure(TaskStep step, PlanStepEvidence evidence)
+    {
+        // The final phase carries the stricter rule: unresolved nonzero test exit codes.
+        if (PlanFinalQuality.IsQualityStep(step) && PlanQualityOutcome.Failure(evidence) is string quality)
+            return quality;
+
+        if (!string.IsNullOrWhiteSpace(evidence.ReportedFailure))
+            return evidence.FreshnessFailure == null
+                ? evidence.ReportedFailure
+                : evidence.ReportedFailure + "\nAlso rerun the acceptance checks after your final edit: " + evidence.FreshnessFailure;
+
+        // A pass recorded before the last relevant edit does not describe the current files.
+        // Derived from tool ordering, so a confident report cannot talk its way past it.
+        if (evidence.FreshnessFailure != null) return evidence.FreshnessFailure;
+
+        if (string.IsNullOrWhiteSpace(evidence.ToolEvidence))
+            return "No tool evidence was captured. Inspect the deliverable and run its acceptance checks.";
+
+        return null;
     }
 
     /// <summary>Keep established observations when the host confirms their files are unchanged.</summary>
@@ -124,11 +97,8 @@ public static class PlanStepRecovery
 
         // Earlier failed checks remain visible, in order, so later checks can supersede them.
         // Neither an old failure verdict nor its freshness failure is carried into the new attempt.
-        return current with { CheckCommands = (previous.CheckCommands ?? []).Concat(current.CheckCommands ?? []).Distinct().ToArray(),
-            ToolEvidence = PlanRepositoryContext.Clip(
+        return current with { ToolEvidence = PlanRepositoryContext.Clip(
             "Earlier observations; observed files are unchanged (host verified hashes):\n" + previous.ToolEvidence +
             "\n\nLatest repair observations:\n" + current.ToolEvidence, 24000) };
     }
 }
-
-public sealed class PlanVerificationUnavailableException(string message) : Exception(message);
