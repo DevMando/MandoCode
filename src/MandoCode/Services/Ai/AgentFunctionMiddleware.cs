@@ -216,7 +216,7 @@ public class AgentFunctionMiddleware
         var deduplicationWindow = isWriteOperation ? _writeDeduplicationWindow : _readDeduplicationWindow;
         var callKey = CreateCallKey(functionName, context.Arguments, isWriteOperation);
 
-        if (_recentCalls.TryGetValue(callKey, out var cached) &&
+        if (!PreviewToolPolicy.IsLiveTool(functionName) && _recentCalls.TryGetValue(callKey, out var cached) &&
             DateTime.UtcNow - cached.Time < deduplicationWindow)
         {
             return cached.Result ?? "Operation already completed.";
@@ -440,10 +440,10 @@ public class AgentFunctionMiddleware
                 deliveredResult = resultStr;
             }
 
-            _recentCalls[callKey] = (DateTime.UtcNow, deliveredResult);
+            if (!PreviewToolPolicy.IsLiveTool(functionName)) _recentCalls[callKey] = (DateTime.UtcNow, deliveredResult);
             CleanupOldEntries();
 
-            var isError = resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
+            var isError = resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) || PreviewToolPolicy.IsFailure(functionName, resultStr);
             UpdateScopeForCompletedCall(context, functionName, resultStr, isError);
 
             CompleteWith(functionName, resultStr, success: !isError);

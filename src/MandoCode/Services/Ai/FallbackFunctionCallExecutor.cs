@@ -456,7 +456,7 @@ public class FallbackFunctionCallExecutor
             {
                 FunctionName = functionName,
                 Result = resultString.Length > 200 ? resultString[..200] + "..." : resultString,
-                Success = true
+                Success = !PreviewToolPolicy.IsFailure(functionName, resultString)
             });
 
             return resultString;
