@@ -24,3 +24,17 @@ Text/DOM browser tools need no vision capability. This change does not add brows
 inspection tools, screenshot capture, or image message delivery.
 
 Provider contract: https://docs.ollama.com/api-reference/show-model-details
+
+## Image delivery
+
+Detecting image support is separate from delivering an image. A host captures an image
+and calls `AIService.TryAttachImage`, which refuses unless the model reports vision
+support, the content is an image, and it is within `MaxImageInputBytes`.
+
+A tool result is text, so an image cannot ride back inside one. A queued image is added
+to history as a real user message after the current turn, and the turn is extended so the
+model looks at it — bounded by `MaxImageDeliveriesPerTurn`.
+
+Delivered images are retracted from history when the user turn ends. An image is evidence
+for the turn that captured it; keeping it would re-upload megabytes on every later request
+and crowd out the context the model needs. The model's written conclusion is what persists.

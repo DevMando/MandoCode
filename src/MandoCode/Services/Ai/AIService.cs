@@ -36,8 +36,89 @@ public class AIService
     public ModelVisionSupport VisionSupport => _visionIdentity == ModelIdentity
         ? _visionSupport : ModelVisionSupport.Unknown;
 
-    // A host must also implement actual image delivery before exposing screenshot tools.
     public bool SupportsImageInput => VisionSupport == ModelVisionSupport.Supported;
+
+    /// <summary>Largest single host-supplied image, before base64 expansion.</summary>
+    public const int MaxImageInputBytes = 4 * 1024 * 1024;
+    /// <summary>How many times one user turn may be extended so the model can look at a new image.</summary>
+    public const int MaxImageDeliveriesPerTurn = 3;
+
+    private readonly List<AIContent> _pendingImages = [];
+    private int _imageDeliveriesThisTurn;
+
+    private Func<string, HttpResponseMessage>? _chatTransportForTests;
+
+    /// <summary>Test seam: answers model calls from the request body, so delivery can be asserted without a live daemon.</summary>
+    internal void SetChatClientFactoryForTests(Func<string, HttpResponseMessage> respond)
+    {
+        _chatTransportForTests = respond;
+        BuildAgent();
+    }
+
+    private sealed class StubTransport(Func<string, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            respond(request.Content == null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// Queues a host-captured image for the model to actually look at. Delivery is deliberately
+    /// separate from capture: a tool result is text, so an image can only reach the model as
+    /// message content on a following turn. Refused outright unless the model accepts image
+    /// input, so a text-only model is never handed something it will silently ignore.
+    /// </summary>
+    public bool TryAttachImage(ReadOnlyMemory<byte> bytes, string mediaType, string caption, out string error)
+    {
+        if (!SupportsImageInput)
+        {
+            error = VisionSupport == ModelVisionSupport.Unknown
+                ? "This model's image support is unknown, so an image cannot be delivered. Use text and DOM observations."
+                : "This model is text-only and cannot receive images. Use text and DOM observations.";
+            return false;
+        }
+        if (bytes.IsEmpty) { error = "The captured image was empty."; return false; }
+        if (bytes.Length > MaxImageInputBytes)
+        {
+            error = $"The image is {bytes.Length / 1024} KB, over the {MaxImageInputBytes / 1024} KB limit.";
+            return false;
+        }
+        if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Only image content can be attached.";
+            return false;
+        }
+        lock (_pendingImages)
+        {
+            if (_pendingImages.Count >= 8) { error = "Too many images are already queued for this turn."; return false; }
+            if (!string.IsNullOrWhiteSpace(caption)) _pendingImages.Add(new TextContent(caption));
+            _pendingImages.Add(new DataContent(bytes, mediaType));
+        }
+        error = "";
+        return true;
+    }
+
+    /// <summary>
+    /// Moves queued images into history as a real user message so the model sees them on the next
+    /// turn. Returns the message so the caller can retract it afterward: an image is evidence for
+    /// the turn that asked for it, not permanent context that re-uploads on every later request.
+    /// </summary>
+    private async Task<ChatMessage?> TakePendingImageMessageAsync()
+    {
+        List<AIContent> contents;
+        lock (_pendingImages)
+        {
+            if (_pendingImages.Count == 0) return null;
+            contents = [.. _pendingImages];
+            _pendingImages.Clear();
+        }
+        contents.Insert(0, new TextContent(
+            "Host-captured image input follows. Describe only what is actually visible in it."));
+        var message = new ChatMessage(ChatRole.User, contents);
+        await _historyLock.WaitAsync();
+        try { _chatHistory.Add(message); }
+        finally { _historyLock.Release(); }
+        return message;
+    }
 
     // MAF agent — the live chat path (feat/agent-framework-migration).
     private AIAgent? _agent;
@@ -350,7 +431,8 @@ public class AIService
         // as a bogus transport error on slow local generations. The old client (like the old
         // agent it served) is left for GC rather than disposed — a rebuild can race a call still
         // in flight on the discarded agent.
-        var ollamaHttpClient = new HttpClient(new NumCtxHttpHandler(EffectiveNumCtx))
+        var ollamaHttpClient = new HttpClient(
+            _chatTransportForTests is { } stub ? new StubTransport(stub) : new NumCtxHttpHandler(EffectiveNumCtx))
         {
             BaseAddress = new Uri(_config.OllamaEndpoint),
             Timeout = System.Threading.Timeout.InfiniteTimeSpan
@@ -765,6 +847,10 @@ public class AIService
         }
         finally { _historyLock.Release(); }
 
+        // Not cleared here: an image may be attached before the turn (a pasted screenshot) or
+        // during it (a preview capture). Both are real evidence and both must reach the model.
+        _imageDeliveriesThisTurn = 0;
+        var deliveredImages = new List<ChatMessage>();
         try
         {
             int continuations = 0;
@@ -772,6 +858,13 @@ public class AIService
             {
                 var (response, needsContinuation) = await RunOneChatTurnAsync(continuations, cancellationToken);
                 yield return response;
+
+                // An image captured during the turn can only be looked at on a following one.
+                if (await TakePendingImageMessageAsync() is { } imageMessage)
+                {
+                    deliveredImages.Add(imageMessage);
+                    if (_imageDeliveriesThisTurn++ < MaxImageDeliveriesPerTurn) needsContinuation = true;
+                }
 
                 if (!needsContinuation)
                     break;
@@ -781,10 +874,15 @@ public class AIService
         }
         finally
         {
-            if (hostMessage != null)
+            var transient = deliveredImages;
+            if (hostMessage != null) transient = [hostMessage, .. deliveredImages];
+            if (transient.Count > 0)
             {
                 await _historyLock.WaitAsync(CancellationToken.None);
-                try { _chatHistory.Remove(hostMessage); }
+                // Images are evidence for the turn that captured them. Leaving them in history
+                // would re-upload megabytes on every later request and crowd out the context the
+                // model needs; the model's written conclusion about the image is what persists.
+                try { foreach (var message in transient) _chatHistory.Remove(message); }
                 finally { _historyLock.Release(); }
             }
         }

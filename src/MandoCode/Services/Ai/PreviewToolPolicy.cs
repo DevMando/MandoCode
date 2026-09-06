@@ -9,7 +9,7 @@ public static class PreviewToolPolicy
         "open_desktop_preview" or "refresh_desktop_preview" or "inspect_desktop_preview" or
         "observe_desktop_preview" or "click_desktop_preview" or "press_key_desktop_preview" or
         "hover_desktop_preview" or "fill_desktop_preview" or "select_desktop_preview" or
-        "scroll_desktop_preview" or "wait_for_desktop_preview";
+        "scroll_desktop_preview" or "wait_for_desktop_preview" or "screenshot_desktop_preview";
 
     public static bool IsFailure(string name, string result) => IsLiveTool(name) && !HasSuccessfulResult(result);
 
