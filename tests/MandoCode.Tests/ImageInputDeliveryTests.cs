@@ -69,6 +69,98 @@ public class ImageInputDeliveryTests
         return ai;
     }
 
+    [Fact]
+    public async Task PlanScreenshotReachesRequestingStepBeforeCompletion_AndNeverLeaksToChat()
+    {
+        var config = new MandoCodeConfig { ResponseStreaming = "off", EnableAutoContinuation = false };
+        var ai = Create(config);
+        using var vision = Client("{\"capabilities\":[\"vision\"]}");
+        await ai.ValidateModelAsync(vision);
+        ai.SetHostTools([AIFunctionFactory.Create(() =>
+        {
+            Assert.True(ai.TryAttachImage(Png, "image/png", "plan screenshot", out _));
+            return "{\"ok\":true,\"imageAttached\":true,\"readyState\":\"complete\"}";
+        }, new AIFunctionFactoryOptions { Name = "screenshot_desktop_preview" })]);
+        var seen = new List<string>();
+        ai.SetChatClientFactoryForTests(body =>
+        {
+            seen.Add(body);
+            if (seen.Count == 1) return ScreenshotCall();
+            return Reply(body.Contains(Convert.ToBase64String(Png))
+                ? "Image inspected in this step. [PLAN_STEP_RESULT:SUCCESS]" : "Screenshot requested.");
+        });
+
+        var result = await ai.ExecutePlanStepAsync("Inspect the preview screenshot", []);
+        Assert.Contains("Image inspected in this step", result);
+        Assert.Contains(seen, body => body.Contains(Convert.ToBase64String(Png)));
+        Assert.DoesNotContain(await ai.GetHistoryAsync(), message => message.Contents.OfType<DataContent>().Any());
+
+        seen.Clear();
+        ai.SetChatClientFactoryForTests(body => { seen.Add(body); return Reply("unrelated chat"); });
+        await foreach (var _ in ai.ChatStreamAsync("new request")) { }
+        Assert.DoesNotContain(seen, body => body.Contains(Convert.ToBase64String(Png)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptedPlanDiscardsUndeliveredImages(bool cancel)
+    {
+        var ai = await VisionServiceAsync(streaming: false);
+        using var cancellation = new CancellationTokenSource();
+        ai.SetChatClientFactoryForTests(_ =>
+        {
+            Assert.True(ai.TryAttachImage(Png, "image/png", "interrupted screenshot", out _));
+            if (cancel) cancellation.Cancel();
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("test failure") };
+        });
+        await Assert.ThrowsAnyAsync<Exception>(() => ai.ExecutePlanStepAsync("Inspect the preview", [], cancellation.Token));
+        var seen = new List<string>();
+        ai.SetChatClientFactoryForTests(body => { seen.Add(body); return Reply("new request"); });
+        await foreach (var _ in ai.ChatStreamAsync("unrelated request")) { }
+        Assert.DoesNotContain(seen, body => body.Contains(Convert.ToBase64String(Png)));
+    }
+
+    [Fact]
+    public async Task ClearHistoryDiscardsQueuedImageEvidence()
+    {
+        var ai = await VisionServiceAsync(streaming: false);
+        Assert.True(ai.TryAttachImage(Png, "image/png", "old screenshot", out _));
+        await ai.ClearHistoryAsync();
+        var seen = new List<string>();
+        ai.SetChatClientFactoryForTests(body => { seen.Add(body); return Reply("new conversation"); });
+        await foreach (var _ in ai.ChatStreamAsync("start over")) { }
+        Assert.DoesNotContain(seen, body => body.Contains(Convert.ToBase64String(Png)));
+    }
+
+    [Fact]
+    public async Task ImageContinuationLimitRefusesAdditionalCapturesInsteadOfDroppingAcceptedImages()
+    {
+        var ai = await VisionServiceAsync(streaming: false);
+        var accepted = 0;
+        var refused = 0;
+        ai.SetChatClientFactoryForTests(_ =>
+        {
+            if (ai.TryAttachImage(Png, "image/png", "screenshot", out _)) accepted++;
+            else refused++;
+            return Reply("Check image.");
+        });
+        await foreach (var _ in ai.ChatStreamAsync("inspect")) { }
+        Assert.Equal(AIService.MaxImageDeliveriesPerTurn, accepted);
+        Assert.Equal(1, refused);
+    }
+
+    private static HttpResponseMessage ScreenshotCall() => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(new
+        {
+            model = "m", created_at = "2026-01-01T00:00:00Z", done = true, done_reason = "stop",
+            message = new { role = "assistant", content = "", tool_calls = new[] {
+                new { function = new { name = "screenshot_desktop_preview", arguments = new { } } }
+            } }
+        }), Encoding.UTF8, "application/json")
+    };
+
     private static AIService Create(MandoCodeConfig config)
     {
         var root = new ProjectRootAccessor(Path.GetTempPath());
