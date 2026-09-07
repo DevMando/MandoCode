@@ -8,6 +8,10 @@ namespace MandoCode.Tests;
 public class PreviewToolPolicyTests
 {
     [Theory]
+    [InlineData("list_browser_frames")]
+    [InlineData("list_browser_tabs")]
+    [InlineData("open_browser_tab")]
+    [InlineData("open_local_server_desktop_preview")]
     [InlineData("inspect_desktop_preview")]
     [InlineData("observe_desktop_preview")]
     [InlineData("screenshot_desktop_preview")]

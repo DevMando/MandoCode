@@ -6,6 +6,7 @@ namespace MandoCode.Services;
 public static class PreviewToolPolicy
 {
     public static bool IsLiveTool(string name) => name is
+        "list_browser_frames" or "list_browser_tabs" or "open_browser_tab" or "open_local_server_desktop_preview" or
         "open_desktop_preview" or "refresh_desktop_preview" or "inspect_desktop_preview" or
         "observe_desktop_preview" or "click_desktop_preview" or "press_key_desktop_preview" or
         "hover_desktop_preview" or "fill_desktop_preview" or "select_desktop_preview" or
@@ -14,7 +15,8 @@ public static class PreviewToolPolicy
     public static bool IsFailure(string name, string result) => IsLiveTool(name) && !HasSuccessfulResult(result);
 
     public static bool IsFreshObservation(string name, string result) =>
-        IsLiveTool(name) && name is not ("open_desktop_preview" or "refresh_desktop_preview") &&
+        IsLiveTool(name) && name is not ("open_desktop_preview" or "refresh_desktop_preview" or
+            "open_browser_tab" or "list_browser_tabs" or "list_browser_frames" or "open_local_server_desktop_preview") &&
         HasSuccessfulResult(result, requireDocument: true);
 
     private static bool HasSuccessfulResult(string result, bool requireDocument = false)

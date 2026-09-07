@@ -30,6 +30,19 @@ public class StreamBufferingTests
     }
 
     [Fact]
+    public async Task BufferAsync_DistinctAssistantMessagesAreNotDuplicated()
+    {
+        var deltas = new List<string>();
+        var result = await StreamBuffering.BufferAsync(ToStream(
+            new AgentResponseUpdate(ChatRole.Assistant, "I will inspect the form.") { MessageId = "before-tool" },
+            new AgentResponseUpdate(ChatRole.Assistant, "I found the fields.") { MessageId = "after-tool" }),
+            onChunk: () => { }, onText: deltas.Add);
+        Assert.Equal(new[] { "I will inspect the form.", "I found the fields." }, deltas);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result.Text, "I will inspect the form"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result.Text, "I found the fields"));
+    }
+
+    [Fact]
     public async Task BufferAsync_ConcatenatesTextInOrder()
     {
         var result = await StreamBuffering.BufferAsync(
