@@ -131,6 +131,12 @@ public class AIService
         lock (_pendingImages) _pendingImages.Clear();
     }
 
+    /// <summary>Same lock as the counter's increment, so a reset cannot race an in-flight attach.</summary>
+    private void ResetImageBudget()
+    {
+        lock (_pendingImages) _imageDeliveriesThisTurn = 0;
+    }
+
     // MAF agent — the live chat path (feat/agent-framework-migration).
     private AIAgent? _agent;
 
@@ -860,7 +866,7 @@ public class AIService
 
         // Not cleared here: an image may be attached before the turn (a pasted screenshot) or
         // during it (a preview capture). Both are real evidence and both must reach the model.
-        _imageDeliveriesThisTurn = 0;
+        ResetImageBudget();
         var deliveredImages = new List<ChatMessage>();
         try
         {
@@ -1056,40 +1062,69 @@ public class AIService
     private async Task<long> EstimateHistoryCharsAsync()
     {
         await _historyLock.WaitAsync();
-        try
-        {
-            long chars = 0;
-            foreach (var msg in _chatHistory)
-            {
-                if (msg.Contents.Count == 0)
-                {
-                    chars += msg.Text?.Length ?? 0;
-                    continue;
-                }
-
-                foreach (var item in msg.Contents)
-                {
-                    switch (item)
-                    {
-                        case Microsoft.Extensions.AI.FunctionCallContent fc:
-                            chars += fc.Name?.Length ?? 0;
-                            if (fc.Arguments != null)
-                                foreach (var kv in fc.Arguments)
-                                    chars += kv.Key.Length + (kv.Value?.ToString()?.Length ?? 0);
-                            break;
-                        case Microsoft.Extensions.AI.FunctionResultContent fr:
-                            chars += fr.Result?.ToString()?.Length ?? 0;
-                            break;
-                        case Microsoft.Extensions.AI.TextContent tc:
-                            chars += tc.Text?.Length ?? 0;
-                            break;
-                    }
-                }
-            }
-            return chars;
-        }
+        try { return EstimateChars(_chatHistory); }
         finally { _historyLock.Release(); }
     }
+
+    /// <summary>
+    /// Rough prompt size of a message list. Split from the history lock so it can be measured
+    /// directly: an undercount here is invisible until a local model starts silently losing its
+    /// system prompt.
+    /// </summary>
+    internal static long EstimateChars(IEnumerable<ChatMessage> messages)
+    {
+        long chars = 0;
+        foreach (var msg in messages)
+        {
+            if (msg.Contents.Count == 0)
+            {
+                chars += msg.Text?.Length ?? 0;
+                continue;
+            }
+
+            foreach (var item in msg.Contents)
+            {
+                switch (item)
+                {
+                    case Microsoft.Extensions.AI.FunctionCallContent fc:
+                        chars += fc.Name?.Length ?? 0;
+                        if (fc.Arguments != null)
+                            foreach (var kv in fc.Arguments)
+                                chars += kv.Key.Length + (kv.Value?.ToString()?.Length ?? 0);
+                        break;
+                    case Microsoft.Extensions.AI.FunctionResultContent fr:
+                        chars += fr.Result?.ToString()?.Length ?? 0;
+                        break;
+                    case Microsoft.Extensions.AI.TextContent tc:
+                        chars += tc.Text?.Length ?? 0;
+                        break;
+                    case Microsoft.Extensions.AI.DataContent dc:
+                        chars += EstimateImageChars(dc);
+                        break;
+                }
+            }
+        }
+        return chars;
+    }
+
+    /// <summary>
+    /// An image reaches the model as base64, which is four characters for every three bytes.
+    /// Counting it as nothing let one screenshot exceed a local model's entire window while the
+    /// pre-flight check believed the conversation was empty — and Ollama answers an oversized
+    /// prompt by silently dropping the oldest tokens, starting with the system prompt.
+    /// </summary>
+    internal static long EstimateImageChars(Microsoft.Extensions.AI.DataContent content) =>
+        (long)content.Data.Length * 4 / 3;
+
+    /// <summary>
+    /// Whether image evidence can be carried into a retry that a full context window just rejected.
+    /// Retention is only safe when the window size is actually known and the whole retry prompt fits
+    /// inside it; an unknown window cannot be shown to fit, and after an overflow the honest default
+    /// is to drop the largest thing rather than assume.
+    /// </summary>
+    internal static bool ImageEvidenceFits(long baseChars, long imageChars, long toolChars, int contextLength) =>
+        contextLength > 0 &&
+        !ExceedsContextBudget((baseChars + imageChars + toolChars) / CharsPerTokenEstimate, contextLength);
 
     /// <summary>
     /// Rough size of the tool definitions the connector serializes into EVERY request —
@@ -1641,7 +1676,7 @@ public class AIService
         // Each attempt owns its screenshot evidence. Never inherit a cancelled attempt's queue
         // or leave images behind for another step, a retry, or an unrelated chat request.
         DiscardPendingImages();
-        _imageDeliveriesThisTurn = 0;
+        ResetImageBudget();
         try
         {
             return await ExecutePlanStepWorkCoreAsync(stepInstruction, previousResults, cancellationToken,
@@ -1800,8 +1835,8 @@ public class AIService
                 combined.AppendLine($"⚠ Provider rejected request (context window full). Restarting step with a compacted summary ({continuations}/{_config.MaxAutoContinuations}).");
                 combined.AppendLine();
 
-                // The rejected call may have been the first opportunity to see a screenshot.
-                // Text compaction cannot replace that evidence: retain it for the bounded retry.
+                // The rejected call may have been the first opportunity to see a screenshot, and
+                // a text summary cannot replace that evidence, so it is carried into the retry.
                 var imageEvidence = stepHistory.Where(message => message.Contents.OfType<DataContent>().Any()).ToList();
                 stepHistory =
                 [
@@ -1812,7 +1847,24 @@ public class AIService
                         $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
                         $"Continue from where it left off. Use the available functions to finish the step.")
                 ];
-                stepHistory.AddRange(imageEvidence);
+                // ...but when the screenshot is itself what overflowed, carrying it forward would
+                // hit the same wall and spend the retry budget re-learning that. Drop it and say so,
+                // so the model re-captures or finishes on DOM evidence instead of describing a
+                // picture it no longer has.
+                if (imageEvidence.Count > 0)
+                {
+                    if (ImageEvidenceFits(EstimateChars(stepHistory), EstimateChars(imageEvidence),
+                            EstimateToolSchemaChars(), _config.ContextLength))
+                        stepHistory.AddRange(imageEvidence);
+                    else
+                    {
+                        stepHistory.Add(new ChatMessage(ChatRole.User,
+                            "A screenshot from the previous attempt was dropped: the conversation no longer has room " +
+                            "for it. Do not describe it. Capture it again if you still need to look at it, or finish " +
+                            "the step on DOM observations and say that visual layout could not be re-checked."));
+                        combined.AppendLine("⚠ A screenshot was dropped from the retry; it no longer fit the context window.");
+                    }
+                }
 
                 continue;
             }
@@ -2165,7 +2217,7 @@ public class AIService
     public async Task ClearHistoryAsync()
     {
         DiscardPendingImages();
-        _imageDeliveriesThisTurn = 0;
+        ResetImageBudget();
         await _historyLock.WaitAsync();
         try
         {
