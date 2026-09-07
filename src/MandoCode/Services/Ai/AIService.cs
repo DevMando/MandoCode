@@ -89,6 +89,11 @@ public class AIService
         }
         lock (_pendingImages)
         {
+            if (_imageDeliveriesThisTurn >= MaxImageDeliveriesPerTurn)
+            {
+                error = "The image-delivery limit for this turn or plan attempt was reached. Use the images already supplied or DOM observations.";
+                return false;
+            }
             if (_pendingImages.Count >= 8) { error = "Too many images are already queued for this turn."; return false; }
             if (!string.IsNullOrWhiteSpace(caption)) _pendingImages.Add(new TextContent(caption));
             _pendingImages.Add(new DataContent(bytes, mediaType));
@@ -102,7 +107,7 @@ public class AIService
     /// turn. Returns the message so the caller can retract it afterward: an image is evidence for
     /// the turn that asked for it, not permanent context that re-uploads on every later request.
     /// </summary>
-    private async Task<ChatMessage?> TakePendingImageMessageAsync()
+    private async Task<ChatMessage?> TakePendingImageMessageAsync(List<ChatMessage> history)
     {
         List<AIContent> contents;
         lock (_pendingImages)
@@ -110,14 +115,20 @@ public class AIService
             if (_pendingImages.Count == 0) return null;
             contents = [.. _pendingImages];
             _pendingImages.Clear();
+            _imageDeliveriesThisTurn++;
         }
         contents.Insert(0, new TextContent(
             "Host-captured image input follows. Describe only what is actually visible in it."));
         var message = new ChatMessage(ChatRole.User, contents);
         await _historyLock.WaitAsync();
-        try { _chatHistory.Add(message); }
+        try { history.Add(message); }
         finally { _historyLock.Release(); }
         return message;
+    }
+
+    private void DiscardPendingImages()
+    {
+        lock (_pendingImages) _pendingImages.Clear();
     }
 
     // MAF agent — the live chat path (feat/agent-framework-migration).
@@ -860,10 +871,10 @@ public class AIService
                 yield return response;
 
                 // An image captured during the turn can only be looked at on a following one.
-                if (await TakePendingImageMessageAsync() is { } imageMessage)
+                if (await TakePendingImageMessageAsync(_chatHistory) is { } imageMessage)
                 {
                     deliveredImages.Add(imageMessage);
-                    if (_imageDeliveriesThisTurn++ < MaxImageDeliveriesPerTurn) needsContinuation = true;
+                    needsContinuation = true;
                 }
 
                 if (!needsContinuation)
@@ -874,6 +885,7 @@ public class AIService
         }
         finally
         {
+            DiscardPendingImages();
             var transient = deliveredImages;
             if (hostMessage != null) transient = [hostMessage, .. deliveredImages];
             if (transient.Count > 0)
@@ -1626,6 +1638,21 @@ public class AIService
         CancellationToken cancellationToken, IEnumerable<string>? previousEvidencePaths,
         bool qualityPhase = false)
     {
+        // Each attempt owns its screenshot evidence. Never inherit a cancelled attempt's queue
+        // or leave images behind for another step, a retry, or an unrelated chat request.
+        DiscardPendingImages();
+        _imageDeliveriesThisTurn = 0;
+        try
+        {
+            return await ExecutePlanStepWorkCoreAsync(stepInstruction, previousResults, cancellationToken,
+                previousEvidencePaths, qualityPhase);
+        }
+        finally { DiscardPendingImages(); }
+    }
+
+    private async Task<PlanStepEvidence> ExecutePlanStepWorkCoreAsync(string stepInstruction, List<string> previousResults,
+        CancellationToken cancellationToken, IEnumerable<string>? previousEvidencePaths, bool qualityPhase)
+    {
         var qualityContinuationUsed = false;
         var contextBuilder = new System.Text.StringBuilder(
             BuildStepContext(_systemPrompt, _currentTurnUserMessage, previousResults));
@@ -1773,6 +1800,9 @@ public class AIService
                 combined.AppendLine($"⚠ Provider rejected request (context window full). Restarting step with a compacted summary ({continuations}/{_config.MaxAutoContinuations}).");
                 combined.AppendLine();
 
+                // The rejected call may have been the first opportunity to see a screenshot.
+                // Text compaction cannot replace that evidence: retain it for the bounded retry.
+                var imageEvidence = stepHistory.Where(message => message.Contents.OfType<DataContent>().Any()).ToList();
                 stepHistory =
                 [
                     new ChatMessage(ChatRole.System, contextBuilder.ToString()),
@@ -1782,11 +1812,22 @@ public class AIService
                         $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
                         $"Continue from where it left off. Use the available functions to finish the step.")
                 ];
+                stepHistory.AddRange(imageEvidence);
 
                 continue;
             }
 
             combined.AppendLine(processedResponse);
+
+            // A screenshot tool's JSON is only an acknowledgement. Deliver its actual image
+            // into this isolated step history and call the model again before accepting any
+            // completion report. This has its own bounded image budget, independent of whether
+            // ordinary tool-budget auto-continuation is enabled.
+            if (await TakePendingImageMessageAsync(stepHistory) != null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                continue;
+            }
 
             if (!needsContinuation)
             {
@@ -2123,6 +2164,8 @@ public class AIService
     /// </summary>
     public async Task ClearHistoryAsync()
     {
+        DiscardPendingImages();
+        _imageDeliveriesThisTurn = 0;
         await _historyLock.WaitAsync();
         try
         {
