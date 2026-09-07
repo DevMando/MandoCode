@@ -150,6 +150,28 @@ public class ImageInputDeliveryTests
         Assert.Equal(1, refused);
     }
 
+    [Fact]
+    public void ImageContentIsCountedTowardTheContextEstimate()
+    {
+        var text = new ChatMessage(ChatRole.User, "a short question");
+        var screenshot = new ChatMessage(ChatRole.User, [
+            new TextContent("look at this"),
+            new DataContent(new byte[32 * 1024], "image/png"),
+        ]);
+
+        var textOnly = AIService.EstimateChars([text]);
+        var withImage = AIService.EstimateChars([text, screenshot]);
+
+        // Base64 is four characters per three bytes, so a 32 KB capture is ~43,700 characters.
+        Assert.InRange(withImage - textOnly, 43_000, 44_000);
+
+        // The point of counting it: one screenshot alone must trip a small local model's window,
+        // so the pre-flight compaction fires instead of Ollama silently dropping the system prompt.
+        Assert.True(AIService.ExceedsContextBudget(withImage / 4, contextLength: 8192),
+            "A screenshot larger than the whole context window did not trip the budget check.");
+        Assert.False(AIService.ExceedsContextBudget(textOnly / 4, contextLength: 8192));
+    }
+
     private static HttpResponseMessage ScreenshotCall() => new(HttpStatusCode.OK)
     {
         Content = new StringContent(JsonSerializer.Serialize(new
