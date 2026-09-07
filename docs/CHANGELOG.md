@@ -81,6 +81,12 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   listings are capped with a useful follow-up hint, while the middleware truncates any oversized
   tool result before it enters conversation history. This closes the failure mode where one broad
   listing could add hundreds of thousands of tokens and then be repeated by context retries.
+- **Browser tab and frame listings are always read live.** The host's newer browser tools — listing
+  tabs, listing embedded frames, and opening a tab — were not marked as live tools, so a repeated
+  call could be answered from the recent-call cache. Tab and frame identities change as the user
+  opens, closes, and navigates tabs, so a cached listing could hand the agent identifiers that no
+  longer existed. Those tools also no longer count as having observed a page: they report identity
+  and navigation state, not settled page content.
 
 ### Validation
 The engine test suite runs on both .NET 8 and .NET 10. Coverage includes workflow topology,
