@@ -1117,6 +1117,16 @@ public class AIService
         (long)content.Data.Length * 4 / 3;
 
     /// <summary>
+    /// Whether image evidence can be carried into a retry that a full context window just rejected.
+    /// Retention is only safe when the window size is actually known and the whole retry prompt fits
+    /// inside it; an unknown window cannot be shown to fit, and after an overflow the honest default
+    /// is to drop the largest thing rather than assume.
+    /// </summary>
+    internal static bool ImageEvidenceFits(long baseChars, long imageChars, long toolChars, int contextLength) =>
+        contextLength > 0 &&
+        !ExceedsContextBudget((baseChars + imageChars + toolChars) / CharsPerTokenEstimate, contextLength);
+
+    /// <summary>
     /// Rough size of the tool definitions the connector serializes into EVERY request —
     /// they're not in the chat history, but with MCP servers attached they can be most of
     /// a small model's window, so a pre-flight estimate that ignores them undercounts badly.
@@ -1825,8 +1835,8 @@ public class AIService
                 combined.AppendLine($"⚠ Provider rejected request (context window full). Restarting step with a compacted summary ({continuations}/{_config.MaxAutoContinuations}).");
                 combined.AppendLine();
 
-                // The rejected call may have been the first opportunity to see a screenshot.
-                // Text compaction cannot replace that evidence: retain it for the bounded retry.
+                // The rejected call may have been the first opportunity to see a screenshot, and
+                // a text summary cannot replace that evidence, so it is carried into the retry.
                 var imageEvidence = stepHistory.Where(message => message.Contents.OfType<DataContent>().Any()).ToList();
                 stepHistory =
                 [
@@ -1837,7 +1847,24 @@ public class AIService
                         $"Here's what was partially completed (tool-call trace; do NOT redo these):\n\n{summary}\n\n" +
                         $"Continue from where it left off. Use the available functions to finish the step.")
                 ];
-                stepHistory.AddRange(imageEvidence);
+                // ...but when the screenshot is itself what overflowed, carrying it forward would
+                // hit the same wall and spend the retry budget re-learning that. Drop it and say so,
+                // so the model re-captures or finishes on DOM evidence instead of describing a
+                // picture it no longer has.
+                if (imageEvidence.Count > 0)
+                {
+                    if (ImageEvidenceFits(EstimateChars(stepHistory), EstimateChars(imageEvidence),
+                            EstimateToolSchemaChars(), _config.ContextLength))
+                        stepHistory.AddRange(imageEvidence);
+                    else
+                    {
+                        stepHistory.Add(new ChatMessage(ChatRole.User,
+                            "A screenshot from the previous attempt was dropped: the conversation no longer has room " +
+                            "for it. Do not describe it. Capture it again if you still need to look at it, or finish " +
+                            "the step on DOM observations and say that visual layout could not be re-checked."));
+                        combined.AppendLine("⚠ A screenshot was dropped from the retry; it no longer fit the context window.");
+                    }
+                }
 
                 continue;
             }
