@@ -34,6 +34,14 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   remains in front of every revised plan and file change.
 
 ### Added
+- **Hosts can watch shell commands run.** A host may attach an optional command output sink and
+  receive each `execute_command` as it happens — the command and its working directory when it
+  starts, every line of output as it arrives, and the exit code or the reason it was killed. The
+  sink is observational only: it cannot change or block a command, exceptions thrown by it are
+  swallowed, and nothing about the command's execution or the output the model receives changes
+  when one is attached. It deliberately sees output past the 5000-character cap applied to the
+  model's copy, since that cap protects model context and a host display has its own scrollback.
+  The CLI attaches no sink and behaves exactly as before.
 - **Durable workflow planning.** Each plan step moves through a Microsoft Agent Framework workflow
   with checkpointed run state. `/plan`, `/plan-resume`, and `/plan-discard` inspect and control
   unfinished work without replaying completed steps.

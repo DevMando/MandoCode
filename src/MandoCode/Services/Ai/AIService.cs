@@ -1,4 +1,4 @@
-/**
+﻿/**
  *  Author: DevMando
  *  Date: 2025-12-10
  *  Description: AIService.cs - Manages AI interactions using Microsoft Agent Framework with Ollama.
@@ -181,6 +181,7 @@ public class AIService
     private string? _currentTurnUserMessage;
     private MandoCodeConfig _config;
     private readonly ProjectRootAccessor _projectRootAccessor;
+    private readonly ICommandOutputSink? _commandOutputSink;
     private readonly FunctionCompletionTracker _completionTracker = new();
     private readonly TokenTrackingService _tokenTracker;
     private readonly PlanHandoff _planHandoff;
@@ -260,7 +261,13 @@ public class AIService
         }
     }
 
-    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader, McpClientManager mcpManager, McpApprovalGate mcpApprovalGate, SpinnerService spinner)
+    /// <summary>
+    /// <paramref name="commandOutputSink"/> is optional and observational: a host that wants to
+    /// SHOW shell commands as they run passes one, and everything else leaves it null. It is handed
+    /// to the filesystem plugin on every agent rebuild, so it survives model switches and settings
+    /// changes without the host re-attaching it.
+    /// </summary>
+    public AIService(ProjectRootAccessor projectRootAccessor, MandoCodeConfig config, TokenTrackingService tokenTracker, PlanHandoff planHandoff, SkillLoader skillLoader, McpClientManager mcpManager, McpApprovalGate mcpApprovalGate, SpinnerService spinner, ICommandOutputSink? commandOutputSink = null)
     {
         _projectRootAccessor = projectRootAccessor;
         _config = config;
@@ -270,6 +277,7 @@ public class AIService
         _mcpManager = mcpManager;
         _mcpApprovalGate = mcpApprovalGate;
         _spinner = spinner;
+        _commandOutputSink = commandOutputSink;
         _fallbackExecutor = new FallbackFunctionCallExecutor(
             call => OnFunctionInvoked?.Invoke(call),
             result => OnFunctionCompleted?.Invoke(result));
@@ -460,7 +468,7 @@ public class AIService
         var tools = new List<AITool>();
 
         // FileSystem — same instance construction and ignore-directories wiring as BuildKernel.
-        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner);
+        var fileSystemPlugin = new FileSystemPlugin(_projectRootAccessor, _spinner, _commandOutputSink);
         if (_config.IgnoreDirectories.Any())
         {
             fileSystemPlugin.AddIgnoreDirectories(_config.IgnoreDirectories);

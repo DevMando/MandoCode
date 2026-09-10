@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.FileSystemGlobbing;
@@ -17,6 +17,7 @@ public class FileSystemPlugin
 
     private readonly ProjectRootAccessor ProjectRootAccessor;
     private readonly SpinnerService? _spinner;
+    private readonly ICommandOutputSink? _outputSink;
     private string ProjectRoot => ProjectRootAccessor.ProjectRoot;
     private readonly HashSet<string> _ignoreDirectories = new(MandoCodeConfig.DefaultIgnoreDirectories);
 
@@ -26,10 +27,26 @@ public class FileSystemPlugin
     private readonly object _cacheLock = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
 
-    public FileSystemPlugin(ProjectRootAccessor projectRootAccessor, SpinnerService? spinner = null)
+    public FileSystemPlugin(
+        ProjectRootAccessor projectRootAccessor,
+        SpinnerService? spinner = null,
+        ICommandOutputSink? outputSink = null)
     {
         ProjectRootAccessor = projectRootAccessor;
         _spinner = spinner;
+        _outputSink = outputSink;
+    }
+
+    /// <summary>
+    /// Reports to the host's command display, if one is attached. Every call is guarded: the sink
+    /// exists to show the user what is happening, and a fault in a display must never propagate
+    /// into the command the agent is running.
+    /// </summary>
+    private void Report(Action<ICommandOutputSink> notify)
+    {
+        var sink = _outputSink;
+        if (sink == null) return;
+        try { notify(sink); } catch (Exception ex) { Debug.WriteLine($"Command output sink threw: {ex.Message}"); }
     }
 
     /// <summary>
@@ -617,6 +634,10 @@ public class FileSystemPlugin
         var idleTimeout = TimeSpan.FromSeconds(30);
         var hardCeiling = TimeSpan.FromMinutes(10);
 
+        // Announced after the bare-`cd` interception above, which never starts a process and so
+        // has nothing to show.
+        Report(sink => sink.CommandStarted(command, ProjectRoot));
+
         try
         {
             var isWindows = OperatingSystem.IsWindows();
@@ -680,6 +701,9 @@ public class FileSystemPlugin
                     }
                 }
                 _spinner?.UpdateActivity(BuildActivity(command, line));
+                // Outside the cap above on purpose: the 5000-character ceiling protects the
+                // model's context, and a host display has its own scrollback to worry about.
+                Report(sink => sink.CommandOutput(line, isErr));
             }
 
             proc.OutputDataReceived += (_, e) => OnLine(e.Data, false);
@@ -719,6 +743,7 @@ public class FileSystemPlugin
                 lock (stateLock) { snapshot = output.ToString().TrimEnd(); }
                 var lastLineSafe = string.IsNullOrEmpty(lastLine) ? "(none)" : Truncate(lastLine, 200);
                 var partial = string.IsNullOrEmpty(snapshot) ? "(no output before kill)" : snapshot;
+                Report(sink => sink.CommandFinished(null, killReason));
                 return $"Killed: {killReason}. Elapsed: {elapsed}s. Last line: {lastLineSafe}\n--- partial output ---\n{partial}";
             }
 
@@ -737,10 +762,15 @@ public class FileSystemPlugin
             if (string.IsNullOrEmpty(result)) result = "(no output)";
             if (wasCapped) result += "\n... [output truncated at 5000 characters]";
 
-            return $"Exit code: {proc.ExitCode}\n{result}";
+            var exitCode = proc.ExitCode;
+            Report(sink => sink.CommandFinished(exitCode, null));
+            return $"Exit code: {exitCode}\n{result}";
         }
         catch (Exception ex)
         {
+            // A command that never started still has to close out on the display, or its header
+            // would sit there looking like work still in progress.
+            Report(sink => sink.CommandFinished(null, $"failed to run: {ex.Message}"));
             return $"Error executing command: {ex.Message}";
         }
     }
