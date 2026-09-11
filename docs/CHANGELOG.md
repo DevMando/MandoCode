@@ -34,6 +34,23 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   remains in front of every revised plan and file change.
 
 ### Added
+- **Images can be delivered to models that can actually see them.** A host can hand a captured
+  image to the assistant, and whether a model accepts image input is now detected rather than
+  assumed. A text-only model is told plainly that a picture could not be examined, instead of being
+  handed bytes it would silently discard and then answer around. Screenshots taken during a plan are
+  delivered to the step that asked for them, rather than arriving with no context attached.
+- **Images are counted toward the context estimate.** A picture occupies real space in a model's
+  window, and leaving it out of the running total meant the estimate drifted low exactly when it
+  mattered. Image evidence gathered for a retry is dropped when it no longer fits, so a retry cannot
+  push a conversation over the limit by carrying attachments it can no longer afford.
+- **Hosts can supply their own agent tools.** An application embedding MandoCode can register
+  functions of its own alongside the built-in ones, so capabilities that only the host can provide —
+  its own windows, panes, or other sessions — are available to the model without changing the
+  engine. Tool registration survives model switches and settings changes, so a host attaches its
+  tools once.
+- **Conversations can be compacted on demand.** A long session can be condensed deliberately rather
+  than waiting for the context window to force the issue, keeping the thread of the work while
+  recovering the room to continue it.
 - **Hosts can watch shell commands run.** A host may attach an optional command output sink and
   receive each `execute_command` as it happens — the command and its working directory when it
   starts, every line of output as it arrives, and the exit code or the reason it was killed. The
@@ -97,11 +114,15 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   and navigation state, not settled page content.
 
 ### Validation
-The engine test suite runs on both .NET 8 and .NET 10. Coverage includes workflow topology,
+733/733 tests passing on both .NET 8 and .NET 10. Coverage includes workflow topology,
 checkpoint storage, resume context, retry behavior, plan revision, semantic step outcomes, proposal
 handoff, input handling, scoped directory references, bounded tool results, and version labels.
 Desktop adds host-level coverage, and the planner was also exercised through real CLI and Desktop
-sessions, including forced process termination between steps.
+sessions, including forced process termination between steps. New coverage for the command output
+sink pins the properties a host display depends on: the full lifecycle is reported, a non-zero exit
+reads as a failure rather than a kill, a bare `cd` produces no report at all, output past the
+model's truncation cap still reaches the sink, and a sink that throws on every call leaves the
+command running and reporting normally.
 
 ### Internal
 - **Moved AI orchestration from Semantic Kernel to Microsoft Agent Framework.** The chat layer now
