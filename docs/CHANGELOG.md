@@ -2,14 +2,27 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [Unreleased]
+## [0.15.0] - 2026-09-10
 
-**Plans can now survive real work instead of being an all-or-nothing suggestion.** MandoCode runs
-each approved plan as durable work the host can observe, pause, retry, revise, and resume after a
-restart. The workflow planner is now the standard execution path for every plan. MandoCode also
-ships .NET 10 and .NET 8 builds in the same package, with nothing for users to choose or configure.
+**MandoCode's AI engine now runs on Microsoft Agent Framework.** The chat layer, its tools, and
+plan execution have all moved off Semantic Kernel onto Microsoft's agent and workflow runtime — the
+largest change to the engine's internals since it was written. Your models, providers, tools,
+skills, MCP servers, and approval prompts are unchanged, and nothing about how you use MandoCode
+changes.
+
+What the new foundation buys is **plans that survive real work.** Every approved plan now runs as
+durable, checkpointed work that can be observed, paused, retried, revised, and resumed after a
+restart, and the workflow planner is the standard execution path for all of them. A plan step is
+also no longer gated by a second model call judging whether it is done, which halves the model calls
+in a plan run. MandoCode also ships .NET 10 and .NET 8 builds in the same package, with nothing for
+you to choose or configure.
 
 ### Why this matters (plain-language summary)
+- **The engine was rebuilt underneath you, and that is meant to be invisible.** Semantic Kernel is
+  gone; Microsoft Agent Framework runs the chat layer and plan execution. Same models, same
+  providers, same tools, same approval prompts — the migration is what made durable plans possible,
+  not something you have to adopt. If nothing below sounds different, MandoCode will simply behave
+  as it always has.
 - **A plan no longer disappears with the process.** If MandoCode closes after step two, the first
   two steps stay settled and the remaining work can resume instead of starting over. The CLI shows
   the saved plan at startup and supports both Resume and Discard.
@@ -33,42 +46,39 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   frameworks run the same suite, Desktop has its own host-level coverage, and the approval boundary
   remains in front of every revised plan and file change.
 
-### Added
-- **Images can be delivered to models that can actually see them.** A host can hand a captured
-  image to the assistant, and whether a model accepts image input is now detected rather than
-  assumed. A text-only model is told plainly that a picture could not be examined, instead of being
-  handed bytes it would silently discard and then answer around. Screenshots taken during a plan are
-  delivered to the step that asked for them, rather than arriving with no context attached.
-- **Images are counted toward the context estimate.** A picture occupies real space in a model's
-  window, and leaving it out of the running total meant the estimate drifted low exactly when it
-  mattered. Image evidence gathered for a retry is dropped when it no longer fits, so a retry cannot
-  push a conversation over the limit by carrying attachments it can no longer afford.
-- **Hosts can supply their own agent tools.** An application embedding MandoCode can register
-  functions of its own alongside the built-in ones, so capabilities that only the host can provide —
-  its own windows, panes, or other sessions — are available to the model without changing the
-  engine. Tool registration survives model switches and settings changes, so a host attaches its
-  tools once.
-- **Conversations can be compacted on demand.** A long session can be condensed deliberately rather
-  than waiting for the context window to force the issue, keeping the thread of the work while
-  recovering the room to continue it.
-- **Hosts can watch shell commands run.** A host may attach an optional command output sink and
-  receive each `execute_command` as it happens — the command and its working directory when it
-  starts, every line of output as it arrives, and the exit code or the reason it was killed. The
-  sink is observational only: it cannot change or block a command, exceptions thrown by it are
-  swallowed, and nothing about the command's execution or the output the model receives changes
-  when one is attached. It deliberately sees output past the 5000-character cap applied to the
-  model's copy, since that cap protects model context and a host display has its own scrollback.
-  The CLI attaches no sink and behaves exactly as before.
-- **Durable workflow planning.** Each plan step moves through a Microsoft Agent Framework workflow
-  with checkpointed run state. `/plan`, `/plan-resume`, and `/plan-discard` inspect and control
-  unfinished work without replaying completed steps.
-- **Deterministic `/plan <goal>`.** The command uses a proposal-only model call with no access to
-  normal project tools. Providers that cannot honor forced tool choice fall back to constrained
-  JSON and finally to a safe one-step proposal rather than silently ignoring the command.
-- **Retry and replan after failure.** A failed step can be retried with revised instructions,
-  skipped, used as the starting point for a replacement suffix, or used to cancel the plan.
+### Fixed
+- **Long plans no longer stall when the host stops reading progress.** If the interface exited or
+  errored while a plan was running, progress reporting could block and the run would hang with no
+  way forward. Blocked work is now released.
+- **A failed verification response no longer discards completed implementation work.** A retry
+  reuses the evidence already gathered — confirmed still valid by file hash — instead of rerunning
+  the implementation and re-reading unchanged files, so a plan makes progress toward finishing
+  rather than repeatedly rechecking itself. File-read results also get more room before clipping,
+  and checkpoints preserve partial file changes and pending verification.
+- **Session token totals now use provider-reported usage only.** The previous display added rough
+  character-based estimates for file and tool payloads to prompt counts that already included
+  those payloads. Reads, search, and attachments no longer inflate the visible total or trigger
+  estimate-only UI updates.
+- **Broad project roots can no longer flood a model with a recursive file listing.** Directory
+  references such as `@MandoCode/` now tell the agent to keep subsequent reads and listings inside
+  that directory, and the listing tool accepts that directory as an explicit scope. Recursive
+  listings are capped with a useful follow-up hint, while the middleware truncates any oversized
+  tool result before it enters conversation history. This closes the failure mode where one broad
+  listing could add hundreds of thousands of tokens and then be repeated by context retries.
+- **Browser tab and frame listings are always read live.** The host's newer browser tools — listing
+  tabs, listing embedded frames, and opening a tab — were not marked as live tools, so a repeated
+  call could be answered from the recent-call cache. Tab and frame identities change as the user
+  opens, closes, and navigates tabs, so a cached listing could hand the agent identifiers that no
+  longer existed. Those tools also no longer count as having observed a page: they report identity
+  and navigation state, not settled page content.
 
 ### Changed
+- **AI orchestration moved from Semantic Kernel to Microsoft Agent Framework.** The chat layer now
+  uses the framework's agent and tool abstractions, and plan execution uses its workflow runtime
+  with checkpointed run state. This is the change everything else in this release rests on: durable
+  plans, resume-after-restart, and honest progress reporting are all properties of the workflow
+  runtime rather than bookkeeping bolted onto the old chat loop. Existing models, tools, and
+  approval prompts are unaffected.
 - **A step no longer needs a second model call to be judged complete.** Every plan step used to be
   gated by a separate model that decided whether the step was really done. That doubled the model
   calls in a plan run and, in practice, blocked correct work — rejecting a discovery step for
@@ -107,34 +117,48 @@ ships .NET 10 and .NET 8 builds in the same package, with nothing for users to c
   dropped .NET 8 users.
 - **README prerequisites now ask for the .NET 10 SDK**, with a note that the .NET 8 fallback
   exists and when it goes away.
+- **Excluded OllamaSharp's source generator from the build.** The generator ships built against
+  Roslyn 5.6, which is newer than the compiler in current Visual Studio and .NET SDK releases,
+  so loading it failed the build with CS9057 on developer machines while floating CI runners
+  stayed green. It only generates code for `[OllamaTool]`-annotated types, which this project
+  does not use, so excluding it costs nothing.
 
-### Fixed
-- **Long plans no longer stall when the host stops reading progress.** If the interface exited or
-  errored while a plan was running, progress reporting could block and the run would hang with no
-  way forward. Blocked work is now released.
-- **A failed verification response no longer discards completed implementation work.** A retry
-  reuses the evidence already gathered — confirmed still valid by file hash — instead of rerunning
-  the implementation and re-reading unchanged files, so a plan makes progress toward finishing
-  rather than repeatedly rechecking itself. File-read results also get more room before clipping,
-  and checkpoints preserve partial file changes and pending verification.
-- **Session token totals now use provider-reported usage only.** The previous display added rough
-  character-based estimates for file and tool payloads to prompt counts that already included
-  those payloads. Reads, search, and attachments no longer inflate the visible total or trigger
-  estimate-only UI updates.
-- **Broad project roots can no longer flood a model with a recursive file listing.** Directory
-  references such as `@MandoCode/` now tell the agent to keep subsequent reads and listings inside
-  that directory, and the listing tool accepts that directory as an explicit scope. Recursive
-  listings are capped with a useful follow-up hint, while the middleware truncates any oversized
-  tool result before it enters conversation history. This closes the failure mode where one broad
-  listing could add hundreds of thousands of tokens and then be repeated by context retries.
-- **Browser tab and frame listings are always read live.** The host's newer browser tools — listing
-  tabs, listing embedded frames, and opening a tab — were not marked as live tools, so a repeated
-  call could be answered from the recent-call cache. Tab and frame identities change as the user
-  opens, closes, and navigates tabs, so a cached listing could hand the agent identifiers that no
-  longer existed. Those tools also no longer count as having observed a page: they report identity
-  and navigation state, not settled page content.
+### Added
+- **Images can be delivered to models that can actually see them.** A host can hand a captured
+  image to the assistant, and whether a model accepts image input is now detected rather than
+  assumed. A text-only model is told plainly that a picture could not be examined, instead of being
+  handed bytes it would silently discard and then answer around. Screenshots taken during a plan are
+  delivered to the step that asked for them, rather than arriving with no context attached.
+- **Images are counted toward the context estimate.** A picture occupies real space in a model's
+  window, and leaving it out of the running total meant the estimate drifted low exactly when it
+  mattered. Image evidence gathered for a retry is dropped when it no longer fits, so a retry cannot
+  push a conversation over the limit by carrying attachments it can no longer afford.
+- **Hosts can supply their own agent tools.** An application embedding MandoCode can register
+  functions of its own alongside the built-in ones, so capabilities that only the host can provide —
+  its own windows, panes, or other sessions — are available to the model without changing the
+  engine. Tool registration survives model switches and settings changes, so a host attaches its
+  tools once.
+- **Conversations can be compacted on demand.** A long session can be condensed deliberately rather
+  than waiting for the context window to force the issue, keeping the thread of the work while
+  recovering the room to continue it.
+- **Hosts can watch shell commands run.** A host may attach an optional command output sink and
+  receive each `execute_command` as it happens — the command and its working directory when it
+  starts, every line of output as it arrives, and the exit code or the reason it was killed. The
+  sink is observational only: it cannot change or block a command, exceptions thrown by it are
+  swallowed, and nothing about the command's execution or the output the model receives changes
+  when one is attached. It deliberately sees output past the 5000-character cap applied to the
+  model's copy, since that cap protects model context and a host display has its own scrollback.
+  The CLI attaches no sink and behaves exactly as before.
+- **Durable workflow planning.** Each plan step moves through a Microsoft Agent Framework workflow
+  with checkpointed run state. `/plan`, `/plan-resume`, and `/plan-discard` inspect and control
+  unfinished work without replaying completed steps.
+- **Deterministic `/plan <goal>`.** The command uses a proposal-only model call with no access to
+  normal project tools. Providers that cannot honor forced tool choice fall back to constrained
+  JSON and finally to a safe one-step proposal rather than silently ignoring the command.
+- **Retry and replan after failure.** A failed step can be retried with revised instructions,
+  skipped, used as the starting point for a replacement suffix, or used to cancel the plan.
 
-### Validation
+### Test coverage
 733/733 tests passing on both .NET 8 and .NET 10. Coverage includes workflow topology,
 checkpoint storage, resume context, retry behavior, plan revision, semantic step outcomes, proposal
 handoff, input handling, scoped directory references, bounded tool results, and version labels.
@@ -144,17 +168,6 @@ sink pins the properties a host display depends on: the full lifecycle is report
 reads as a failure rather than a kill, a bare `cd` produces no report at all, output past the
 model's truncation cap still reaches the sink, and a sink that throws on every call leaves the
 command running and reporting normally.
-
-### Internal
-- **Moved AI orchestration from Semantic Kernel to Microsoft Agent Framework.** The chat layer now
-  uses the framework's agent and tool abstractions, while plan execution uses its workflow runtime.
-  Existing models, tools, and approval prompts remain in place; the change provides the durable
-  plan execution and recovery described above.
-- **Excluded OllamaSharp's source generator from the build.** The generator ships built against
-  Roslyn 5.6, which is newer than the compiler in current Visual Studio and .NET SDK releases,
-  so loading it failed the build with CS9057 on developer machines while floating CI runners
-  stayed green. It only generates code for `[OllamaTool]`-annotated types, which this project
-  does not use, so excluding it costs nothing.
 
 ## [0.14.3] - 2026-07-28
 
