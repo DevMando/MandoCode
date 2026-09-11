@@ -46,6 +46,18 @@ you to choose or configure.
   frameworks run the same suite, Desktop has its own host-level coverage, and the approval boundary
   remains in front of every revised plan and file change.
 
+### New & changed slash commands
+| Command | Status | Description |
+|---|---|---|
+| `/plan <goal>` | New | Force a plan for a goal, or show an unfinished one. Uses a proposal-only model call with no access to project tools, so it cannot wander off and start working instead. |
+| `/plan-resume` | New | Continue an unfinished plan where it left off, without replaying completed steps. |
+| `/plan-discard` | New | Forget an unfinished plan. |
+| `/compact` | New | Compress the conversation into a recap and keep going. Unlike `/clear`, the thread of the work survives. |
+| `/config` | Updated | `planner` and `plannerEngine` are retired — the workflow planner is always on. `strictPlanVerification` is gone with the verifier it controlled. |
+
+MandoCode also notices an unfinished plan at startup and offers Resume or Discard, so recovering
+after a crash or a closed terminal does not require remembering a command.
+
 ### Fixed
 - **Long plans no longer stall when the host stops reading progress.** If the interface exited or
   errored while a plan was running, progress reporting could block and the run would hang with no
@@ -112,6 +124,13 @@ you to choose or configure.
 - **Targets .NET 8 and .NET 10.** The published package carries both, and NuGet selects the match
   for your machine at install time. `net10.0` is listed first, so it is the default target for
   Visual Studio F5 and for `dotnet run -f`.
+- **The `planner` and `plannerEngine` settings are retired.** The workflow planner is the only
+  execution path now, so there is nothing to select. Setting either through `/config` reports that
+  plainly rather than accepting a value it would then ignore. Existing config files carrying them
+  are not an error; the keys are simply no longer read.
+- **The startup banner tells builds apart.** The version under the banner now keeps a prerelease
+  tag, so `v0.16.0-rc.1` no longer displays as plain `v0.16.0`. Previously a test build and the
+  release it was cut from looked identical, which is exactly when a stale binary is hardest to spot.
 - **Dependencies updated to current releases**, including Model Context Protocol 2.2.0 and
   YamlDotNet 18.1.0. NAudio stays on 2.2.1: version 3 raised its floor to .NET 9 and would have
   dropped .NET 8 users.
@@ -138,9 +157,11 @@ you to choose or configure.
   its own windows, panes, or other sessions — are available to the model without changing the
   engine. Tool registration survives model switches and settings changes, so a host attaches its
   tools once.
-- **Conversations can be compacted on demand.** A long session can be condensed deliberately rather
-  than waiting for the context window to force the issue, keeping the thread of the work while
-  recovering the room to continue it.
+- **Conversations can be compacted on demand, with `/compact`.** A long session can be condensed
+  deliberately rather than waiting for the context window to force the issue, keeping the thread of
+  the work while recovering the room to continue it. It is the middle option that did not exist
+  before: `/clear` wipes context entirely and starts fresh, while `/compact` replaces it with a
+  recap and carries on. Your visible transcript is untouched either way.
 - **Hosts can watch shell commands run.** A host may attach an optional command output sink and
   receive each `execute_command` as it happens — the command and its working directory when it
   starts, every line of output as it arrives, and the exit code or the reason it was killed. The
