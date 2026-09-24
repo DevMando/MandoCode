@@ -225,13 +225,21 @@ public static class MarkdownHtmlRenderer
         var blocks = new List<IRenderable>();
         var inlineBuffer = new StringBuilder();
 
+        // A loose item's <p> sits between whitespace-only text nodes (Markdig's own newlines). Kept,
+        // they lead the item — its text drops below its number — and trail it as a blank line. Only
+        // the ends are trimmed: whitespace between inline elements is real spacing.
+        void TrimInlineEnd()
+        {
+            var end = inlineBuffer.Length;
+            while (end > 0 && char.IsWhiteSpace(inlineBuffer[end - 1])) end--;
+            inlineBuffer.Length = end;
+        }
+
         void FlushInline()
         {
-            if (inlineBuffer.Length > 0)
-            {
-                blocks.Add(new Markup(inlineBuffer.ToString()));
-                inlineBuffer.Clear();
-            }
+            var text = inlineBuffer.ToString().Trim();
+            inlineBuffer.Clear();
+            if (text.Length > 0) blocks.Add(new Markup(text));
         }
 
         foreach (var child in li.ChildNodes)
@@ -244,6 +252,7 @@ public static class MarkdownHtmlRenderer
             if (child.NodeType == HtmlNodeType.Element &&
                 string.Equals(child.Name, "p", StringComparison.OrdinalIgnoreCase))
             {
+                TrimInlineEnd();
                 if (inlineBuffer.Length > 0) inlineBuffer.Append("\n\n");
                 AppendInlines(child, inlineBuffer);
             }

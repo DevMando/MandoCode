@@ -96,6 +96,49 @@ public class MarkdownHtmlRendererTests
         Assert.Contains("### Sources", rendered);
     }
 
+    [Fact]
+    public void Loose_ordered_list_keeps_each_number_on_its_items_first_line()
+    {
+        // Blank lines between items make the list "loose": Markdig wraps each item's text in <p>,
+        // with whitespace-only text around it. That whitespace used to lead the item, pushing the
+        // text onto the line below its number and leaving a blank line after every item.
+        var markdown = "1. **Record inflows** — ETF money.\n\n2. **Upgrades** — Firedancer.\n\n3. **Growth** — more volume.";
+        var lines = RenderPlain(MarkdownHtmlRenderer.BuildRenderable(markdown))
+            .Split('\n').Select(l => l.TrimEnd()).ToList();
+
+        Assert.Contains(lines, l => l.StartsWith("1. Record inflows"));
+        Assert.Contains(lines, l => l.StartsWith("2. Upgrades"));
+        Assert.Contains(lines, l => l.StartsWith("3. Growth"));
+        Assert.DoesNotContain(lines, l => l.Trim() is "1." or "2." or "3.");
+    }
+
+    [Fact]
+    public void Loose_list_item_with_two_paragraphs_keeps_the_break_between_them()
+    {
+        var markdown = "1. First paragraph.\n\n   Second paragraph.\n\n2. Next item.";
+        var lines = RenderPlain(MarkdownHtmlRenderer.BuildRenderable(markdown))
+            .Split('\n').Select(l => l.TrimEnd()).ToList();
+
+        var first = lines.FindIndex(l => l.StartsWith("1. First paragraph."));
+        Assert.True(first >= 0);
+        Assert.Equal("", lines[first + 1].Trim());
+        Assert.Contains("Second paragraph.", lines[first + 2]);
+    }
+
+    private static string RenderPlain(IRenderable renderable)
+    {
+        var writer = new StringWriter();
+        var console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(writer),
+        });
+        console.Profile.Width = 100;
+        console.Write(renderable);
+        return writer.ToString().Replace("\r\n", "\n");
+    }
+
     private static string RenderToString(IRenderable renderable)
     {
         var writer = new StringWriter();
