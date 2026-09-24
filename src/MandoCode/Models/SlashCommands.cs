@@ -26,6 +26,7 @@ public static class SlashCommands
         { "/plan-discard", "Forget an unfinished plan" },
         { "/compact", "Compress conversation context into a recap (keeps this transcript)" },
         { "/clear", "Wipe all conversation context and start fresh" },
+        { "/history", "Browse this session's conversation, filtered as you type" },
         { "/learn", "Learn about LLMs and local AI models" },
         { "/retry", "Retry Ollama connection" },
         { "/music", "Play music" },

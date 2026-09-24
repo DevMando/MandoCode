@@ -40,6 +40,12 @@
     [Parameter] public IReadOnlyList<Option> Options { get; set; } = Array.Empty<Option>();
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
 
+    /// <summary>Scroll keys for a preview shown above the menu. The menu keeps focus so the arrows
+    /// still choose; PageUp/PageDown/Home/End arrive here as a <see cref="ScrollKey"/> instead.</summary>
+    [Parameter] public EventCallback<ScrollKey> OnScroll { get; set; }
+
+    public enum ScrollKey { PageUp, PageDown, Home, End }
+
     private int _focusedIndex;
 
     // Accept both naming conventions, mirroring RazorConsole's own Select component:
@@ -56,8 +62,23 @@
         key.Equals("Enter", StringComparison.OrdinalIgnoreCase) ||
         key.Equals("Return", StringComparison.OrdinalIgnoreCase);
 
+    private static ScrollKey? AsScrollKey(string key) => key switch
+    {
+        _ when key.Equals("PageUp", StringComparison.OrdinalIgnoreCase) => ScrollKey.PageUp,
+        _ when key.Equals("PageDown", StringComparison.OrdinalIgnoreCase) => ScrollKey.PageDown,
+        _ when key.Equals("Home", StringComparison.OrdinalIgnoreCase) => ScrollKey.Home,
+        _ when key.Equals("End", StringComparison.OrdinalIgnoreCase) => ScrollKey.End,
+        _ => null,
+    };
+
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (AsScrollKey(e.Key) is { } scroll)
+        {
+            await OnScroll.InvokeAsync(scroll);
+            return;
+        }
+
         if (Options.Count == 0) return;
 
         if (IsUp(e.Key))

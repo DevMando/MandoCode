@@ -21,6 +21,13 @@ public class SpinnerService
     // streamed updates are signal worth keeping; the static initial activity isn't.
     private volatile bool _activityWasUpdated;
 
+    // The reply streaming right now, shown as its last few lines between the activity line and the
+    // spinner. Read by the animation loop each frame, which is what throttles the redraws.
+    private volatile string? _livePreview;
+
+    /// <summary>How many lines of a streaming reply the preview shows.</summary>
+    public const int PreviewLines = 5;
+
     // How often to rotate the random "fun" message so long waits don't feel frozen.
     private static readonly TimeSpan MessageRotationInterval = TimeSpan.FromSeconds(15);
 
@@ -55,6 +62,10 @@ public class SpinnerService
                 var i = 0;
                 var lastRenderedActivity = activity;
                 var activityLineReserved = hasActivity;
+                // The preview sits directly above the spinner. Its region only grows while spinning
+                // (a shrinking reply is padded with blank rows) so every redraw moves the same rows.
+                string? lastRenderedPreview = null;
+                var drawnPreview = 0;
                 try
                 {
                     while (!token.IsCancellationRequested)
@@ -77,8 +88,16 @@ public class SpinnerService
                             // Move up to the activity line, clear it, rewrite, drop back down.
                             // [A = up one, \r = col 0, [2K = clear line, [B = down one.
                             var redraw = currentActivity ?? string.Empty;
-                            Console.Write($"\r[2K[A\r[2K  [2m{redraw}[0m[B\r");
+                            var up = 1 + drawnPreview;
+                            Console.Write($"\r[2K[{up}A\r[2K  [2m{redraw}[0m[{up}B\r");
                             lastRenderedActivity = currentActivity;
+                        }
+
+                        var currentPreview = _livePreview;
+                        if (!ReferenceEquals(currentPreview, lastRenderedPreview))
+                        {
+                            drawnPreview = DrawPreview(currentPreview, drawnPreview);
+                            lastRenderedPreview = currentPreview;
                         }
 
                         var frame = frames[i++ % frames.Length];
@@ -100,6 +119,8 @@ public class SpinnerService
                 {
                     // Clear the spinner line - animation is ephemeral, never preserved.
                     Console.Write($"\r[2K");
+                    for (var row = 0; row < drawnPreview; row++)
+                        Console.Write($"[A[2K");
                     if (activityLineReserved)
                     {
                         // Move up to the activity line and clear it.
@@ -128,6 +149,50 @@ public class SpinnerService
     public void UpdateActivity(string? activity)
     {
         _liveActivity = activity;
+    }
+
+    /// <summary>
+    /// Shows the reply streaming right now as its last <see cref="PreviewLines"/> lines above the
+    /// spinner; null clears it. Safe to call from any thread and as often as chunks arrive: the
+    /// spinner picks up only the newest text on its next frame. The preview is never kept — it is
+    /// cleared with the spinner, and the finished reply prints as rendered markdown instead.
+    /// </summary>
+    public void UpdatePreview(string? text)
+    {
+        _livePreview = text;
+    }
+
+    /// <summary>
+    /// Redraws the preview rows above the spinner line, with the cursor starting and ending at the
+    /// start of the spinner line. Returns the region's new height.
+    /// </summary>
+    private static int DrawPreview(string? text, int drawn)
+    {
+        // Two cells of indent, and a spare column so a full-width row can't wrap on terminals that
+        // wrap at the last column.
+        var width = Math.Max(20, SafeWindowWidth() - 3);
+        var lines = ReplyPreview.Tail(text, width, PreviewLines);
+        var height = Math.Max(drawn, lines.Count);
+        if (height == 0) return 0;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"\r[2K");
+        if (drawn > 0) sb.Append($"[{drawn}A");
+        var blank = height - lines.Count;
+        for (var row = 0; row < height; row++)
+        {
+            sb.Append($"\r[2K");
+            if (row >= blank) sb.Append($"  [2m{lines[row - blank]}[0m");
+            sb.Append('\n');
+        }
+        Console.Write(sb.ToString());
+        return height;
+    }
+
+    private static int SafeWindowWidth()
+    {
+        try { return Console.WindowWidth > 0 ? Console.WindowWidth : 80; }
+        catch { return 80; }
     }
 
     /// <summary>

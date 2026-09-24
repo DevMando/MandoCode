@@ -84,11 +84,17 @@ public class DiffApprovalHandler
         var deletions = diffLines.Count(l => l.LineType == DiffLineType.Removed);
         var fileName = Path.GetFileName(relativePath);
 
-        // Always show the diff so the user can see what's changing
-        RenderDiffPanel(relativePath, displayLines, additions, deletions, isNewFile);
+        // Always show the diff so the user can see what's changing. A long one that needs a decision
+        // goes in the menu's scroll view instead, so the menu isn't pushed below hundreds of lines.
+        var autoApproved = _globalWriteBypass || _approvedFiles.Contains(relativePath);
+        var scrollDiff = !autoApproved && displayLines.Count > ScrollPreviewMinLines;
+        if (scrollDiff)
+            RenderDiffSummary(relativePath, displayLines.Count, additions, deletions, isNewFile);
+        else
+            RenderDiffPanel(relativePath, displayLines, additions, deletions, isNewFile);
 
         // If globally bypassed or this file is already approved, auto-approve without prompting
-        if (_globalWriteBypass || _approvedFiles.Contains(relativePath))
+        if (autoApproved)
         {
             AnsiConsole.MarkupLine($"[green]\u2713 Auto-approved[/]");
             AnsiConsole.WriteLine();
@@ -126,7 +132,9 @@ public class DiffApprovalHandler
         DiffApprovalResult result;
         using (_keyCoordinator.Suppress())
         {
-            var approvalChoice = await _approvalSelect.RequestAsync(choices);
+            var approvalChoice = await _approvalSelect.RequestAsync(choices,
+                scrollDiff ? BuildDiffPreview(displayLines) : null,
+                scrollDiff ? $"Diff: {relativePath}" : null);
 
             if (approvalChoice == ApproveLabel)
             {
@@ -287,6 +295,7 @@ public class DiffApprovalHandler
 
         var fileName = Path.GetFileName(relativePath);
         var isFolder = existingContent != null && existingContent.StartsWith("Folder:");
+        List<ApprovalSelectCoordinator.PreviewLine>? deletePreview = null;
 
         if (isFolder)
         {
@@ -331,7 +340,15 @@ public class DiffApprovalHandler
             var deletions = diffLines.Count;
             var displayLines = DiffService.CollapseContext(diffLines, 3);
 
-            RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
+            if (!_globalWriteBypass && displayLines.Count > ScrollPreviewMinLines)
+            {
+                RenderDiffSummary(relativePath, displayLines.Count, 0, deletions, false);
+                deletePreview = BuildDiffPreview(displayLines);
+            }
+            else
+            {
+                RenderDiffPanel(relativePath, displayLines, 0, deletions, false);
+            }
             AnsiConsole.MarkupLine($"[red]This will DELETE the file: {Spectre.Console.Markup.Escape(relativePath)}[/]");
             Console.WriteLine();
         }
@@ -361,7 +378,8 @@ public class DiffApprovalHandler
         DiffApprovalResult result;
         using (_keyCoordinator.Suppress())
         {
-            var approvalChoice = await _approvalSelect.RequestAsync(delChoices);
+            var approvalChoice = await _approvalSelect.RequestAsync(delChoices,
+                deletePreview, deletePreview != null ? $"Delete: {relativePath}" : null);
 
             if (approvalChoice == ApproveDeletionLabel)
             {
@@ -403,6 +421,44 @@ public class DiffApprovalHandler
         _spinner.Start();
 
         return result;
+    }
+
+    /// <summary>A diff longer than this goes in the approval menu's scroll view rather than
+    /// scrollback, when there is a decision to make.</summary>
+    private const int ScrollPreviewMinLines = 30;
+
+    private static readonly Color AddedColor = new(135, 206, 250);
+
+    /// <summary>The diff as plain preview lines, colored like <see cref="RenderDiffPanel"/>.</summary>
+    private static List<ApprovalSelectCoordinator.PreviewLine> BuildDiffPreview(List<DiffLine> displayLines)
+    {
+        var lines = new List<ApprovalSelectCoordinator.PreviewLine>(displayLines.Count);
+        foreach (var line in displayLines)
+        {
+            lines.Add(line.LineType switch
+            {
+                DiffLineType.Removed => new(
+                    $"{(line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ")} - {line.Content}", Color.Red),
+                DiffLineType.Added => new(
+                    $"{(line.NewLineNumber.HasValue ? $"{line.NewLineNumber,4}" : "    ")} + {line.Content}", AddedColor),
+                _ => new(
+                    $"{(line.OldLineNumber.HasValue ? $"{line.OldLineNumber,4}" : "    ")}   {line.Content}",
+                    Color.Grey, Decoration.Dim),
+            });
+        }
+        return lines;
+    }
+
+    /// <summary>The one line a scrolled diff leaves in scrollback: which file, and how much changed.</summary>
+    private void RenderDiffSummary(string relativePath, int lineCount, int additions, int deletions, bool isNewFile)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_projectRoot.ProjectRoot, relativePath));
+        var fileUri = new Uri(fullPath).AbsoluteUri;
+        var summary = $"{deletions} deletion(s), {additions} addition(s){(isNewFile ? " (new file)" : "")}";
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine(
+            $"[deepskyblue1]Diff: [link={fileUri}]{Markup.Escape(relativePath)}[/][/] " +
+            $"[dim]· {Markup.Escape(summary)} · {lineCount} lines, shown in the scroll view below[/]");
     }
 
     private void RenderDiffPanel(string relativePath, List<DiffLine> displayLines, int additions, int deletions, bool isNewFile)
