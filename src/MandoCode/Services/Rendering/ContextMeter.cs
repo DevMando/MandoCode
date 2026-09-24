@@ -11,9 +11,14 @@ public static class ContextMeter
 {
     public enum Level { Ok, Warm, Full }
 
-    /// <param name="Bar">Filled/empty cells, or empty when the window is unknown.</param>
+    /// <param name="Filled">The used part of the bar, or empty when the window is unknown.</param>
+    /// <param name="Empty">The unused part, kept separate so it can be drawn without the level color:
+    /// in one color, shaded cells read as nearly full on bright or glowing themes.</param>
     /// <param name="Label">"18k / 32k (56%)", or "~18k tokens in context" without a window.</param>
-    public sealed record Reading(string Bar, string Label, Level Level);
+    public sealed record Reading(string Filled, string Empty, string Label, Level Level)
+    {
+        public string Bar => Filled + Empty;
+    }
 
     public const int BarCells = 20;
 
@@ -24,14 +29,17 @@ public static class ContextMeter
     {
         var used = TokenTrackingService.FormatTokenCount(Math.Max(0, usedTokens));
         if (windowTokens <= 0)
-            return new Reading(string.Empty, $"~{used} tokens in context", Level.Ok);
+            return new Reading(string.Empty, string.Empty, $"~{used} tokens in context", Level.Ok);
 
         var fraction = Math.Clamp((double)usedTokens / windowTokens, 0, 1);
         var filled = (int)Math.Round(fraction * BarCells);
         var percent = (int)Math.Round(fraction * 100);
         var level = percent >= 85 ? Level.Full : percent >= 60 ? Level.Warm : Level.Ok;
-        var bar = new string('█', filled) + new string('░', BarCells - filled);
-        return new Reading(bar, $"{used} / {TokenTrackingService.FormatTokenCount(windowTokens)} ({percent}%)", level);
+        return new Reading(
+            new string('█', filled),
+            new string('░', BarCells - filled),
+            $"{used} / {TokenTrackingService.FormatTokenCount(windowTokens)} ({percent}%)",
+            level);
     }
 
     /// <summary>The window this app knows for <paramref name="modelTag"/>: the configured context

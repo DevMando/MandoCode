@@ -11,7 +11,8 @@ public class ContextMeterTests
         var reading = ContextMeter.Read(8_000, 16_000);
 
         Assert.Equal(ContextMeter.BarCells, reading.Bar.Length);
-        Assert.Equal(10, reading.Bar.Count(c => c == '█'));
+        Assert.Equal(new string('█', 10), reading.Filled);
+        Assert.Equal(new string('░', 10), reading.Empty);
         Assert.Equal("8k / 16k (50%)", reading.Label);
         Assert.Equal(ContextMeter.Level.Ok, reading.Level);
     }
@@ -29,7 +30,8 @@ public class ContextMeterTests
     public void Read_ClampsPastAFullWindow()
     {
         var reading = ContextMeter.Read(40_000, 16_000);
-        Assert.Equal(new string('█', ContextMeter.BarCells), reading.Bar);
+        Assert.Equal(new string('█', ContextMeter.BarCells), reading.Filled);
+        Assert.Equal(string.Empty, reading.Empty);
         Assert.EndsWith("(100%)", reading.Label);
     }
 

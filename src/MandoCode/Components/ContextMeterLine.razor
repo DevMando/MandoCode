@@ -1,15 +1,23 @@
 @using Spectre.Console
 @using RazorConsole.Components
 @using MandoCode.Services
+@using RazorConsole.Core.Renderables
 @using Markup = RazorConsole.Components.Markup
 
 @* How full the context window is, one line above the prompt. Only rendered while the prompt is
    waiting (App.razor gates it with the prompt itself), when nothing prints to scrollback, so a
-   VDOM line here can't collide with imperative output. Same three-Markup shape every render. *@
+   VDOM line here can't collide with imperative output. Same four-Markup shape every render.
+
+   Only the used part carries the level color; the unused part is a darker grey, so the bar's
+   length reads by contrast rather than by shade alone. The two halves sit in a gapless FlexBox row:
+   Columns would put a space between them and split the bar. *@
 
 <Columns>
     <Markup Content="Context" Foreground="Color.Grey" Decoration="Decoration.Dim" />
-    <Markup Content="@Reading.Bar" Foreground="@BarColor" />
+    <FlexBox Direction="FlexDirection.Row" Gap="0" Width="@Math.Max(1, Reading.Bar.Length)">
+        <Markup Content="@Reading.Filled" Foreground="@BarColor" />
+        <Markup Content="@Reading.Empty" Foreground="Color.Grey42" />
+    </FlexBox>
     <Markup Content="@Reading.Label" Foreground="Color.Grey" Decoration="Decoration.Dim" />
 </Columns>
 
