@@ -2,6 +2,20 @@
 
 All notable changes to MandoCode will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Replies read in the order they happened.** When the model says something before it uses a
+  tool ("let me check the docs…"), the CLI now prints that as its own block above the tool's line,
+  and the answer that follows as a second block. Before, everything waited until the end and came
+  out as one merged block. Auto-continued turns also print as each one finishes. Apps built on the
+  engine, like MandoCode Desktop, can now follow a reply as it streams.
+
+### Fixed
+- **Numbered lists keep each number beside its text.** When a model left blank lines between list
+  items, every number sat alone on its own line with the text underneath and an empty line after
+  it. Items now render on one line, as intended.
+
 ## [0.15.0] - 2026-09-10
 
 **MandoCode's AI engine now runs on Microsoft Agent Framework.** The chat layer, its tools, and
