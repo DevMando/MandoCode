@@ -96,4 +96,66 @@ public class StreamBufferingTests
                 onChunk: () => cts.Cancel(),   // cancel after the first chunk
                 cancellationToken: cts.Token));
     }
+
+    // Shaped like the OllamaSharp connector's last chunk: the done payload rides on the chat update.
+    private static AgentResponseUpdate DoneChunk(long evalDurationNs, string doneReason) => new()
+    {
+        RawRepresentation = new ChatResponseUpdate
+        {
+            RawRepresentation = new OllamaSharp.Models.Chat.ChatDoneResponseStream
+            {
+                Done = true,
+                DoneReason = doneReason,
+                EvalDuration = evalDurationNs,
+            },
+        },
+    };
+
+    [Fact]
+    public async Task FrameworkAccumulator_KeepsNoRawRepresentation()
+    {
+        // Why BufferAsync attaches the done chunk itself: without it, a streamed reply had no
+        // timing (no tok/s) and no stop reason (no cut-off notice).
+        var plain = await ToStream(Chunk("hi"), DoneChunk(1_000_000_000, "stop")).ToAgentResponseAsync();
+        Assert.Null(DoneStreamLocator.Find(plain));
+    }
+
+    [Fact]
+    public async Task BufferAsync_KeepsTheDoneChunk_ForTimingAndStopReason()
+    {
+        var result = await StreamBuffering.BufferAsync(
+            ToStream(Chunk("cut "), Chunk("off"), DoneChunk(2_000_000_000, "length")),
+            onChunk: () => { });
+
+        var done = DoneStreamLocator.Find(result);
+        Assert.NotNull(done);
+        Assert.Equal(2_000_000_000, done!.EvalDuration);
+        Assert.Equal("length", done.DoneReason);
+        Assert.Equal("cut off", result.Text);
+    }
+
+    [Fact]
+    public async Task BufferAsync_KeepsTheLastDoneChunk_WhenToolRoundsMakeSeveral()
+    {
+        var result = await StreamBuffering.BufferAsync(
+            ToStream(Chunk("checking"), DoneChunk(1_000_000_000, "stop"), Chunk("answer"), DoneChunk(3_000_000_000, "stop")),
+            onChunk: () => { });
+
+        Assert.Equal(3_000_000_000, DoneStreamLocator.Find(result)!.EvalDuration);
+    }
+
+    [Fact]
+    public async Task BufferAsync_WithoutADoneChunk_LeavesNoRawRepresentation()
+    {
+        var result = await StreamBuffering.BufferAsync(ToStream(Chunk("hi")), onChunk: () => { });
+        Assert.Null(DoneStreamLocator.Find(result));
+    }
+
+    [Fact]
+    public void Locator_ReadsTheNonStreamingShape()
+    {
+        var done = new OllamaSharp.Models.Chat.ChatDoneResponseStream { Done = true, EvalDuration = 5 };
+        var response = new AgentResponse(new ChatResponse { RawRepresentation = done });
+        Assert.Same(done, DoneStreamLocator.Find(response));
+    }
 }

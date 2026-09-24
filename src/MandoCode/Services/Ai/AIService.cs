@@ -1369,9 +1369,7 @@ public class AIService
 
                     ExtractAndRecordAgentTokens(response, tokenLabel);
 
-                    var doneStream = response.RawRepresentation is Microsoft.Extensions.AI.ChatResponse chatResponse
-                        ? chatResponse.RawRepresentation as OllamaSharp.Models.Chat.ChatDoneResponseStream
-                        : null;
+                    var doneStream = DoneStreamLocator.Find(response);
 
                     return new AgentTurnResult(response.Text ?? "", response.Messages.ToList(), doneStream);
                 }
@@ -1516,9 +1514,7 @@ public class AIService
             if (promptTokens <= 0 && completionTokens <= 0) return;
 
             double? generationSeconds = null;
-            if (response.RawRepresentation is Microsoft.Extensions.AI.ChatResponse chatResponse
-                && chatResponse.RawRepresentation is OllamaSharp.Models.Chat.ChatDoneResponseStream done
-                && done.EvalDuration > 0)
+            if (DoneStreamLocator.Find(response) is { EvalDuration: > 0 } done)
             {
                 generationSeconds = done.EvalDuration / 1_000_000_000.0;
             }
