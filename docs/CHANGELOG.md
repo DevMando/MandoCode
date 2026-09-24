@@ -12,6 +12,10 @@ All notable changes to MandoCode will be documented in this file.
   engine, like MandoCode Desktop, can now follow a reply as it streams.
 
 ### Fixed
+- **Tokens per second is back, and cut-off replies say so again.** Since streaming became the
+  default, the summary after each reply had lost its tok/s figure, and a reply that hit the token
+  limit ended without the notice saying it was cut off. Both are restored, and MandoCode Desktop's
+  reply summary gets its speed back too.
 - **Numbered lists keep each number beside its text.** When a model left blank lines between list
   items, every number sat alone on its own line with the text underneath and an empty line after
   it. Items now render on one line, as intended.
