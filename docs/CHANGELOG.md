@@ -31,6 +31,12 @@ All notable changes to MandoCode will be documented in this file.
 - **Numbered lists keep each number beside its text.** When a model left blank lines between list
   items, every number sat alone on its own line with the text underneath and an empty line after
   it. Items now render on one line, as intended.
+- **Your context window size sticks.** Switching models with `/model` or `/setup` used to reset
+  the context window to that model's recommended size, quietly undoing a size you'd picked. Now
+  a size you choose stays until you change it, and the CLI says when it kept it. `/config` also
+  gained a Context Window step, so you can change the size without remembering the
+  `/config set contextLength` command. Choose "Automatic", or run `/config set contextLength auto`,
+  to go back to sizing it per model.
 
 ## [0.15.0] - 2026-09-10
 

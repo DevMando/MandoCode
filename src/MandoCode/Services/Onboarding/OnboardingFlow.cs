@@ -162,17 +162,21 @@ public sealed class OnboardingFlow
             return new FlowResult(Connected: probe.Ok, Skipped: true, FinalModel: null);
         }
 
+        var previousModel = config.GetEffectiveModelName();
         config.ModelName = pickedModel;
         config.ModelPath = null;
 
         // Size the local context window to the hardware tier the model choice implies —
-        // the user just told us what their machine can handle by picking this tag.
-        // Cloud picks return 0 (context is managed server-side) and leave config alone.
-        var recommendedCtx = MandoCodeConfig.RecommendedContextLength(pickedModel);
-        if (recommendedCtx > 0 && recommendedCtx != config.ContextLength)
+        // the user just told us what their machine can handle by picking this tag — unless
+        // they already chose a window themselves. Cloud picks leave config alone.
+        switch (config.ApplyRecommendedContextLength(previousModel, pickedModel))
         {
-            config.ContextLength = recommendedCtx;
-            AnsiConsole.MarkupLine($"[dim]Context window sized to {recommendedCtx / 1024}k tokens for this model tier (adjust: mandocode --config set contextLength <n>).[/]");
+            case MandoCodeConfig.ContextWindowChange.Resized:
+                AnsiConsole.MarkupLine($"[dim]Context window sized to {config.ContextLength / 1024}k tokens for this model tier (adjust: mandocode --config set contextLength <n>).[/]");
+                break;
+            case MandoCodeConfig.ContextWindowChange.Kept:
+                AnsiConsole.MarkupLine($"[dim]Kept your {MandoCodeConfig.ContextLengthLabel(config.ContextLength)} context window.[/]");
+                break;
         }
 
         // Cloud-model auth check — pulled cloud models stick around in /api/tags after

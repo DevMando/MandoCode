@@ -74,15 +74,25 @@ public static class ConfigKeySetter
             case "contextlength":
             case "contextwindow":
             case "numctx":
+                if (value.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    config.ContextLengthSetByUser = false;
+                    var recommended = MandoCodeConfig.RecommendedContextLength(config.GetEffectiveModelName());
+                    if (recommended > 0) config.ContextLength = recommended;
+                    return new(true, recommended > 0
+                        ? $"✓ Context window is automatic again: {recommended:N0} tokens for this model, resized when you switch models"
+                        : "✓ Context window is automatic again (this cloud model manages its own)", ApplyScope.Immediate);
+                }
                 if (int.TryParse(value, out var ctxLen) && MandoCodeConfig.IsValidContextLength(ctxLen))
                 {
                     config.ContextLength = ctxLen;
+                    config.ContextLengthSetByUser = true;
                     var msg = ctxLen == 0
                         ? "✓ Context length cleared — Ollama's own default applies"
                         : $"✓ Set local context window to: {ctxLen:N0} tokens";
                     return new(true, msg + "\n  Sent with every request as num_ctx — applies from your next message, no restart needed.", ApplyScope.Immediate);
                 }
-                return Fail($"Error: Context length must be 0 (Ollama default) or between {MandoCodeConfig.MinContextLength:N0} and {MandoCodeConfig.MaxContextLength:N0} tokens");
+                return Fail($"Error: Context length must be auto, 0 (Ollama default), or between {MandoCodeConfig.MinContextLength:N0} and {MandoCodeConfig.MaxContextLength:N0} tokens");
 
             case "modelresponsetimeout":
             case "modelresponsetimeoutseconds":
@@ -244,7 +254,7 @@ public static class ConfigKeySetter
         endpoint             {config.OllamaEndpoint}
         temperature          {config.Temperature}  (0.0-1.0)
         maxTokens            {config.MaxTokens}  (max response length, {MandoCodeConfig.MinMaxTokens}-{MandoCodeConfig.MaxMaxTokens})
-        contextLength        {(config.ContextLength == 0 ? "Ollama default" : config.ContextLength.ToString())}  (local window, 0 or {MandoCodeConfig.MinContextLength}-{MandoCodeConfig.MaxContextLength}; applied when MandoCode starts Ollama)
+        contextLength        {(config.ContextLength == 0 ? "Ollama default" : config.ContextLength.ToString())}{(config.ContextLengthSetByUser ? "" : " auto")}  (local window: auto, 0, or {MandoCodeConfig.MinContextLength}-{MandoCodeConfig.MaxContextLength}; auto resizes when you switch models)
         modelResponseTimeout {config.ModelResponseTimeoutSeconds}s  (stall watchdog, {MandoCodeConfig.MinModelResponseTimeoutSeconds}-{MandoCodeConfig.MaxModelResponseTimeoutSeconds})
         streaming            {config.ResponseStreaming}  (off / cloud / all — which models stream w/ watchdog heartbeat)
         timeout              {config.RequestTimeoutMinutes} min  (per-request ceiling, {MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes})

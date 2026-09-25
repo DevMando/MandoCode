@@ -16,7 +16,7 @@ public static class SlashCommands
         { "/help", "Show this help message" },
         { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
         { "/model", "Quick switch — pick a different model" },
-        { "/config", "Adjust settings — guided wizard (model, temperature, tokens, timeout)" },
+        { "/config", "Adjust settings — guided wizard (model, temperature, tokens, context window, timeout)" },
         { "/config set", "Set one setting inline (usage: /config set modelResponseTimeout 300)" },
         { "/copy", "Copy last AI response to clipboard" },
         { "/copy-code", "Copy code blocks from last AI response" },

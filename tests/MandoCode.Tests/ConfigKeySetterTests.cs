@@ -90,6 +90,33 @@ public class ConfigKeySetterTests
         Assert.True(result.Ok);
         Assert.Equal(0, config.ContextLength);
         Assert.Contains("Ollama's own default", result.Message);
+        Assert.True(config.ContextLengthSetByUser);
+    }
+
+    [Fact]
+    public void ContextLength_Number_MarksTheWindowAsTheUsersChoice()
+    {
+        var config = new MandoCodeConfig { ModelName = "qwen2.5:0.5b" };
+
+        Assert.True(ConfigKeySetter.TrySet(config, "contextLength", "32768").Ok);
+
+        Assert.Equal(32768, config.ContextLength);
+        Assert.True(config.ContextLengthSetByUser);
+        Assert.DoesNotContain("32768 auto", ConfigKeySetter.DescribeKeys(config));
+        Assert.Contains("16384 auto", ConfigKeySetter.DescribeKeys(new MandoCodeConfig()));
+    }
+
+    [Fact]
+    public void ContextLength_Auto_HandsTheWindowBack_AtTheModelsTier()
+    {
+        var config = new MandoCodeConfig { ModelName = "qwen2.5-coder:14b", ContextLength = 65536, ContextLengthSetByUser = true };
+
+        var result = ConfigKeySetter.TrySet(config, "contextLength", "auto");
+
+        Assert.True(result.Ok);
+        Assert.False(config.ContextLengthSetByUser);
+        Assert.Equal(32768, config.ContextLength);
+        Assert.Contains("automatic", result.Message);
     }
 
     [Fact]

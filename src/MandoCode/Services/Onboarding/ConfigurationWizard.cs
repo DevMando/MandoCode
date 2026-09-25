@@ -46,16 +46,19 @@ public class ConfigurationWizard
         // Step 4: Max Tokens
         config.MaxTokens = ConfigureMaxTokens(config.MaxTokens);
 
-        // Step 5: Request Timeout
+        // Step 5: Context Window (local models only)
+        ConfigureContextWindow(config);
+
+        // Step 6: Request Timeout
         config.RequestTimeoutMinutes = ConfigureRequestTimeout(config.RequestTimeoutMinutes);
 
-        // Step 6: Ignore Directories
+        // Step 7: Ignore Directories
         config.IgnoreDirectories = ConfigureIgnoreDirectories(config.IgnoreDirectories);
 
-        // Step 7: Web Search (optional Tavily key — skippable, works without one)
+        // Step 8: Web Search (optional Tavily key — skippable, works without one)
         await ConfigureWebSearchAsync(config);
 
-        // Step 8: Save Configuration
+        // Step 9: Save Configuration
         if (ConfirmSave())
         {
             config.Save();
@@ -299,9 +302,76 @@ public class ConfigurationWizard
 
     private static string FormatK(int tokens) => tokens >= 1024 ? $"{tokens / 1024}k" : tokens.ToString();
 
+    /// <summary>
+    /// Local context window. "Automatic" follows the model's tier and resizes on model switches;
+    /// any number is the user's own choice and model switches leave it alone.
+    /// </summary>
+    public static void ConfigureContextWindow(MandoCodeConfig config)
+    {
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]5. Context Window[/]").LeftJustified());
+        AnsiConsole.WriteLine();
+
+        var model = config.GetEffectiveModelName();
+        var recommended = MandoCodeConfig.RecommendedContextLength(model);
+        if (recommended == 0)
+        {
+            AnsiConsole.MarkupLine("[dim]Cloud models manage their own context window, so there's nothing to set here.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        AnsiConsole.MarkupLine("[dim]How much conversation a local model can hold at once: your messages, its replies,[/]");
+        AnsiConsole.MarkupLine("[dim]and the files it has read. When it fills up, the oldest parts get dropped. A bigger[/]");
+        AnsiConsole.MarkupLine("[dim]window uses more memory (VRAM), so pick the largest your machine runs comfortably.[/]");
+        AnsiConsole.WriteLine();
+
+        const int auto = -1;
+        var choices = new List<int> { auto, 16384, 32768, 65536, 131072 };
+        if (config.ContextLengthSetByUser && !choices.Contains(config.ContextLength))
+            choices.Add(config.ContextLength);
+        var current = config.ContextLengthSetByUser ? config.ContextLength : auto;
+        // Spectre highlights the first item, so the current choice goes first.
+        var ordered = new[] { current }.Concat(choices.Where(c => c != current)).ToArray();
+
+        var picked = AnsiConsole.Prompt(
+            new SelectionPrompt<int>()
+                .Title("[deepskyblue1]Context window:[/]")
+                .HighlightStyle(SelectionHighlight)
+                .AddChoices(ordered)
+                .UseConverter(tokens =>
+                {
+                    var marker = tokens == current ? "  ← current" : "";
+                    return tokens switch
+                    {
+                        auto   => $"Automatic  {FormatK(recommended)} for this model, resized when you switch models{marker}",
+                        0      => $"Ollama default{marker}",
+                        16384  => $"16k        Small models, 4-6 GB VRAM or CPU{marker}",
+                        32768  => $"32k        Longer sessions, 8 GB+ VRAM{marker}",
+                        65536  => $"64k        Large projects, needs a roomy GPU{marker}",
+                        131072 => $"128k       Very large contexts, big GPU and a model that supports it{marker}",
+                        _      => $"{FormatK(tokens)}{marker}"
+                    };
+                })
+        );
+
+        if (picked == auto)
+        {
+            config.ContextLengthSetByUser = false;
+            config.ContextLength = recommended;
+            AnsiConsole.MarkupLine($"[green]✓ Context window: automatic ({FormatK(recommended)} for {Markup.Escape(model)})[/]");
+        }
+        else
+        {
+            config.ContextLengthSetByUser = true;
+            config.ContextLength = picked;
+            AnsiConsole.MarkupLine($"[green]✓ Context window set to: {MandoCodeConfig.ContextLengthLabel(picked)}[/]");
+        }
+        AnsiConsole.WriteLine();
+    }
+
     private static int ConfigureRequestTimeout(int currentTimeout)
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]5. Per-Request Timeout[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Per-Request Timeout[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]How long a single chat or plan step can run before it's cut off.[/]");
@@ -327,7 +397,7 @@ public class ConfigurationWizard
 
     private static List<string> ConfigureIgnoreDirectories(List<string> currentIgnoreDirectories)
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Ignore Directories[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]7. Ignore Directories[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Current ignore list:[/]");
@@ -387,7 +457,7 @@ public class ConfigurationWizard
     /// </summary>
     private static async Task ConfigureWebSearchAsync(MandoCodeConfig config)
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]7. Web Search[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]8. Web Search[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[dim]Web search works out of the box via DuckDuckGo — no key needed. But DuckDuckGo's[/]");
@@ -455,7 +525,7 @@ public class ConfigurationWizard
 
     private static bool ConfirmSave()
     {
-        AnsiConsole.Write(new Rule("[rgb(255,200,80)]8. Save Configuration[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[rgb(255,200,80)]9. Save Configuration[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
         return AnsiConsole.Confirm("[deepskyblue1]Save this configuration?[/]", true);

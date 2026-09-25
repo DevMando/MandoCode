@@ -118,6 +118,74 @@ public class MandoCodeConfigTests
         Assert.Equal(expected, MandoCodeConfig.RecommendedContextLength(tag));
     }
 
+    [Fact]
+    public void ModelSwitch_ResizesAnAutomaticWindow_BothWays()
+    {
+        var config = new MandoCodeConfig { ContextLength = 16384 };
+
+        Assert.Equal(MandoCodeConfig.ContextWindowChange.Resized,
+            config.ApplyRecommendedContextLength("qwen2.5:0.5b", "qwen2.5-coder:14b"));
+        Assert.Equal(32768, config.ContextLength);
+
+        Assert.Equal(MandoCodeConfig.ContextWindowChange.Resized,
+            config.ApplyRecommendedContextLength("qwen2.5-coder:14b", "qwen2.5:0.5b"));
+        Assert.Equal(16384, config.ContextLength);
+    }
+
+    [Theory]
+    [InlineData(32768, "qwen2.5:0.5b")]   // bigger than the small model's tier
+    [InlineData(16384, "qwen2.5-coder:14b")] // equal to the default, but chosen on purpose
+    [InlineData(0, "qwen2.5:0.5b")]       // Ollama's default, chosen on purpose
+    public void ModelSwitch_KeepsAWindowTheUserChose(int chosen, string newModel)
+    {
+        var config = new MandoCodeConfig { ContextLength = chosen, ContextLengthSetByUser = true };
+
+        var change = config.ApplyRecommendedContextLength("qwen3.5:4b", newModel);
+
+        Assert.Equal(chosen, config.ContextLength);
+        Assert.NotEqual(MandoCodeConfig.ContextWindowChange.Resized, change);
+    }
+
+    [Fact]
+    public void ModelSwitch_KeepsAHandEditedWindow_FromOlderConfigs()
+    {
+        // Configs written before contextLengthSetByUser existed: a value that is neither the
+        // default nor the previous model's tier can only have come from the user.
+        var config = new MandoCodeConfig { ContextLength = 65536 };
+
+        Assert.Equal(MandoCodeConfig.ContextWindowChange.Kept,
+            config.ApplyRecommendedContextLength("qwen2.5:0.5b", "qwen3.5:4b"));
+        Assert.Equal(65536, config.ContextLength);
+    }
+
+    [Fact]
+    public void ModelSwitch_ToCloud_LeavesTheWindowAlone()
+    {
+        var config = new MandoCodeConfig { ContextLength = 16384 };
+
+        Assert.Equal(MandoCodeConfig.ContextWindowChange.Unchanged,
+            config.ApplyRecommendedContextLength("qwen2.5:0.5b", "glm-5.2:cloud"));
+        Assert.Equal(16384, config.ContextLength);
+    }
+
+    [Fact]
+    public void ContextLengthSetByUser_SurvivesASaveAndLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mandocode-ctx-{Guid.NewGuid():N}.json");
+        try
+        {
+            new MandoCodeConfig { ContextLength = 32768, ContextLengthSetByUser = true }.Save(path);
+            var loaded = MandoCodeConfig.Load(path);
+
+            Assert.Equal(32768, loaded.ContextLength);
+            Assert.True(loaded.ContextLengthSetByUser);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(0, true)]
     [InlineData(3, true)]
