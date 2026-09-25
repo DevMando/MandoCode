@@ -203,6 +203,37 @@ public class AIService
     public event Action<FunctionExecutionResult>? OnFunctionCompleted;
 
     /// <summary>
+    /// Raised with each chunk of reply text while a chat turn streams, so a host can show the reply
+    /// as it is written. Fires only when <see cref="MandoCodeConfig.StreamingMode"/> streams the
+    /// current model, and only for chat turns (plan steps narrate through the spinner instead). The
+    /// chunks are a preview: the string <see cref="ChatStreamAsync"/> yields for the turn stays the
+    /// authoritative text — the fallback parser, notices, and a retried call can all make it differ.
+    /// </summary>
+    public event Action<string>? OnResponseTextDelta;
+
+    // A host's preview handler must never break the generation it is watching.
+    private void RaiseResponseTextDelta(string text)
+    {
+        try { OnResponseTextDelta?.Invoke(text); } catch { }
+    }
+
+    /// <summary>
+    /// Raised as each streaming model call starts, retries included. Chunks a host buffered before
+    /// it belong to an earlier attempt and will not be in this one's reply.
+    /// </summary>
+    public event Action? OnResponseStreamStarted;
+
+    private int _streamingModelCalls;
+
+    /// <summary>
+    /// True while a model call is streaming its reply. A tool call that starts while this is true
+    /// was made by the model mid-reply, so the text streamed before it is final and safe to show
+    /// for good. A tool call the model wrote as text is run by the fallback parser only after the
+    /// call returns, when this is false — its raw text is not final and must not be shown early.
+    /// </summary>
+    public bool IsStreamingModelCall => Volatile.Read(ref _streamingModelCalls) > 0;
+
+    /// <summary>
     /// Exposes the completion tracker for external consumers (e.g., TaskPlannerService).
     /// </summary>
     public FunctionCompletionTracker CompletionTracker => _completionTracker;
@@ -951,7 +982,8 @@ public class AIService
                 retryOperationName: "ChatStreamAsync",
                 tokenLabel: "Chat",
                 spinnerMessage: "Thinking… (Esc to cancel)",
-                cancellationToken);
+                cancellationToken,
+                onTextDelta: RaiseResponseTextDelta);
 
             var rawResponse = string.IsNullOrEmpty(result.Text) ? "No response from AI." : result.Text;
             response = _config.EnableFallbackFunctionParsing
@@ -1411,11 +1443,21 @@ public class AIService
             return await _agent!.RunAsync(messages, session: null, cancellationToken: linkedToken);
 
         var timeout = TimeSpan.FromSeconds(_config.ModelResponseTimeoutSeconds);
-        return await StreamBuffering.BufferAsync(
-            _agent!.RunStreamingAsync(messages, session: null, cancellationToken: linkedToken),
-            onChunk: () => { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } },
-            onText: onTextDelta,
-            cancellationToken: linkedToken);
+        Interlocked.Increment(ref _streamingModelCalls);
+        try
+        {
+            // Once per attempt, so a retried call's host can drop chunks from the failed attempt.
+            try { OnResponseStreamStarted?.Invoke(); } catch { }
+            return await StreamBuffering.BufferAsync(
+                _agent!.RunStreamingAsync(messages, session: null, cancellationToken: linkedToken),
+                onChunk: () => { try { responseCts.CancelAfter(timeout); } catch (ObjectDisposedException) { } },
+                onText: onTextDelta,
+                cancellationToken: linkedToken);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _streamingModelCalls);
+        }
     }
 
     /// <summary>

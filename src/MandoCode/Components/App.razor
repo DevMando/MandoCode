@@ -191,7 +191,17 @@
     // Event handler refs, stored so Dispose can detach them cleanly
     private Action<FunctionCall>? _onFunctionInvokedHandler;
     private Action<FunctionExecutionResult>? _onFunctionCompletedHandler;
+    private Action<string>? _onResponseTextDeltaHandler;
+    private Action? _onResponseStreamStartedHandler;
     private ConsoleCancelEventHandler? _cancelKeyHandler;
+
+    // Reply text streamed since the last print, and what was already printed early for the turn
+    // in flight. A tool call prints the text before it (see PrintReplySoFar); the turn's final
+    // text then prints only the rest (SettleReply). Open only during a direct chat request.
+    private readonly object _replyLock = new();
+    private readonly System.Text.StringBuilder _replyUnprinted = new();
+    private readonly List<string> _replyPrinted = new();
+    private bool _replyOpen;
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
@@ -306,6 +316,10 @@
         _onFunctionCompletedHandler = OnFunctionCompleted;
         AI.OnFunctionInvoked += _onFunctionInvokedHandler;
         AI.OnFunctionCompleted += _onFunctionCompletedHandler;
+        _onResponseTextDeltaHandler = OnResponseTextDelta;
+        _onResponseStreamStartedHandler = OnResponseStreamStarted;
+        AI.OnResponseTextDelta += _onResponseTextDeltaHandler;
+        AI.OnResponseStreamStarted += _onResponseStreamStartedHandler;
 
         // Wire the propose_plan tool handoff to the approval + execution UI
         PlanHandoff.OnPlanRequested = HandleProposedPlanAsync;
@@ -786,6 +800,9 @@
         // Pause the spinner so the message renders on a clean line
         Spinner.Stop();
 
+        // What the model wrote before this call prints now, above the call's line.
+        PrintReplySoFar();
+
         // Track operation type for contextual spinner messages
         _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
@@ -798,6 +815,70 @@
 
         // Show what the model is doing above the spinner in grey
         Spinner.Start(call.Description);
+    }
+
+    private void OpenReply()
+    {
+        lock (_replyLock)
+        {
+            _replyOpen = true;
+            _replyUnprinted.Clear();
+            _replyPrinted.Clear();
+        }
+    }
+
+    private void CloseReply()
+    {
+        lock (_replyLock) _replyOpen = false;
+    }
+
+    private void OnResponseTextDelta(string text)
+    {
+        lock (_replyLock)
+        {
+            if (_replyOpen) _replyUnprinted.Append(text);
+        }
+    }
+
+    // A retried model call streams its reply again from the start.
+    private void OnResponseStreamStarted()
+    {
+        lock (_replyLock) _replyUnprinted.Clear();
+    }
+
+    /// <summary>
+    /// Prints the reply streamed so far as its own block, ahead of the tool call about to run.
+    /// Only for a call the model made mid-stream (<see cref="AIService.IsStreamingModelCall"/>): a
+    /// tool call written as text runs after the stream, and its raw text is about to be stripped
+    /// from the reply, so it's left for the final text. Scrollback can't take a print back.
+    /// </summary>
+    private void PrintReplySoFar()
+    {
+        string text;
+        lock (_replyLock)
+        {
+            if (!_replyOpen || !AI.IsStreamingModelCall) return;
+            text = _replyUnprinted.ToString().Trim();
+            _replyUnprinted.Clear();
+            if (text.Length == 0) return;
+            _replyPrinted.Add(text);
+        }
+        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+        RenderMarkdownGuarded(text);
+    }
+
+    /// <summary>A turn finished with <paramref name="turnText"/>: returns what of it still needs
+    /// printing, and resets for the next turn.</summary>
+    private string SettleReply(string turnText)
+    {
+        List<string> printed;
+        lock (_replyLock)
+        {
+            printed = _replyPrinted.ToList();
+            _replyPrinted.Clear();
+            _replyUnprinted.Clear();
+        }
+        return ReplyText.Unshown(turnText, printed);
     }
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
@@ -1687,6 +1768,7 @@
         var token = _requestCts.Token;
         StartCancelKeyListener();
 
+        OpenReply();
         try
         {
             var receivedFirstChunk = false;
@@ -1721,8 +1803,17 @@
                     var lineBuffer = new System.Text.StringBuilder();
                     var showSpinnerBeforeNextChunk = false;
 
+                    // Each chunk is one finished turn. Print what of it wasn't already printed at a
+                    // tool call, so each turn reads in the order it happened.
                     void AccumulateChunk(string chunk)
                     {
+                        var unprinted = SettleReply(chunk);
+                        if (unprinted.Length > 0)
+                        {
+                            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+                            RenderMarkdownGuarded(unprinted);
+                        }
+
                         responseBuffer.Append(chunk);
                         foreach (char c in chunk)
                         {
@@ -1760,7 +1851,7 @@
                             AccumulateChunk(enumerator.Current);
                     }
 
-                    // Render the complete response as rich markdown
+                    // Every turn is on screen by now; the joined text is for history and checks.
                     var responseText = responseBuffer.ToString().Trim();
                     if (string.IsNullOrEmpty(responseText))
                     {
@@ -1770,9 +1861,6 @@
                     else
                     {
                         _lastAiResponse = responseText;
-
-                        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
-                        RenderMarkdownGuarded(responseText);
 
                         // Add to chat history (ANSI capture deferred to Phase 2)
                         _messages.Add(new ChatMsg
@@ -1858,6 +1946,7 @@
         }
         finally
         {
+            CloseReply();
             StopCancelKeyListener();
             var oldCts = Interlocked.Exchange(ref _requestCts, null);
             oldCts?.Dispose();
@@ -3760,6 +3849,10 @@
             AI.OnFunctionInvoked -= _onFunctionInvokedHandler;
         if (_onFunctionCompletedHandler != null)
             AI.OnFunctionCompleted -= _onFunctionCompletedHandler;
+        if (_onResponseTextDeltaHandler != null)
+            AI.OnResponseTextDelta -= _onResponseTextDeltaHandler;
+        if (_onResponseStreamStartedHandler != null)
+            AI.OnResponseStreamStarted -= _onResponseStreamStartedHandler;
         if (_cancelKeyHandler != null)
             Console.CancelKeyPress -= _cancelKeyHandler;
 
