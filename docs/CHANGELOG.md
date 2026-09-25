@@ -4,6 +4,14 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Typing `/` no longer crashes MandoCode in a short terminal window.** The command menu drew
+  every command at once, and in a window shorter than the list (about 35 rows, which includes
+  Visual Studio's console) that pushed the prompt above the top of the screen and crashed with
+  an `ArgumentOutOfRangeException`. The menu, and the `@` file menu, now show only as many rows
+  as fit, scroll as you move through them, and show your position, like "(12/31)", when the
+  list is clipped.
+
 ## [0.15.1] - 2026-09-24
 
 **The terminal stops going quiet on you.** After 0.15.0, you sent a message and got a spinner
