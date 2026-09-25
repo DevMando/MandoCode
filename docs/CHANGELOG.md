@@ -12,14 +12,14 @@ much room the conversation has left, and a long diff no longer shoves the approv
 your screen. It also fixes a few annoyances, including one that quietly threw away the context
 window size you'd chosen every time you switched models.
 
-### Why this matters (plain-language summary)
-- **You can tell it's working.** A long reply no longer looks like a frozen "Thinking…".
-- **You see trouble coming.** Every model can only hold so much conversation. The new meter warns
-  you before it fills up and the model starts forgetting the beginning, so you can `/compact`
-  first.
-- **You stay in control of big changes.** When the agent wants to edit a lot of lines, you can
-  scroll through the change and still see the menu where you approve it.
-- **Your settings stay yours.** A context window size you pick survives model switches.
+### Highlights
+- **Live reply preview.** Streamed text shows above the spinner, and output splits at tool calls
+  so it reads in order.
+- **Context meter.** Shows how full the context window is, so you can `/compact` before the model
+  starts dropping early messages.
+- **Scrollable approval diffs.** Diffs over 30 lines scroll in a box, and the approve/deny menu
+  stays on screen.
+- **Context window size persists.** A size you set survives `/model` and `/setup`.
 
 ### Added
 - **Replies read in the order they happened.** When the model says something before it uses a
