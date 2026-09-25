@@ -9,8 +9,8 @@ here only for a new generation; Desktop follows in its next release.
 - [ ] Bump `<Version>` in `src/MandoCode/MandoCode.csproj` — this single value drives the
       banner, `--doctor`, the update checker, and the NuGet package version.
 - [ ] Roll `docs/CHANGELOG.md`: retitle `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`. House style
-      for released versions: a bold narrative opener, a **"Why this matters (plain-language
-      summary)"** section written for a non-engineering reader, then Fixed/Changed/Added and a
+      for released versions: a bold narrative opener, a short **Highlights** list (one concise
+      line per headline change; technical terms are fine), then Fixed/Changed/Added and a
       **Test coverage** note. (The changelog lives in `docs/`, not the repo root.)
 - [ ] PR the above, merge to `main`.
 
