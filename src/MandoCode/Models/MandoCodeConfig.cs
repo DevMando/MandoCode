@@ -200,7 +200,44 @@ public class MandoCodeConfig
     /// of an 8k window before any chat happens.
     /// </summary>
     [JsonPropertyName("contextLength")]
-    public int ContextLength { get; set; } = 16384;
+    public int ContextLength { get; set; } = DefaultContextLength;
+
+    public const int DefaultContextLength = 16384;
+
+    /// <summary>
+    /// True once the user picks <see cref="ContextLength"/> themselves (/config, /config set,
+    /// --config set). Model switches then leave it alone instead of resizing it to the new
+    /// model's tier. "/config set contextLength auto" hands control back.
+    /// </summary>
+    [JsonPropertyName("contextLengthSetByUser")]
+    public bool ContextLengthSetByUser { get; set; }
+
+    public enum ContextWindowChange { Unchanged, Resized, Kept }
+
+    /// <summary>"32k", or "Ollama's default" for 0.</summary>
+    public static string ContextLengthLabel(int tokens) => tokens == 0 ? "Ollama's default" : $"{tokens / 1024}k";
+
+    /// <summary>
+    /// Sizes <see cref="ContextLength"/> for a model switch. Resizes to the new model's tier only
+    /// while the window is still automatic: not set by the user, and still the default or the
+    /// previous model's recommendation (the second check covers configs written before
+    /// <see cref="ContextLengthSetByUser"/> existed, where a hand-edited value is the only signal).
+    /// Returns <see cref="ContextWindowChange.Kept"/> when a different recommendation was skipped
+    /// so callers can say so.
+    /// </summary>
+    public ContextWindowChange ApplyRecommendedContextLength(string? previousModel, string? newModel)
+    {
+        var recommended = RecommendedContextLength(newModel);
+        if (recommended == 0 || recommended == ContextLength) return ContextWindowChange.Unchanged;
+
+        var previousRecommended = RecommendedContextLength(previousModel);
+        var automatic = !ContextLengthSetByUser &&
+            (ContextLength == DefaultContextLength || (previousRecommended > 0 && ContextLength == previousRecommended));
+        if (!automatic) return ContextWindowChange.Kept;
+
+        ContextLength = recommended;
+        return ContextWindowChange.Resized;
+    }
 
     /// <summary>
     /// Per-request timeout in minutes. Covers direct chats and each plan step.
@@ -652,7 +689,7 @@ public class MandoCodeConfig
             ModelName = DefaultCloudModel,
             Temperature = 0.7,
             MaxTokens = 32768,
-            ContextLength = 16384,
+            ContextLength = DefaultContextLength,
             RequestTimeoutMinutes = 15,
             ModelResponseTimeoutSeconds = 680,
             ResponseStreaming = "all",
