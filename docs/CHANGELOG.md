@@ -4,12 +4,29 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-24
+
+**The terminal stops going quiet on you.** After 0.15.0, you sent a message and got a spinner
+until the whole answer landed at once. Now you watch the reply being written, a meter shows how
+much room the conversation has left, and a long diff no longer shoves the approve/deny menu off
+your screen. It also fixes a few annoyances, including one that quietly threw away the context
+window size you'd chosen every time you switched models.
+
+### Why this matters (plain-language summary)
+- **You can tell it's working.** A long reply no longer looks like a frozen "Thinking…".
+- **You see trouble coming.** Every model can only hold so much conversation. The new meter warns
+  you before it fills up and the model starts forgetting the beginning, so you can `/compact`
+  first.
+- **You stay in control of big changes.** When the agent wants to edit a lot of lines, you can
+  scroll through the change and still see the menu where you approve it.
+- **Your settings stay yours.** A context window size you pick survives model switches.
+
 ### Added
 - **Replies read in the order they happened.** When the model says something before it uses a
   tool ("let me check the docs…"), the CLI now prints that as its own block above the tool's line,
   and the answer that follows as a second block. Before, everything waited until the end and came
   out as one merged block. Auto-continued turns also print as each one finishes. Apps built on the
-  engine, like MandoCode Desktop, can now follow a reply as it streams.
+  engine, like MandoCode Desktop, can now show a reply while it's still being written.
 - **Watch the reply being written.** While a reply streams, its latest lines show dimmed above the
   spinner, so a long answer no longer looks like a frozen "Thinking…". The finished reply still
   prints as formatted markdown.
@@ -37,6 +54,12 @@ All notable changes to MandoCode will be documented in this file.
   gained a Context Window step, so you can change the size without remembering the
   `/config set contextLength` command. Choose "Automatic", or run `/config set contextLength auto`,
   to go back to sizing it per model.
+
+### Test coverage
+769/769 tests passing on both .NET 8 and .NET 10. New coverage includes the streamed reply split,
+the done chunk that carries tok/s and the cut-off notice, the live reply preview, the context
+meter, loose list rendering, and a context window size surviving model switches, including in
+configs saved before this release.
 
 ## [0.15.0] - 2026-09-10
 
