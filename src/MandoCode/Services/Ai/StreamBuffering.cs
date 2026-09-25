@@ -28,22 +28,42 @@ public static class StreamBuffering
     /// long generation is still running; the assembled result is unaffected either way.
     /// </param>
     /// <param name="cancellationToken">Cancels enumeration; an <see cref="OperationCanceledException"/> propagates.</param>
-    public static Task<AgentResponse> BufferAsync(
+    /// <remarks>
+    /// The accumulator keeps no raw representation, so Ollama's final "done" chunk — generation
+    /// timing and the stop reason — would be lost, and with it the tok/s figure and the notice for
+    /// a reply cut off at the token limit. The last one seen is attached as the response's
+    /// <see cref="AgentResponse.RawRepresentation"/>; <see cref="DoneStreamLocator"/> reads it.
+    /// </remarks>
+    public static async Task<AgentResponse> BufferAsync(
         IAsyncEnumerable<AgentResponseUpdate> stream,
         Action onChunk,
         Action<string>? onText = null,
-        CancellationToken cancellationToken = default) =>
-        WithHeartbeat(stream, onChunk, onText, cancellationToken).ToAgentResponseAsync(cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        OllamaSharp.Models.Chat.ChatDoneResponseStream? done = null;
+        var response = await WithHeartbeat(stream, onChunk, onText, d => done = d, cancellationToken)
+            .ToAgentResponseAsync(cancellationToken);
+
+        if (done != null && DoneStreamLocator.Find(response) == null)
+            response.RawRepresentation = done;
+        return response;
+    }
 
     private static async IAsyncEnumerable<AgentResponseUpdate> WithHeartbeat(
         IAsyncEnumerable<AgentResponseUpdate> stream,
         Action onChunk,
         Action<string>? onText,
+        Action<OllamaSharp.Models.Chat.ChatDoneResponseStream> onDone,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var update in stream.WithCancellation(cancellationToken))
         {
             onChunk();
+
+            // A tool-calling run makes several model requests, each ending in its own done chunk;
+            // the last one describes the request that produced the final reply, the same one the
+            // non-streaming path reports.
+            if (DoneStreamLocator.FromRaw(update) is { } done) onDone(done);
 
             if (onText != null)
             {
