@@ -53,6 +53,11 @@
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
 @if (_showPrompt && !InstructionCoordinator.IsActive)
 {
+    @if (Config.EnableTokenTracking && TokenTracker.LastOperation is { } lastOp)
+    {
+        <ContextMeterLine UsedTokens="@lastOp.PromptTokens"
+                          WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+    }
     <PromptInput OnSubmit="HandleVdomSubmit"
                  OnAutocompleteRequested="HandleAutocompleteRequested"
                  InitialValue="@_promptInitialValue"
@@ -78,8 +83,25 @@
    ApprovalSelectCoordinator (TCS). *@
 @if (ApprovalMenu.IsActive)
 {
+    @* A decision on something too long to print (a long diff) shows it here, scrolled with
+       PgUp/PgDn from the menu, which keeps focus. *@
+    @if (ApprovalMenu.Preview.Count > 0)
+    {
+        <ScrollPreview Title="@ApprovalMenu.PreviewTitle"
+                       Lines="@ApprovalMenu.Preview"
+                       Offset="@_approvalPreviewOffset"
+                       PageSize="@ApprovalPreviewPageSize" />
+    }
     <ApprovalSelect Options="@_approvalMenuOptions"
-                    OnSubmit="HandleApprovalMenuSubmit" />
+                    OnSubmit="HandleApprovalMenuSubmit"
+                    OnScroll="HandleApprovalPreviewScroll" />
+}
+
+@* /history — this session's conversation in a scrollable, filterable window. Idle-only, like the
+   prompt it replaces while open. *@
+@if (_historyActive)
+{
+    <HistoryView Messages="@_historyMessages" OnClose="CloseHistory" />
 }
 
 @* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
@@ -830,20 +852,31 @@
     private void CloseReply()
     {
         lock (_replyLock) _replyOpen = false;
+        Spinner.UpdatePreview(null);
     }
+
+    // The spinner's live preview only needs the tail of the reply, and copying the whole buffer on
+    // every chunk would make a long reply quadratic.
+    private const int PreviewTailChars = 4000;
 
     private void OnResponseTextDelta(string text)
     {
+        string preview;
         lock (_replyLock)
         {
-            if (_replyOpen) _replyUnprinted.Append(text);
+            if (!_replyOpen) return;
+            _replyUnprinted.Append(text);
+            var start = Math.Max(0, _replyUnprinted.Length - PreviewTailChars);
+            preview = _replyUnprinted.ToString(start, _replyUnprinted.Length - start);
         }
+        Spinner.UpdatePreview(preview);
     }
 
     // A retried model call streams its reply again from the start.
     private void OnResponseStreamStarted()
     {
         lock (_replyLock) _replyUnprinted.Clear();
+        Spinner.UpdatePreview(null);
     }
 
     /// <summary>
@@ -863,6 +896,7 @@
             if (text.Length == 0) return;
             _replyPrinted.Add(text);
         }
+        Spinner.UpdatePreview(null);
         AnsiConsole.MarkupLine("[green]MandoCode:[/]");
         RenderMarkdownGuarded(text);
     }
@@ -878,6 +912,7 @@
             _replyPrinted.Clear();
             _replyUnprinted.Clear();
         }
+        Spinner.UpdatePreview(null);
         return ReplyText.Unshown(turnText, printed);
     }
 
@@ -1068,6 +1103,12 @@
                     continue;
                 }
 
+                if (command == "history")
+                {
+                    await ShowHistoryAsync();
+                    continue;
+                }
+
                 if (command == "help")
                 {
                     Console.WriteLine();
@@ -1108,6 +1149,7 @@
                     table.AddRow("/plan-discard", "Forget an unfinished plan");
                     table.AddRow("/compact", "Compress context into a recap; keeps the transcript");
                     table.AddRow("/clear", "Wipe all conversation context and start fresh");
+                    table.AddRow("/history", "Browse this session's conversation, filtered as you type");
                     table.AddRow("/exit", "Exit MandoCode");
                     AnsiConsole.Write(table);
                     AnsiConsole.WriteLine();
@@ -1377,12 +1419,77 @@
     /// re-renders. Done here (on state change) rather than inline in markup so the option
     /// list isn't rebuilt on every unrelated render pass.
     /// </summary>
+    private bool _historyActive;
+    private IReadOnlyList<ChatMsg> _historyMessages = Array.Empty<ChatMsg>();
+    private TaskCompletionSource? _historyTcs;
+
+    /// <summary>Opens /history and waits for it to close. The loop is idle while it's open, so the
+    /// view owns the screen's live region the way the prompt normally does.</summary>
+    private async Task ShowHistoryAsync()
+    {
+        if (_messages.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[dim]Nothing in this session's history yet.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // A snapshot: the view builds its lines once, and the list mustn't change under it.
+        _historyMessages = _messages.ToList();
+        // Async continuations, so closing from a Blazor event resumes the loop off the dispatcher
+        // thread (see WaitForVdomInputAsync).
+        _historyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _historyActive = true;
+        _showPrompt = false;
+        await InvokeAsync(StateHasChanged);
+
+        await _historyTcs.Task;
+
+        _historyActive = false;
+        _historyMessages = Array.Empty<ChatMsg>();
+        await InvokeAsync(StateHasChanged);
+        // Let the VDOM remove the view before anything prints below it.
+        await Task.Delay(100);
+    }
+
+    private void CloseHistory() => _historyTcs?.TrySetResult();
+
     private void OnApprovalMenuStateChanged()
     {
         _approvalMenuOptions = ApprovalMenu.Options
             .Select(o => new ApprovalSelect.Option(o.Text, o.Color))
             .ToList();
+        _approvalPreviewOffset = 0;   // every request starts at the top of its preview
         InvokeAsync(StateHasChanged);
+    }
+
+    private int _approvalPreviewOffset;
+
+    // Room for the menu's options, the panel's borders and footer, and the question above it.
+    private static int ApprovalPreviewPageSize
+    {
+        get
+        {
+            try { return Math.Clamp(Console.WindowHeight - 16, 6, 30); }
+            catch { return 20; }
+        }
+    }
+
+    private void HandleApprovalPreviewScroll(ApprovalSelect.ScrollKey key)
+    {
+        var count = ApprovalMenu.Preview.Count;
+        if (count == 0) return;
+
+        var page = ApprovalPreviewPageSize;
+        var max = Math.Max(0, count - page);
+        _approvalPreviewOffset = key switch
+        {
+            ApprovalSelect.ScrollKey.PageUp => Math.Max(0, _approvalPreviewOffset - page),
+            ApprovalSelect.ScrollKey.PageDown => Math.Min(max, _approvalPreviewOffset + page),
+            ApprovalSelect.ScrollKey.Home => 0,
+            _ => max,
+        };
+        StateHasChanged();
     }
 
     /// <summary>

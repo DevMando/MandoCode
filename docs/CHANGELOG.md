@@ -10,6 +10,18 @@ All notable changes to MandoCode will be documented in this file.
   and the answer that follows as a second block. Before, everything waited until the end and came
   out as one merged block. Auto-continued turns also print as each one finishes. Apps built on the
   engine, like MandoCode Desktop, can now follow a reply as it streams.
+- **Watch the reply being written.** While a reply streams, its latest lines show dimmed above the
+  spinner, so a long answer no longer looks like a frozen "Thinking…". The finished reply still
+  prints as formatted markdown.
+- **Long diffs no longer bury the approval menu.** A change over 30 lines now shows in a scrollable
+  window above the approve/deny choices (PgUp/PgDn, Home/End to scroll), with a one-line summary
+  left in your scrollback. Before, hundreds of diff lines pushed the menu off screen. Short diffs
+  print as they always have.
+- **A context meter above the prompt.** A bar shows how full the model's context window is, turning
+  yellow and then red as it fills, so you can `/compact` before a small model starts forgetting the
+  start of the conversation. Cloud models, which manage their own window, show the token count.
+- **`/history` to look back.** Browse this session's conversation in a scrollable window and
+  filter it as you type.
 
 ### Fixed
 - **Tokens per second is back, and cut-off replies say so again.** Since streaming became the

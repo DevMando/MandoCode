@@ -1,0 +1,72 @@
+@using Spectre.Console
+@using RazorConsole.Components
+@using MandoCode.Services
+@using Panel = RazorConsole.Components.Panel
+@using Markup = RazorConsole.Components.Markup
+
+@* A long diff (or anything else an approval decides on) in a fixed-height window above the
+   approval menu, so the menu stays on screen instead of below hundreds of printed lines.
+
+   The window is RazorConsole's Scrollable, driven only through ScrollOffset: its own key handler
+   and scrollbar are left off, because either would make it focusable, and a focusable preview
+   would take the arrow keys away from the menu under it. The menu forwards PageUp/PageDown/Home/
+   End instead (see ApprovalSelect.OnScroll).
+
+   Every row is one Markup with only its values changing, the shape ApprovalSelect keeps for the
+   same reason: swapping element shapes between renders breaks the VDOM diff. *@
+
+<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="Color.Grey" Expand="true">
+    <Rows>
+        <Scrollable TItem="ApprovalSelectCoordinator.PreviewLine" Items="@Lines" PageSize="@PageSize" ScrollOffset="@Offset">
+            <Rows>
+                @foreach (var line in context)
+                {
+                    <Markup Content="@Fit(line.Text)" Foreground="@line.Color" Decoration="@line.Decoration" />
+                }
+            </Rows>
+        </Scrollable>
+        <Markup Content="@Footer" Foreground="Color.Grey" Decoration="Decoration.Dim" />
+    </Rows>
+</Panel>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public IReadOnlyList<ApprovalSelectCoordinator.PreviewLine> Lines { get; set; } = Array.Empty<ApprovalSelectCoordinator.PreviewLine>();
+    [Parameter] public int Offset { get; set; }
+    [Parameter] public int PageSize { get; set; } = 20;
+
+    private string Footer
+    {
+        get
+        {
+            if (Lines.Count == 0) return string.Empty;
+            var first = Math.Clamp(Offset, 0, Math.Max(0, Lines.Count - PageSize)) + 1;
+            var last = Math.Min(Lines.Count, first + PageSize - 1);
+            return Lines.Count <= PageSize
+                ? $"{Lines.Count} lines"
+                : $"lines {first}–{last} of {Lines.Count} · PgUp/PgDn to scroll · Home/End · ↑/↓ and Enter to choose";
+        }
+    }
+
+    // One terminal row per line keeps the window a fixed height; a wrapped line would make it jump.
+    private static string Fit(string text)
+    {
+        int width;
+        try { width = Math.Max(20, Console.WindowWidth - 8); }
+        catch { width = 72; }
+        if (ReplyPreview.Cells(text) <= width) return text;
+
+        var sb = new System.Text.StringBuilder();
+        var cells = 0;
+        var elements = System.Globalization.StringInfo.GetTextElementEnumerator(text);
+        while (elements.MoveNext())
+        {
+            var element = (string)elements.Current;
+            var w = ReplyPreview.Cells(element);
+            if (cells + w > width - 1) break;
+            sb.Append(element);
+            cells += w;
+        }
+        return sb.Append('…').ToString();
+    }
+}

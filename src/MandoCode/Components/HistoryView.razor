@@ -1,0 +1,165 @@
+@using Microsoft.AspNetCore.Components.Web
+@using Spectre.Console
+@using RazorConsole.Components
+@using MandoCode.Models
+@using MandoCode.Services
+@using Panel = RazorConsole.Components.Panel
+@using Markup = RazorConsole.Components.Markup
+
+@* /history: this session's conversation in a scrollable window, filtered as you type.
+
+   Two focusable parts, switched with Tab: the search box (RazorConsole's TextInput, which owns
+   typing and paste) and the list (a div that takes the scroll keys). The list is RazorConsole's
+   Scrollable driven through ScrollOffset only — its scrollbar and key handler would add a third
+   focus stop. Only shown while the app is idle, so nothing prints underneath it. Rows keep one
+   Markup shape per line, as ApprovalSelect does, so the VDOM diff stays stable. *@
+
+<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="Color.Purple" Expand="true">
+    <Rows>
+        <TextInput @bind-Value="_query"
+                   OnInput="HandleQuery"
+                   OnSubmit="HandleSearchSubmit"
+                   Placeholder="Type to filter messages"
+                   ValueColor="@(new Color(255, 200, 80))"
+                   PlaceholderColor="Color.Grey"
+                   BorderColor="Color.Grey"
+                   FocusedBorderColor="Color.Purple"
+                   BorderStyle="BoxBorder.Rounded"
+                   Expand="true"
+                   FocusOrder="0" />
+        <div @onkeydown="HandleListKey" data-focusable="true" data-focus-order="1">
+            <Scrollable TItem="Line" Items="@_lines" PageSize="@PageSize" ScrollOffset="@_offset">
+                <Rows>
+                    @foreach (var line in context)
+                    {
+                        <Markup Content="@line.Text" Foreground="@line.Color" Decoration="@line.Decoration" />
+                    }
+                </Rows>
+            </Scrollable>
+        </div>
+        <Markup Content="@Footer" Foreground="Color.Grey" Decoration="Decoration.Dim" />
+    </Rows>
+</Panel>
+
+@code {
+    [Parameter] public IReadOnlyList<ChatMsg> Messages { get; set; } = Array.Empty<ChatMsg>();
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private sealed record Line(string Text, Color Color, Decoration Decoration = Decoration.None);
+
+    private static readonly Color UserColor = new(255, 200, 80);
+    private static readonly Color AgentColor = Color.Green;
+
+    private string _query = string.Empty;
+    private List<Line> _lines = new();
+    private int _matches;
+    private int _offset;
+    private IReadOnlyList<ChatMsg>? _builtFrom;
+
+    private static int PageSize
+    {
+        get
+        {
+            try { return Math.Clamp(Console.WindowHeight - 12, 6, 40); }
+            catch { return 20; }
+        }
+    }
+
+    private string Title => string.IsNullOrWhiteSpace(_query)
+        ? $"History · {Messages.Count} message{(Messages.Count == 1 ? "" : "s")}"
+        : $"History · {_matches} of {Messages.Count} match \"{_query.Trim()}\"";
+
+    private string Footer
+    {
+        get
+        {
+            var position = _lines.Count <= PageSize
+                ? $"{_lines.Count} lines"
+                : $"lines {_offset + 1}–{Math.Min(_lines.Count, _offset + PageSize)} of {_lines.Count}";
+            return $"{position} · Tab to the list, then ↑/↓ PgUp/PgDn Home/End · Esc in the list or Enter on an empty search closes";
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_builtFrom, Messages))
+        {
+            _builtFrom = Messages;
+            Rebuild();
+            _offset = MaxOffset;   // open at the newest messages
+        }
+    }
+
+    private int MaxOffset => Math.Max(0, _lines.Count - PageSize);
+
+    private void Rebuild()
+    {
+        int width;
+        try { width = Math.Max(20, Console.WindowWidth - 8); }
+        catch { width = 72; }
+
+        var query = _query.Trim();
+        _lines = new List<Line>();
+        _matches = 0;
+        foreach (var message in Messages)
+        {
+            if (query.Length > 0 && !message.Text.Contains(query, StringComparison.OrdinalIgnoreCase))
+                continue;
+            _matches++;
+
+            var isUser = message.Role == "user";
+            if (_lines.Count > 0) _lines.Add(new Line(string.Empty, Color.Default));
+            _lines.Add(new Line(isUser ? "You" : "MandoCode", isUser ? UserColor : AgentColor, Decoration.Bold));
+            foreach (var text in ReplyPreview.Tail(message.Text, width, int.MaxValue))
+            {
+                var hit = query.Length > 0 && text.Contains(query, StringComparison.OrdinalIgnoreCase);
+                _lines.Add(new Line(text, hit ? UserColor : Color.Default));
+            }
+        }
+
+        if (_lines.Count == 0)
+            _lines.Add(new Line("No messages match.", Color.Grey, Decoration.Dim));
+    }
+
+    private void HandleQuery(string? value)
+    {
+        _query = value ?? string.Empty;
+        Rebuild();
+        _offset = 0;   // a new filter starts from its first match
+        StateHasChanged();
+    }
+
+    private async Task HandleSearchSubmit(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) await OnClose.InvokeAsync();
+    }
+
+    private async Task HandleListKey(KeyboardEventArgs e)
+    {
+        var key = e.Key;
+        var page = PageSize;
+        int? next = key switch
+        {
+            _ when Is(key, "UpArrow", "ArrowUp") => _offset - 1,
+            _ when Is(key, "DownArrow", "ArrowDown") => _offset + 1,
+            _ when Is(key, "PageUp") => _offset - page,
+            _ when Is(key, "PageDown") => _offset + page,
+            _ when Is(key, "Home") => 0,
+            _ when Is(key, "End") => MaxOffset,
+            _ => null,
+        };
+
+        if (next is { } offset)
+        {
+            _offset = Math.Clamp(offset, 0, MaxOffset);
+            StateHasChanged();
+        }
+        else if (Is(key, "Escape", "Esc", "Q"))
+        {
+            await OnClose.InvokeAsync();
+        }
+    }
+
+    private static bool Is(string key, params string[] names) =>
+        names.Any(n => key.Equals(n, StringComparison.OrdinalIgnoreCase));
+}
