@@ -305,9 +305,46 @@ public static class CommandAutocomplete
             Console.SetCursorPosition(0, bufferHeight - 1);
             for (int i = 0; i < scrollAmount; i++)
                 Console.Write('\n');
-            cursorTop -= scrollAmount;
+            // Never above the top row: SetCursorPosition throws on a negative row.
+            cursorTop = Math.Max(0, cursorTop - scrollAmount);
         }
     }
+
+    // Rows a dropdown needs besides its items: the input line, the panel's top and bottom
+    // borders, and the hint line under the panel.
+    private const int DropdownChromeRows = 4;
+
+    /// <summary>
+    /// How many dropdown items fit on screen. Terminals like Windows Terminal and the Visual
+    /// Studio console report a buffer no taller than the window, so a list taller than the
+    /// window would push the input line above row 0.
+    /// </summary>
+    private static int MaxDropdownRows
+    {
+        get
+        {
+            try { return Math.Max(1, Math.Min(Console.WindowHeight, Console.BufferHeight) - DropdownChromeRows); }
+            catch { return int.MaxValue; }
+        }
+    }
+
+    /// <summary>
+    /// The slice of a <paramref name="total"/>-item list to draw in at most <paramref name="maxRows"/>
+    /// rows, centered on <paramref name="selected"/> where possible so it stays visible while scrolling.
+    /// </summary>
+    internal static (int Start, int Count) VisibleWindow(int total, int selected, int maxRows)
+    {
+        if (total <= 0) return (0, 0);
+        var count = Math.Clamp(maxRows, 1, total);
+        var start = Math.Clamp(selected - count / 2, 0, total - count);
+        return (start, count);
+    }
+
+    /// <summary>The key hint under a dropdown, with the position when the list is clipped.</summary>
+    internal static string DropdownHint(int total, int visible, int selected) =>
+        visible < total
+            ? $"↑↓: Navigate  TAB/Enter: Select  ESC: Cancel  ({selected + 1}/{total})"
+            : "↑↓: Navigate  TAB/Enter: Select  ESC: Cancel";
 
     // Panel geometry shared by both autocomplete dropdowns. Sized to the terminal:
     // wide enough that command descriptions don't truncate on a normal window, but
@@ -336,20 +373,22 @@ public static class CommandAutocomplete
     private static void DisplayAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos,
         IReadOnlyList<string> commands, int selectedIndex)
     {
-        var totalLines = commands.Count + 3;
+        var (start, visible) = VisibleWindow(commands.Count, selectedIndex, MaxDropdownRows);
+        var totalLines = visible + 3;
         EnsureBufferSpace(ref cursorTop, totalLines);
 
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
-        // Command column sizes to the longest VISIBLE command (14-col floor keeps the
+        // Command column sizes to the longest matching command (14-col floor keeps the
         // legacy alignment) so long names like /music-playlist never truncate; the
-        // description gets everything that's left.
+        // description gets everything that's left. Measured over the whole list, not just
+        // the visible slice, so columns don't shift while scrolling.
         var cmdCol = Math.Max(14, commands.Count > 0 ? commands.Max(c => c.Length) : 14);
         var descCol = AutocompleteContentWidth - cmdCol - 1;
 
         var rows = new List<IRenderable>();
-        for (int i = 0; i < commands.Count; i++)
+        for (int i = start; i < start + visible; i++)
         {
             var cmd = commands[i];
             var rawDescription = Commands.ContainsKey(cmd) ? Commands[cmd] : "";
@@ -372,8 +411,8 @@ public static class CommandAutocomplete
 
         WriteAutocompletePanel(cursorTop, "[deepskyblue1] Commands [/]", rows);
 
-        Console.SetCursorPosition(0, cursorTop + commands.Count + 3);
-        AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
+        Console.SetCursorPosition(0, cursorTop + visible + 3);
+        AnsiConsole.Markup($"[dim]{Markup.Escape(DropdownHint(commands.Count, visible, selectedIndex))}[/]");
 
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
@@ -384,14 +423,15 @@ public static class CommandAutocomplete
     private static void DisplayFileAutocomplete(int cursorLeft, ref int cursorTop, int cursorPos,
         IReadOnlyList<string> files, int selectedIndex, string browsePrefix = "")
     {
-        var totalLines = files.Count + 3;
+        var (start, visible) = VisibleWindow(files.Count, selectedIndex, MaxDropdownRows);
+        var totalLines = visible + 3;
         EnsureBufferSpace(ref cursorTop, totalLines);
 
         Console.SetCursorPosition(0, cursorTop + 1);
         Console.Write("\x1b[J");
 
         var rows = new List<IRenderable>();
-        for (int i = 0; i < files.Count; i++)
+        for (int i = start; i < start + visible; i++)
         {
             var entryPath = files[i];
             var isDirectory = entryPath.EndsWith('/');
@@ -432,8 +472,8 @@ public static class CommandAutocomplete
 
         WriteAutocompletePanel(cursorTop, "[deepskyblue1] Files [/]", rows);
 
-        Console.SetCursorPosition(0, cursorTop + files.Count + 3);
-        AnsiConsole.Markup("[dim]↑↓: Navigate  TAB/Enter: Select  ESC: Cancel[/]");
+        Console.SetCursorPosition(0, cursorTop + visible + 3);
+        AnsiConsole.Markup($"[dim]{Markup.Escape(DropdownHint(files.Count, visible, selectedIndex))}[/]");
 
         SetCursorToPos(cursorLeft, cursorTop, cursorPos);
     }
