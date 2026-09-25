@@ -4,6 +4,11 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-09-24
+
+**A quick fix for the `/` command menu.** In 0.15.1, typing `/` could crash MandoCode in a short
+terminal window. If you're on 0.15.1, please update.
+
 ### Fixed
 - **Typing `/` no longer crashes MandoCode in a short terminal window.** The command menu drew
   every command at once, and in a window shorter than the list (about 35 rows, which includes
@@ -11,6 +16,10 @@ All notable changes to MandoCode will be documented in this file.
   an `ArgumentOutOfRangeException`. The menu, and the `@` file menu, now show only as many rows
   as fit, scroll as you move through them, and show your position, like "(12/31)", when the
   list is clipped.
+
+### Test coverage
+778/778 tests passing on both .NET 8 and .NET 10, including new coverage for which menu rows
+are shown: clipping to the window, keeping the selection on screen, and the position counter.
 
 ## [0.15.1] - 2026-09-24
 
