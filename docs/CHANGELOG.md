@@ -17,6 +17,8 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **New instructions replace the active plan.** Changing requirements during a tool approval stops the old plan and blocks its remaining tool calls. A fresh plan with updated acceptance checks must be reviewed before work resumes; completed file changes are preserved.
+- **Plan recovery menus render through RazorConsole.** Failed-step choices and revised-plan review now share the focused approval component instead of drawing a second Spectre prompt over the conversation. Choices are serialized with other approvals, and selection or cancellation removes the active menu.
 - **Approval menus receive keyboard focus.** File-write approval options now take focus when they open, so Up/Down selects an option and Enter confirms it. Preview scrolling remains available, and each new approval starts on the first option. This also applies to other menus using the same approval component.
 - **Replies no longer overwrite the input or appear out of order.** Razor display calls now join the conversation state rather than writing directly over the terminal canvas. Cursor-control sequences in captured output are not replayed.
 - **Model selection no longer competes with terminal input.** The prompt owns model filtering and navigation; closing the popup restores its focus. Checking/loading progress is visible during model changes.
@@ -24,6 +26,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Match Desktop's plan shortcut.** Rename `Reject (answer without a plan)` to `One-shot it`, meaning the assistant attempts the request directly without step-by-step execution.
 - **Clearer statistics beneath each reply.** Show `In 12k · Out 195 · 74.2 tok/s` on the left in dim gray, matching the session/context text. Remove brackets, the approximation marker, and the extra blank line above the statistics.
 - **One session/context row above the prompt.** Right-align `Total Session Tokens 127k · Context [bar] 78% of 16k`, with a blank line above it to separate session status from reply statistics. The context label uses the configured model window.
 - **Cloud models show session totals only.** Hide the context bar and context text for cloud models.

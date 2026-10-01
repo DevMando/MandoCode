@@ -26,6 +26,30 @@ public sealed class PlanCancellationRequestedException : Exception
 public class PlanHandoff
 {
     private readonly object _lock = new();
+    private string? _replacementInstructions;
+    public event Action? ReplacementRequested;
+
+    public bool RequestReplacement(string? instructions)
+    {
+        lock (_lock)
+        {
+            if (!_isExecuting || string.IsNullOrWhiteSpace(instructions)) return false;
+            if (_replacementInstructions != null) return true;
+            _replacementInstructions = instructions.Trim();
+        }
+        ReplacementRequested?.Invoke();
+        return true;
+    }
+
+    public string? TakeReplacementInstructions()
+    {
+        lock (_lock)
+        {
+            var instructions = _replacementInstructions;
+            _replacementInstructions = null;
+            return instructions;
+        }
+    }
     private bool _isExecuting;
 
     /// <summary>
@@ -194,6 +218,7 @@ public class PlanHandoff
             if (_isExecuting)
                 return "A plan is already executing. Continue the current step instead of proposing a new plan.";
             _isExecuting = true;
+            _replacementInstructions = null;
             _fileOperations.Clear();
             LastPlanExecutedWork = false;
         }
@@ -243,7 +268,7 @@ public class PlanHandoff
         }
         finally
         {
-            lock (_lock) _isExecuting = false;
+            lock (_lock) { _isExecuting = false; _replacementInstructions = null; }
         }
     }
 
@@ -260,6 +285,7 @@ public class PlanHandoff
                 throw new InvalidOperationException("A plan is already executing.");
 
             _isExecuting = true;
+            _replacementInstructions = null;
             LastPlanExecutedWork = false;
             _fileOperations.Clear();
             foreach (var operation in savedFileOperations)
@@ -289,6 +315,7 @@ public class PlanHandoff
             lock (_lock)
             {
                 _isExecuting = false;
+                _replacementInstructions = null;
             }
         }
     }
