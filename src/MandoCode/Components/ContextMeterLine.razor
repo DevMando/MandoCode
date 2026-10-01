@@ -12,18 +12,31 @@
    length reads by contrast rather than by shade alone. The two halves sit in a gapless FlexBox row:
    Columns would put a space between them and split the bar. *@
 
-<Columns>
+<FlexBox Direction="FlexDirection.Row" Gap="1" Width="@RowWidth">
+    @if (TotalSessionTokens > 0)
+    {
+        <Markup Content="@(TotalLabel + (ShowContext ? " ·" : ""))" Foreground="Color.Grey" Decoration="Decoration.Dim" />
+    }
+    @if (ShowContext)
+    {
     <Markup Content="Context" Foreground="Color.Grey" Decoration="Decoration.Dim" />
     <FlexBox Direction="FlexDirection.Row" Gap="0" Width="@Math.Max(1, Reading.Bar.Length)">
         <Markup Content="@Reading.Filled" Foreground="@BarColor" />
         <Markup Content="@Reading.Empty" Foreground="Color.Grey42" />
     </FlexBox>
     <Markup Content="@Reading.Label" Foreground="Color.Grey" Decoration="Decoration.Dim" />
-</Columns>
+    }
+</FlexBox>
 
 @code {
     [Parameter] public long UsedTokens { get; set; }
     [Parameter] public int WindowTokens { get; set; }
+    [Parameter] public long TotalSessionTokens { get; set; }
+    [Parameter] public bool ShowContext { get; set; } = true;
+
+    private string TotalLabel => $"Total Session Tokens {TokenTrackingService.FormatTokenCount(TotalSessionTokens)}";
+    private int RowWidth => (ShowContext ? 9 + Reading.Bar.Length + Reading.Label.Length : 0)
+        + (TotalSessionTokens > 0 ? TotalLabel.Length + (ShowContext ? 3 : 0) : 0);
 
     private ContextMeter.Reading Reading => ContextMeter.Read(UsedTokens, WindowTokens);
 
