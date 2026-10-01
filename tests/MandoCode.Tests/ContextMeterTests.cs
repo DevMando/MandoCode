@@ -13,7 +13,7 @@ public class ContextMeterTests
         Assert.Equal(ContextMeter.BarCells, reading.Bar.Length);
         Assert.Equal(new string('█', 10), reading.Filled);
         Assert.Equal(new string('░', 10), reading.Empty);
-        Assert.Equal("8k / 16k (50%)", reading.Label);
+        Assert.Equal("50% of 16k", reading.Label);
         Assert.Equal(ContextMeter.Level.Ok, reading.Level);
     }
 
@@ -32,7 +32,7 @@ public class ContextMeterTests
         var reading = ContextMeter.Read(40_000, 16_000);
         Assert.Equal(new string('█', ContextMeter.BarCells), reading.Filled);
         Assert.Equal(string.Empty, reading.Empty);
-        Assert.EndsWith("(100%)", reading.Label);
+        Assert.Equal("100% of 16k", reading.Label);
     }
 
     [Fact]

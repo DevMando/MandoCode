@@ -58,14 +58,17 @@
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
 @if (_showPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
-    @if (Config.EnableTokenTracking && TokenTracker.LastOperation is { } lastOp)
-    {
-        <Box FillWidth="true" Height="1"><ContextMeterLine UsedTokens="@lastOp.PromptTokens"
-                          WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" /></Box>
-    }
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
-        <Box FillWidth="true" Height="1"><Markup Content="@($"Total [{TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens)} tokens]")" Foreground="Color.Grey" /></Box>
+        <Box FillWidth="true" Height="1"><Markup Content=" " /></Box>
+        <Box FillWidth="true" Height="1">
+            <RazorConsole.Components.Align Horizontal="HorizontalAlignment.Right">
+                <ContextMeterLine TotalSessionTokens="@TokenTracker.TotalSessionTokens"
+                                  ShowContext="@(!MandoCodeConfig.IsCloudModel(Config.GetEffectiveModelName()) && TokenTracker.LastOperation is not null)"
+                                  UsedTokens="@(TokenTracker.LastOperation?.PromptTokens ?? 0)"
+                                  WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+            </RazorConsole.Components.Align>
+        </Box>
     }
     <PromptInput @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
                  ModelPicker="@_modelPicker"
@@ -2002,22 +2005,19 @@
                             await TryAutoSigninAfter401Async();
                         }
 
-                        // Show per-response token summary (right-aligned, tight to response)
+                        // Show per-response token summary on the left, matching the footer text style.
                         if (Config.EnableTokenTracking)
                         {
                             var lastOp = TokenTracker.LastOperation;
                             if (lastOp != null)
                             {
-                                var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
-                                var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
+                                var inLabel = $"In {TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)}";
+                                var outLabel = $"Out {TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)}";
                                 var tpsLabel = lastOp.TokensPerSecond.HasValue
-                                    ? $": {lastOp.TokensPerSecond.Value:0.#} tok/s"
+                                    ? $" · {lastOp.TokensPerSecond.Value:0.#} tok/s"
                                     : "";
-                                var totalLabel = TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens);
-                                var tokenSummary = $"[{inLabel}, {outLabel}{tpsLabel}]";
-                                var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
-                                Console.WriteLine();
-                                Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
+                                var tokenSummary = $"{inLabel} · {outLabel}{tpsLabel}";
+                                AnsiConsole.Write(new Text(tokenSummary, new Style(Color.Grey, decoration: Decoration.Dim)));
                             }
                         }
 

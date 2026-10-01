@@ -22,6 +22,12 @@ All notable changes to MandoCode will be documented in this file.
 - **Explain HTTP 410 Gone instead of blaming the connection.** Identify the unavailable model and direct users to `/model`; skip retries for that failure. Missing cloud models no longer suggest pulling the model or restarting Ollama, and other HTTP failures are not mislabeled as missing models.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
+### UI changes
+- **Clearer statistics beneath each reply.** Show `In 12k · Out 195 · 74.2 tok/s` on the left in dim gray, matching the session/context text. Remove brackets, the approximation marker, and the extra blank line above the statistics.
+- **One session/context row above the prompt.** Right-align `Total Session Tokens 127k · Context [bar] 78% of 16k`, with a blank line above it to separate session status from reply statistics. The context label uses the configured model window.
+- **Cloud models show session totals only.** Hide the context bar and context text for cloud models.
+- **Keep existing context behavior.** Context usage still reflects the last request's input tokens; compaction thresholds, token counting, and recovery behavior are unchanged.
+
 ### Alpha limitations
 - Some settings, onboarding, learning, and recovery pickers still use the older terminal UI and need migration. Cursor-driven animations and interactive subprocess input also need further review. The old music visualizer is suppressed in component mode.
 - Automated checks cover multi-turn layout, small terminals, completion, model selection/recovery, and compiled Razor output routing on .NET 8 and .NET 10. Continue live-terminal testing before release; see `docs/component-tui-alpha.md`.
