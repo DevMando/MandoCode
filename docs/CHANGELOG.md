@@ -17,6 +17,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **Approval menus receive keyboard focus.** File-write approval options now take focus when they open, so Up/Down selects an option and Enter confirms it. Preview scrolling remains available, and each new approval starts on the first option. This also applies to other menus using the same approval component.
 - **Replies no longer overwrite the input or appear out of order.** Razor display calls now join the conversation state rather than writing directly over the terminal canvas. Cursor-control sequences in captured output are not replayed.
 - **Model selection no longer competes with terminal input.** The prompt owns model filtering and navigation; closing the popup restores its focus. Checking/loading progress is visible during model changes.
 - **Explain HTTP 410 Gone instead of blaming the connection.** Identify the unavailable model and direct users to `/model`; skip retries for that failure. Missing cloud models no longer suggest pulling the model or restarting Ollama, and other HTTP failures are not mislabeled as missing models.

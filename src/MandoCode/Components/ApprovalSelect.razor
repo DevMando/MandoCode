@@ -18,7 +18,7 @@
    Palette matches the Spectre prompts this replaces: per-option colors with the
    black-on-deepskyblue1 focus highlight. *@
 
-<div @onkeydown="HandleKeyDown">
+<div data-focusable="true" data-focus-order="0" data-focus-key="@_focusKey" @onkeydown="HandleKeyDown">
     <Rows>
         @for (var i = 0; i < Options.Count; i++)
         {
@@ -47,6 +47,31 @@
     public enum ScrollKey { PageUp, PageDown, Home, End }
 
     private int _focusedIndex;
+    [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
+    private readonly string _focusKey = "approval-" + Guid.NewGuid().ToString("N");
+    private IReadOnlyList<Option>? _previousOptions;
+    private bool _requestFocus;
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Options, _previousOptions))
+        {
+            _previousOptions = Options;
+            _focusedIndex = 0;
+            _requestFocus = true;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The prompt is removed while approvals are active. Explicitly take focus
+        // from the scrollable conversation, which otherwise receives the arrows.
+        if (firstRender || _requestFocus)
+        {
+            _requestFocus = false;
+            await Focus.FocusAsync(_focusKey);
+        }
+    }
 
     // Accept both naming conventions, mirroring RazorConsole's own Select component:
     // the keyboard pump reports ConsoleKey names ("UpArrow"), web events use "ArrowUp".
