@@ -1356,6 +1356,10 @@ public class AIService
 
         _agentFunctionMiddleware!.OnFunctionInvoked += OnTraceInvoked;
         _agentFunctionMiddleware.OnFunctionCompleted += OnTraceCompleted;
+        // Stop the in-flight model call without cancelling the UI's request token:
+        // the old step ends, but replacement planning/approval can still proceed.
+        void OnReplacementRequested() => requestCts.Cancel();
+        _planHandoff.ReplacementRequested += OnReplacementRequested;
 
         try
         {
@@ -1413,6 +1417,7 @@ public class AIService
         {
             _agentFunctionMiddleware.OnFunctionInvoked -= OnTraceInvoked;
             _agentFunctionMiddleware.OnFunctionCompleted -= OnTraceCompleted;
+            _planHandoff.ReplacementRequested -= OnReplacementRequested;
         }
     }
 
@@ -1826,6 +1831,11 @@ public class AIService
                     // within this same loop needs the full trace).
                     AppendAgentTurnToHistory(stepHistory, result.NewHistoryMessages, processedResponse);
                     evidenceHistory.AddRange(result.NewHistoryMessages);
+                }
+                catch (Exception) when (scope.PlanCancellationRequested)
+                {
+                    // A provider failure after redirection must not revive the old plan.
+                    throw new PlanCancellationRequestedException();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {

@@ -2156,7 +2156,7 @@
     // redirect/stop), so these stay markup-free for clean comparisons and scrollback echo.
     private const string ExecutePlanLabel = "Execute plan";
     private const string EditPlanStepLabel = "Edit a step";
-    private const string RejectPlanLabel = "Reject (answer without a plan)";
+    private const string RejectPlanLabel = "One-shot it";
     private const string CancelRequestLabel = "Cancel request";
 
     // App-standard selection treatment for the remaining Spectre prompts — same
@@ -2167,7 +2167,7 @@
     // Plan-approval select bridge — mirrors the wizard TCS pattern above.
     private bool _planSelectActive;
     private TaskCompletionSource<string>? _planSelectTcs;
-    private static readonly ApprovalSelect.Option[] _planSelectOptions =
+    private static readonly ApprovalSelect.Option[] ProposedPlanOptions =
     {
         new(ExecutePlanLabel, Color.Green),
         new(EditPlanStepLabel, Color.DeepSkyBlue1),
@@ -2180,15 +2180,21 @@
     /// <paramref name="ct"/> so a cancelled request (Esc, timeout) unwinds the await
     /// instead of leaving the turn stuck at an orphaned prompt.
     /// </summary>
-    private async Task<string> PromptPlanChoiceAsync(CancellationToken ct)
+    private IReadOnlyList<ApprovalSelect.Option> _planSelectOptions = ProposedPlanOptions;
+
+    private Task<string> PromptPlanChoiceAsync(CancellationToken ct) =>
+        PromptPlanChoiceAsync("The assistant proposes this plan. What would you like to do?", ProposedPlanOptions, ct);
+
+    private async Task<string> PromptPlanChoiceAsync(string title, IReadOnlyList<ApprovalSelect.Option> options, CancellationToken ct)
     {
+        _planSelectOptions = options;
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _planSelectTcs = tcs;
         using var cancelReg = ct.Register(() => tcs.TrySetCanceled(ct));
 
         // Title goes to scrollback imperatively (same as WizardPromptSelectAsync) so the
         // VDOM region holds only the option rows — keeps the live-repaint area minimal.
-        AnsiConsole.MarkupLine("[deepskyblue1]The assistant proposes this plan. What would you like to do?[/]");
+        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
         _planSelectActive = true;
         await InvokeAsync(StateHasChanged);
@@ -2201,6 +2207,7 @@
         finally
         {
             _planSelectActive = false;
+            _planSelectTcs = null;
             await InvokeAsync(StateHasChanged);
             // Brief wait so the VDOM tears down the select before imperative writes
             // (matches the wizard primitives' teardown delay).
@@ -2345,6 +2352,8 @@
                 await HandleProgressEventAsync(progressEvent, plan, _requestCts.Token);
             }
 
+            if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !_requestCts.IsCancellationRequested)
+                await ReviewReplacementPlanAsync(plan, revisedInstructions, _requestCts.Token);
             var manifest = PlanHandoff.BuildManifest(plan, PlanHandoff.FileOperations);
             AI.AppendAssistantNote(manifest);
         }
@@ -2563,7 +2572,7 @@
         if (choice == RejectPlanLabel)
         {
             _lastPlanOutcome = PlanTurnOutcome.Rejected;
-            AnsiConsole.MarkupLine("[dim]Plan rejected — answering directly instead.[/]");
+            AnsiConsole.MarkupLine("[dim]Plan skipped — one-shotting your request.[/]");
             AnsiConsole.WriteLine();
             // The caller turns this into a fresh follow-up turn: with execution deferred there is
             // no open turn left for the model to answer in, so one is started explicitly.
@@ -2588,6 +2597,9 @@
             Spinner.Stop();
             PlanRunners.Current.CancelPlan(plan);
         }
+
+        if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !ct.IsCancellationRequested)
+            return await ReviewReplacementPlanAsync(plan, revisedInstructions, ct);
 
         AnsiConsole.WriteLine();
         if (plan.Status == TaskPlanStatus.Completed)
@@ -2626,6 +2638,36 @@
         return summary +
                "\n\nThe plan has finished. Respond to the user now with a brief summary of the outcome. " +
                "Do NOT create more files, call more tools, or propose another plan.";
+    }
+
+    private async Task<string> ReviewReplacementPlanAsync(TaskPlan oldPlan, string instructions, CancellationToken ct)
+    {
+        AnsiConsole.MarkupLine("[yellow]The previous plan was stopped because you changed the instructions. Review a replacement before work resumes.[/]");
+        var updatedRequest = $"Original request:\n{oldPlan.OriginalRequest}\n\nLatest user instructions (supersede conflicting earlier requirements):\n{instructions}";
+        AI.AppendUserNote(instructions);
+        AI.SetRequestContext(updatedRequest);
+        Spinner.Start("Creating replacement plan...");
+        TaskPlan replacement;
+        try
+        {
+            var context = "The previous plan was cancelled. Generate new steps and acceptance criteria for the latest instructions. " +
+                "Inspect existing work and retain completed changes that still satisfy the updated request; do not execute tools or repeat work while planning.\n" +
+                "Earlier step results:\n" + string.Join("\n", oldPlan.Steps.Select(step => $"{step.Description}: {step.Result ?? step.ErrorMessage ?? step.Status.ToString()}")) +
+                "\nObserved file changes:\n" + string.Join("\n", PlanHandoff.FileOperations.Select(op => $"{op.Operation}: {op.Path}"));
+            var proposal = await AI.GeneratePlanAsync(updatedRequest, context, ct);
+            replacement = new TaskPlan { OriginalRequest = updatedRequest, Steps = TaskPlannerService.FromProposals(proposal.Steps), Status = TaskPlanStatus.Pending };
+            if (replacement.Steps.Count == 0) throw new InvalidOperationException("The replacement plan contained no steps; the previous plan remains stopped.");
+            PlanFinalQuality.Ensure(replacement);
+        }
+        finally { Spinner.Stop(); }
+        var summary = await HandleProposedPlanAsync(replacement, ct);
+        // The outer handoff builds its manifest from the same plan object. Carry the
+        // reviewed replacement's outcome back so it never reports the stale criteria.
+        oldPlan.OriginalRequest = replacement.OriginalRequest;
+        oldPlan.Steps = replacement.Steps;
+        oldPlan.Status = replacement.Status;
+        oldPlan.ExecutionSummary = replacement.ExecutionSummary;
+        return summary;
     }
 
     /// <summary>
@@ -2867,30 +2909,30 @@
 
                 // Ask user what to do
                 // Palette: green = try again, gold = redirect (skip), red = destructive.
-                const string retryStepLabel = "[green]Retry this step[/]";
-                const string revisePlanLabel = "[deepskyblue1]Revise the remaining plan[/]";
-                const string skipStepLabel = "[rgb(255,200,80)]Skip this step and continue[/]";
-                const string cancelPlanLabel = "[red]Cancel the plan[/]";
+                const string retryStepLabel = "Retry this step";
+                const string revisePlanLabel = "Revise the remaining plan";
+                const string skipStepLabel = "Skip this step and continue";
+                const string cancelPlanLabel = "Cancel the plan";
 
                 var stepToDecide = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
 
                 // Retry is offered only on the workflow engine. The legacy runner walks the steps
                 // with a foreach and has already moved past this one — it has no way back.
-                var choices = PlanRunners.UsingWorkflowEngine
-                    ? new[] { retryStepLabel, revisePlanLabel, skipStepLabel, cancelPlanLabel }
-                    : new[] { skipStepLabel, cancelPlanLabel };
+                var choices = new List<ApprovalSelect.Option>();
+                if (PlanRunners.UsingWorkflowEngine)
+                {
+                    choices.Add(new(retryStepLabel, Color.Green));
+                    choices.Add(new(revisePlanLabel, Color.DeepSkyBlue1));
+                }
+                choices.Add(new(skipStepLabel, new Color(255, 200, 80)));
+                choices.Add(new(cancelPlanLabel, Color.Red));
 
                 string failChoice;
+                using (await PromptGate.AcquireAsync(ct))
                 using (KeyCoordinator.Suppress())
                 {
-                    failChoice = AnsiConsole.Prompt(
-                        new SelectionPrompt<string>()
-                            .Title("[deepskyblue1]How would you like to proceed?[/]")
-                            .HighlightStyle(SelectionHighlight)
-                            .AddChoices(choices)
-                    );
+                    failChoice = await PromptPlanChoiceAsync("How would you like to proceed?", choices, ct);
                 }
-
                 if (failChoice == cancelPlanLabel)
                 {
                     PlanRunners.Current.CancelPlan(plan);
@@ -2981,10 +3023,10 @@
             Spinner.Stop();
         }
 
-        const string useLabel = "[green]Use revised plan[/]";
-        const string editLabel = "[deepskyblue1]Edit a step[/]";
-        const string keepLabel = "[rgb(255,200,80)]Keep current plan and skip this step[/]";
-        const string cancelLabel = "[red]Cancel the plan[/]";
+        const string useLabel = "Use revised plan";
+        const string editLabel = "Edit a step";
+        const string keepLabel = "Keep current plan and skip this step";
+        const string cancelLabel = "Cancel the plan";
         string choice;
 
         // Keep the background Escape listener suppressed across the revised-plan menu and
@@ -2999,12 +3041,17 @@
                 AnsiConsole.MarkupLine(
                     $"[dim]Steps before {failedStep.StepNumber} are settled and will not run again.[/]");
 
-                choice = AnsiConsole.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("[deepskyblue1]Review the revised remaining plan[/]")
-                        .HighlightStyle(SelectionHighlight)
-                        .AddChoices(useLabel, editLabel, keepLabel, cancelLabel));
-
+                using (await PromptGate.AcquireAsync(ct))
+                {
+                    choice = await PromptPlanChoiceAsync("Review the revised remaining plan",
+                        new ApprovalSelect.Option[]
+                        {
+                            new(useLabel, Color.Green),
+                            new(editLabel, Color.DeepSkyBlue1),
+                            new(keepLabel, new Color(255, 200, 80)),
+                            new(cancelLabel, Color.Red)
+                        }, ct);
+                }
                 if (choice == editLabel)
                 {
                     await EditPlanStepAsync(
