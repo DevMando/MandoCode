@@ -135,7 +135,7 @@ public class TerminalThemeService : IDisposable
     {
         if (_paletteApplied)
         {
-            Console.Write("\u001b]104\u0007");
+            TuiConsole.WriteTerminalControl("\u001b]104\u0007");
             _paletteApplied = false;
         }
     }
@@ -167,7 +167,7 @@ public class TerminalThemeService : IDisposable
 
     private static void WritePaletteEntry(int index, string rgb)
     {
-        Console.Write($"\u001b]4;{index};rgb:{rgb}\u0007");
+        TuiConsole.WriteTerminalControl($"\u001b]4;{index};rgb:{rgb}\u0007");
     }
 
     /// <summary>

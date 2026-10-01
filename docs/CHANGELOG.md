@@ -4,6 +4,28 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+**RazorConsole 0.6 migration — 0.16.0-alpha.** The CLI now uses a component-based terminal layout, with a scrolling conversation above a persistent prompt. This alpha is based on v0.15.2.
+
+### Added
+- **A conversation that stays in order.** Submitted prompts, replies, code snippets, and tool results render as conversation components. Page Up/Down and mouse-wheel scrolling let you review earlier output; Ctrl+End returns to the latest output.
+- **A searchable model picker above the prompt.** Type to filter, use Up/Down to navigate, Enter or Tab to select, and Escape to cancel. Choices are checked before saving; unavailable cloud models are removed from the current picker so you can choose another.
+- **Startup recovery for unavailable cloud models.** A missing or retired configured cloud model opens the picker automatically. One compact warning explains what to do; a valid replacement clears it.
+
+### Changed
+- **Upgrade RazorConsole.Core from 0.5.0 to 0.6.0.** The CLI uses the widget layout and alternate terminal screen, with nested Razor components for the conversation, transient agent status, input, and completion popups.
+- **Keep the prompt at the bottom.** The textbox receives focus when it appears and stays visible during chat turns. Bounded previews and classic randomized spinners/verbs appear above it and disappear when finished.
+- **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
+
+### Fixed
+- **Replies no longer overwrite the input or appear out of order.** Razor display calls now join the conversation state rather than writing directly over the terminal canvas. Cursor-control sequences in captured output are not replayed.
+- **Model selection no longer competes with terminal input.** The prompt owns model filtering and navigation; closing the popup restores its focus. Checking/loading progress is visible during model changes.
+- **Explain HTTP 410 Gone instead of blaming the connection.** Identify the unavailable model and direct users to `/model`; skip retries for that failure. Missing cloud models no longer suggest pulling the model or restarting Ollama, and other HTTP failures are not mislabeled as missing models.
+- **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
+
+### Alpha limitations
+- Some settings, onboarding, learning, and recovery pickers still use the older terminal UI and need migration. Cursor-driven animations and interactive subprocess input also need further review. The old music visualizer is suppressed in component mode.
+- Automated checks cover multi-turn layout, small terminals, completion, model selection/recovery, and compiled Razor output routing on .NET 8 and .NET 10. Continue live-terminal testing before release; see `docs/component-tui-alpha.md`.
+
 ## [0.15.2] - 2026-09-24
 
 **A quick fix for the `/` command menu.** In 0.15.1, typing `/` could crash MandoCode in a short

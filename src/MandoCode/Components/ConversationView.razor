@@ -1,0 +1,53 @@
+@using RazorConsole.Core.Rendering
+@inject ScrollableLayoutCoordinator LayoutCoordinator
+@implements IDisposable
+
+<view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
+    <div data-focusable="true" data-focus-order="1" @onkeydown="HandleKey" @onwheel="HandleWheel">
+        @Header
+        @foreach (var entry in Entries)
+        {
+            <ConversationEntry @key="entry.Id" Entry="entry" />
+        }
+    </div>
+</view-height-scrollable>
+
+@code {
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public IReadOnlyList<TuiEntry> Entries { get; set; } = Array.Empty<TuiEntry>();
+    private readonly string _scrollId = Guid.NewGuid().ToString("N");
+    private int _offset;
+    private bool _following = true;
+    public void Scroll(string key)
+    {
+        var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+        if (maximum == int.MaxValue) return;
+        var current = _following ? maximum : _offset;
+        var page = Math.Max(1, SafeHeight / 2);
+        var next = key switch
+        {
+            "PageUp" => current - page,
+            "PageDown" => current + page,
+            "ArrowUp" => current - 1,
+            "ArrowDown" => current + 1,
+            "Home" => 0,
+            "End" => maximum,
+            _ => current,
+        };
+        SetOffset(next, maximum);
+    }
+    private void HandleKey(KeyboardEventArgs key) => Scroll(key.Key);
+    private void HandleWheel(WheelEventArgs wheel)
+    {
+        var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+        if (maximum != int.MaxValue) SetOffset((_following ? maximum : _offset) + (int)wheel.DeltaY, maximum);
+    }
+    private void SetOffset(int offset, int maximum)
+    {
+        _offset = Math.Clamp(offset, 0, maximum);
+        _following = _offset == maximum;
+        StateHasChanged();
+    }
+    private static int SafeHeight { get { try { return Math.Max(12, Console.WindowHeight); } catch { return 24; } } }
+    public void Dispose() => LayoutCoordinator.Remove(_scrollId);
+}

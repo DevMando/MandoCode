@@ -1,0 +1,48 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<Box FillWidth="true" Height="1">
+    @if (Selected)
+    {
+        <Markup Content="@(CommandField + (DescriptionWidth > 0 ? " " + DescriptionField : ""))"
+                Foreground="Color.Black" Background="@(new Color(86, 182, 194))" />
+    }
+    else
+    {
+        <Flex Direction="FlexDirection.Row" Gap="1" Height="1" FillWidth="true">
+            <Markup Content="@CommandField" Foreground="@(new Color(86, 182, 194))" />
+            @if (DescriptionWidth > 0)
+            {
+                <Markup Content="@DescriptionField" Foreground="Color.Green" />
+            }
+        </Flex>
+    }
+</Box>
+
+@code {
+    [Parameter] public string Command { get; set; } = "";
+    [Parameter] public string Description { get; set; } = "";
+    [Parameter] public int CommandColumn { get; set; } = 14;
+    [Parameter] public bool Selected { get; set; }
+    private int Width => Math.Max(1, Viewport.Width - 4);
+    private int CommandWidth => Math.Min(Width, CommandColumn);
+    private int DescriptionWidth => Math.Max(0, Width - CommandWidth - 1);
+    private string CommandField => Fit(Command, CommandWidth);
+    private string DescriptionField => Fit(Description, DescriptionWidth);
+    private static string Fit(string text, int width)
+    {
+        var result = new System.Text.StringBuilder();
+        var cells = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsControl(rune)) continue;
+            var size = RazorConsole.Core.Input.TextSelectionState.CellWidth(rune.ToString());
+            if (cells + size > width) break;
+            cells += size;
+            result.Append(rune.ToString());
+        }
+        result.Append(' ', Math.Max(0, width - cells));
+        return result.ToString();
+    }
+}

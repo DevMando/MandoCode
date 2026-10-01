@@ -1,0 +1,40 @@
+@using Spectre.Console
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+@if (Composer.IsOpen)
+{
+    <Panel Border="BoxBorder.Rounded" BorderColor="@(new Color(86, 182, 194))" Title="@(Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
+        <Rows>
+            @foreach (var index in VisibleIndices)
+            {
+                var item = Composer.Suggestions.DropdownItems[index];
+                var selected = index == Composer.Suggestions.SelectedIndex;
+                var description = Composer.Suggestions.Mode == AutocompleteMode.Command &&
+                    Composer.Suggestions.CommandDescriptions.TryGetValue(item, out var detail) ? detail : "";
+                @if (Composer.Suggestions.Mode == AutocompleteMode.File)
+                {
+                    <FileSuggestionRow Path="@item" Selected="@selected" />
+                }
+                else
+                {
+                    <CommandSuggestionRow Command="@item" Description="@description" Selected="@selected" CommandColumn="@CommandColumn" />
+                }
+            }
+        </Rows>
+    </Panel>
+}
+
+@code {
+    [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
+    private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Max(command => command.Length));
+    private IEnumerable<int> VisibleIndices
+    {
+        get
+        {
+            var count = Composer.Suggestions.DropdownItems.Count;
+            var visible = Math.Min(6, Math.Max(1, Viewport.Height / 4));
+            var start = Math.Clamp(Composer.Suggestions.SelectedIndex - visible + 1, 0, Math.Max(0, count - visible));
+            return Enumerable.Range(start, Math.Min(visible, count - start));
+        }
+    }
+}

@@ -1,7 +1,10 @@
 @using Spectre.Console;
 @using System.Reflection;
 
+<RenderableContent Content="_panel" />
+
 @code {
+    private Spectre.Console.Rendering.IRenderable _panel = new Spectre.Console.Text("");
     // Gate the easter-egg roll so it happens at most once per process launch.
     // Razor re-instantiates components on some re-renders, which otherwise fires
     // OnInitialized multiple times and rolls the dice again — when the glitch
@@ -15,7 +18,7 @@
         if (!_glitchRolled)
         {
             _glitchRolled = true;
-            if (Random.Shared.Next(50) == 0)
+            if (TuiConsole.Current is null && Random.Shared.Next(50) == 0)
             {
                 PlayMatrixGlitch();
             }
@@ -27,7 +30,7 @@
         panel.Border(BoxBorder.Rounded);
         panel.BorderColor(Color.Teal);
 
-        AnsiConsole.Write(panel);
+        _panel = panel;
     }
 
     private static string ResolveVersionLabel()

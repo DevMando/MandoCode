@@ -708,6 +708,10 @@ public class AIService
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         { throw new TimeoutException("Plan generation timed out. Retry planning or choose a smaller goal."); }
         catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (OllamaModelAvailability.IsUnavailable(ex))
+        {
+            throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+        }
         catch (Exception ex)
         {
             generationError = ex;
@@ -745,6 +749,10 @@ public class AIService
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         { throw new TimeoutException("Plan generation timed out. Retry planning or choose a smaller goal."); }
         catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (OllamaModelAvailability.IsUnavailable(ex))
+        {
+            throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+        }
         catch (Exception ex)
         {
             generationError = ex;
@@ -837,7 +845,7 @@ public class AIService
 
             if (!response.IsSuccessStatusCode)
             {
-                return (false, $"Model '{modelName}' not found. Run: ollama pull {modelName}");
+                return (false, OllamaModelAvailability.ValidationFailure(modelName, response.StatusCode));
             }
 
             // Successful validation must stay successful when older servers omit metadata.
@@ -1550,6 +1558,7 @@ public class AIService
     /// </summary>
     private string FormatHttpFailure(HttpRequestException ex)
     {
+        if (OllamaModelAvailability.IsUnavailable(ex)) return OllamaModelAvailability.Message(_config.GetEffectiveModelName());
         if (IsUnauthorizedError(ex))
         {
             // Brief — the auto-launched cloud sign-in walkthrough that fires right
@@ -1576,6 +1585,7 @@ public class AIService
     /// </summary>
     private string FormatErrorMessage(Exception ex)
     {
+        if (OllamaModelAvailability.IsUnavailable(ex)) return OllamaModelAvailability.Message(_config.GetEffectiveModelName());
         // 401 surfaces here too when the plan-step path rethrows as a generic Exception.
         if (ex is HttpRequestException http && IsUnauthorizedError(http))
             return FormatHttpFailure(http);
@@ -1843,7 +1853,9 @@ public class AIService
                 }
                 catch (HttpRequestException ex)
                 {
-                    throw new Exception($"Connection to Ollama failed: {ex.Message}");
+                    if (OllamaModelAvailability.IsUnavailable(ex))
+                        throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+                    throw new Exception($"Connection to Ollama failed: {ex.Message}", ex);
                 }
 
                 // Decide whether to auto-continue (while scope is still live so BudgetExhausted reads correctly).

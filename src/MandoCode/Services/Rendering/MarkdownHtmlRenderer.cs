@@ -170,7 +170,7 @@ public static class MarkdownHtmlRenderer
         var style = level switch
         {
             1 => new Style(new Color(255, 200, 80), decoration: Decoration.Bold),
-            2 => new Style(Color.DeepSkyBlue1, decoration: Decoration.Bold),
+            2 => new Style(new Color(86, 182, 194), decoration: Decoration.Bold),
             3 => new Style(Color.Green, decoration: Decoration.Bold),
             4 => new Style(Color.Blue, decoration: Decoration.Bold),
             5 => new Style(Color.Magenta1, decoration: Decoration.Bold),
@@ -317,7 +317,7 @@ public static class MarkdownHtmlRenderer
         if (!string.IsNullOrEmpty(language))
         {
             panel.Header = new PanelHeader(
-                $"[deepskyblue1] {Spectre.Console.Markup.Escape(language)} [/]",
+                $"[#56b6c2] {Spectre.Console.Markup.Escape(language)} [/]",
                 Justify.Left);
         }
 

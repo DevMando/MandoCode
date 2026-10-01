@@ -33,6 +33,7 @@ public class SpinnerService
 
     public void Start(string? activity = null)
     {
+        if (TuiConsole.Current is { } session) { session.SetRunning(true, activity); return; }
         Stop();
         SetTaskbarIndeterminate();
         var cts = new CancellationTokenSource();
@@ -148,6 +149,7 @@ public class SpinnerService
     /// </summary>
     public void UpdateActivity(string? activity)
     {
+        TuiConsole.Current?.SetActivity(activity);
         _liveActivity = activity;
     }
 
@@ -160,6 +162,7 @@ public class SpinnerService
     public void UpdatePreview(string? text)
     {
         _livePreview = text;
+        TuiConsole.Current?.SetPreview(text);
     }
 
     /// <summary>
@@ -207,6 +210,7 @@ public class SpinnerService
 
     public void Stop()
     {
+        if (TuiConsole.Current is { } session) { session.SetRunning(false); return; }
         CancellationTokenSource? cts;
         Task? task;
 

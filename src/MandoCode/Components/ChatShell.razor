@@ -1,0 +1,47 @@
+@using RazorConsole.Core.Renderables
+@inject TuiSession Session
+@implements IDisposable
+
+<Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+    <Box FillWidth="true" FillHeight="true">
+        <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+            <Box FillWidth="true" FillHeight="true">
+                <ConversationView @ref="_conversation" Header="Header" Entries="@_state.Entries" />
+            </Box>
+            <AgentStatus State="@_state" />
+        </Flex>
+    </Box>
+    <Box FillWidth="true">
+        @Footer
+    </Box>
+</Flex>
+
+@code {
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    private ConversationView? _conversation;
+    public void Scroll(string key) => _conversation?.Scroll(key);
+    private TuiSnapshot _state = new(Array.Empty<TuiEntry>(), false, "", "");
+    private readonly CancellationTokenSource _shutdown = new();
+    protected override void OnInitialized()
+    {
+        _state = Session.Snapshot();
+        _ = RefreshAsync(_shutdown.Token);
+    }
+    private async Task RefreshAsync(CancellationToken token)
+    {
+        var revision = Session.Revision;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(80));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                Session.RefreshStatus();
+                if (Session.Revision == revision) continue;
+                await InvokeAsync(() => { revision = Session.Revision; _state = Session.Snapshot(); StateHasChanged(); });
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+    public void Dispose() { _shutdown.Cancel(); _shutdown.Dispose(); }
+}

@@ -26,8 +26,11 @@
 @inject McpApprovalGate McpGate
 @inject ApprovalPromptGate PromptGate
 @inject UpdateCheckService UpdateCheck
+@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime Lifetime
 @implements IDisposable
 
+<ChatShell @ref="_chatShell">
+<Header>
 <Banner />
 
 @* Banner stays always-on (it's static, no overlap risk). The dynamic section
@@ -49,17 +52,27 @@
               UpdateCommand="@_updateCommand" />
 }
 
+</Header>
+<Footer>
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !InstructionCoordinator.IsActive)
+@if (_showPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.LastOperation is { } lastOp)
     {
-        <ContextMeterLine UsedTokens="@lastOp.PromptTokens"
-                          WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+        <Box FillWidth="true" Height="1"><ContextMeterLine UsedTokens="@lastOp.PromptTokens"
+                          WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" /></Box>
     }
-    <PromptInput OnSubmit="HandleVdomSubmit"
-                 OnAutocompleteRequested="HandleAutocompleteRequested"
+    @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
+    {
+        <Box FillWidth="true" Height="1"><Markup Content="@($"Total [{TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens)} tokens]")" Foreground="Color.Grey" /></Box>
+    }
+    <PromptInput @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
+                 ModelPicker="@_modelPicker"
+                 OnModelSelected="HandleModelSelected"
+                 OnModelPickerCancel="CancelModelPicker"
+                 OnCancel="CancelCurrentRequest"
+                 OnScroll="ScrollConversation"
                  InitialValue="@_promptInitialValue"
                  Disabled="@_isProcessing" />
 }
@@ -137,6 +150,9 @@
                     OnSubmit="HandlePlanSelectSubmit" />
 }
 
+</Footer>
+</ChatShell>
+
 @code {
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
@@ -147,6 +163,7 @@
     private bool _continueRequested = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
+    private bool _offerStartupModelPicker;
 
     // "A newer MandoCode is on NuGet" line, set by the background update check after the
     // connection is established. Null/empty until then (or when up to date / opted out).
@@ -206,7 +223,6 @@
     private IReadOnlyList<ApprovalSelect.Option> _approvalMenuOptions = Array.Empty<ApprovalSelect.Option>();
 
     private bool _isProcessing = false;
-    private bool _autocompleteActive = false;
     private string _promptInitialValue = "";
 
 
@@ -234,6 +250,7 @@
 
     private void StartMusicVisualizer()
     {
+        if (TuiConsole.Current is not null) return;
         // Early-exit if a visualizer CTS is already active
         lock (_musicVisLock)
         {
@@ -578,8 +595,6 @@
         // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
         // alphabetical otherwise, badge after each tag, single-space split for
         // the tag.
-        AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
-        AnsiConsole.WriteLine();
         var labeled = fetched.Models
             .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
             .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
@@ -588,12 +603,43 @@
                 : $"{m}   (local)")
             .ToArray();
 
-        var picked = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Select a model:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(labeled));
-        var modelTag = picked.Split(' ')[0];
+        string modelTag;
+        while (true)
+        {
+            var picked = await PickModelFromPromptAsync(labeled);
+            if (picked is null) return;
+            modelTag = picked.Split(' ')[0];
+            string? error;
+            Spinner.Start($"Checking {modelTag}…");
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                error = await OllamaModelAvailability.CheckCandidateAsync(client, Config.OllamaEndpoint, modelTag);
+            }
+            catch (Exception ex)
+            {
+                _modelWarning = $"Could not check {modelTag}: {ex.Message}. Try /model again.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            finally { Spinner.Stop(); }
+            if (error is null) break;
+            System.Diagnostics.Debug.WriteLine($"[Model selection] {error}");
+            if (!OllamaModelAvailability.OfferStartupPicker(modelTag, error))
+            {
+                _modelWarning = error;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            _modelWarning = $"{modelTag} is no longer available. Choose another model below.";
+            labeled = labeled.Where(option => option != picked).ToArray();
+            if (labeled.Length == 0)
+            {
+                _modelWarning = "None of the listed cloud models are available. Use /setup to configure another model.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
 
         var previousModel = Config.GetEffectiveModelName();
         Config.ModelName = modelTag;
@@ -613,10 +659,14 @@
         }
 
         Config.Save();
-        await AI.ReinitializeAsync(Config);
+        Spinner.Start($"Loading {modelTag}…");
+        try { await AI.ReinitializeAsync(Config); }
+        finally { Spinner.Stop(); }
 
+        await ValidateCurrentModelAsync();
+        if (_modelError) return;
         AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)}.[/]");
-        AnsiConsole.MarkupLine("[dim]Tip: run /config to tweak response length, temperature, timeout, or other settings.[/]");
+
         AnsiConsole.WriteLine();
     }
 
@@ -780,14 +830,11 @@
         var (isValid, errorMessage) = await AI.ValidateModelAsync();
         if (!isValid && errorMessage != null)
         {
-            // Show warning but allow user to continue
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Warning:[/]");
-            AnsiConsole.WriteLine(errorMessage);
-            AnsiConsole.WriteLine();
-
+            System.Diagnostics.Debug.WriteLine($"[Model validation] {errorMessage}");
             if (errorMessage.Contains("Continue anyway?"))
             {
+                AnsiConsole.MarkupLine("[yellow]Warning:[/]");
+                AnsiConsole.WriteLine(errorMessage);
                 var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
                 if (!continueAnyway)
                 {
@@ -796,7 +843,8 @@
                     AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
                     ThemeService.ResetPalette();
                     ThemeService.Dispose();
-                    Environment.Exit(1);
+                    Environment.ExitCode = 1;
+                    Lifetime.StopApplication();
                     return;
                 }
             }
@@ -804,13 +852,15 @@
             {
                 // Hard error (model not found) — enter limited mode
                 _modelError = true;
-                _modelWarning = errorMessage;
-                AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[yellow]You can fix this by:[/]");
-                AnsiConsole.MarkupLine("[dim]  1. Pull the model:[/] ollama pull <model-name>");
-                AnsiConsole.MarkupLine("[dim]  2. Run[/] /config [dim]to select a different model[/]");
-                AnsiConsole.MarkupLine("[dim]  3. Make sure Ollama is running:[/] ollama serve");
-                AnsiConsole.WriteLine();
+                if (OllamaModelAvailability.OfferStartupPicker(Config.GetEffectiveModelName(), errorMessage))
+                {
+                    _modelWarning = $"{Config.GetEffectiveModelName()} is no longer available. Choose another model below.";
+                    _offerStartupModelPicker = !_hasRendered;
+                }
+                else
+                {
+                    _modelWarning = errorMessage;
+                }
             }
         }
         else
@@ -836,7 +886,7 @@
         // as rich operation displays when OnFunctionCompleted fires
         if (!IsFileSystemOperation(call.FunctionName))
         {
-            AnsiConsole.MarkupLine($"[dim][[Function]][/] [deepskyblue1]{Spectre.Console.Markup.Escape(call.Description)}[/]");
+            AnsiConsole.MarkupLine($"[dim][[Function]][/] [#56b6c2]{Spectre.Console.Markup.Escape(call.Description)}[/]");
         }
 
         // Show what the model is doing above the spinner in grey
@@ -1011,16 +1061,18 @@
 
     private async Task RunInteractiveLoopAsync()
     {
+        if (_offerStartupModelPicker)
+        {
+            _offerStartupModelPicker = false;
+            _isProcessing = true;
+            try { await HandleModelCommandAsync(); }
+            catch (Exception ex)
+            {
+                AnsiConsole.WriteLine($"Could not select a replacement model: {ex.Message}");
+            }
+        }
         while (true)
         {
-            // Show session token count right-aligned above prompt
-            if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
-            {
-                var tokenDisplay = $"Total [{TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens)} tokens]";
-                var padding = Math.Max(0, Console.WindowWidth - tokenDisplay.Length - 1);
-                Console.WriteLine($"\u001b[2m{new string(' ', padding)}{tokenDisplay}\u001b[0m");
-            }
-
             // Ensure music visualizer is running if music is active
             // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
             StartMusicVisualizer();
@@ -1030,12 +1082,6 @@
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
-
-            // Echo the submitted input in gold so it persists in terminal scrollback.
-            // The 100ms delay in WaitForVdomInputAsync ensures the VDOM repaint
-            // (which removes PromptInput) has completed before this write.
-            Console.Write($"\u001b[38;2;255;200;80m> {input}\u001b[0m");
-            Console.WriteLine();
 
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
@@ -1056,7 +1102,7 @@
                     MusicPlayer.Dispose();
                     ThemeService.Dispose();
                     AnsiConsole.WriteLine("Goodbye!");
-                    Environment.Exit(0);
+                    Lifetime.StopApplication();
                     return;
                 }
 
@@ -1080,7 +1126,7 @@
                     await AI.ClearHistoryAsync();
                     StateMachine.ClearHistory();
                     SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
-                    Console.Clear();
+                    TuiConsole.Clear();
                     AnsiConsole.MarkupLine("[yellow]Conversation context wiped completely. Start a new conversation.[/]");
                     continue;
                 }
@@ -1382,9 +1428,39 @@
     /// Called by PromptInput when the user submits text via the VDOM TextInput.
     /// Completes the TaskCompletionSource so the interactive loop can continue.
     /// </summary>
+    private ModelPickerState? _modelPicker;
+    private TaskCompletionSource<string?>? _modelPickerTcs;
+    private void HandleModelSelected(string model) => _modelPickerTcs?.TrySetResult(model);
+    private void CancelModelPicker()
+    {
+        _modelWarning = _modelWarning?.Replace("Choose another model below.", "Choose another model with /model.");
+        _modelPickerTcs?.TrySetResult(null);
+    }
+    private async Task<string?> PickModelFromPromptAsync(string[] models)
+    {
+        _modelPickerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _modelPicker = new(models);
+        _showPrompt = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _modelPickerTcs.Task; }
+        finally
+        {
+            _modelPicker = null;
+            _modelPickerTcs = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private const string ChatComposerKey = "chat-composer";
+    private ChatShell? _chatShell;
+    private void ScrollConversation(string key) => _chatShell?.Scroll(key);
+    private void CancelCurrentRequest() => _requestCts?.Cancel();
+
     private void HandleVdomSubmit(string input)
     {
-        _inputTcs?.TrySetResult(input);
+        if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
+        if (!string.IsNullOrWhiteSpace(input)) TuiConsole.Current?.AppendUserPrompt(input);
+        _isProcessing = true;
+        _inputTcs.TrySetResult(input);
     }
 
     /// <summary>
@@ -1573,18 +1649,23 @@
         // thread (HandleWizardSelectSubmit completes this from a Blazor event). See the
         // note in WaitForVdomInputAsync.
         _wizardSelectTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restorePrompt = _showPrompt;
         _showWizardSelect = true;
         _showPrompt = false;
         await InvokeAsync(StateHasChanged);
 
-        var result = await _wizardSelectTcs.Task;
-
-        _showWizardSelect = false;
-        await InvokeAsync(StateHasChanged);
-        await Task.Delay(50);
-
-        Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
-        return result;
+        try
+        {
+            var result = await _wizardSelectTcs.Task;
+            AnsiConsole.Write(new Text("> " + result, new Style(new Color(255, 200, 80))));
+            return result;
+        }
+        finally
+        {
+            _showWizardSelect = false;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     /// <summary>
@@ -1599,50 +1680,6 @@
         var options = defaultYes ? new[] { yes, no } : new[] { no, yes };
         var picked = await WizardPromptSelectAsync(title, options);
         return picked == yes;
-    }
-
-    /// <summary>
-    /// Called by PromptInput when @ or / triggers autocomplete.
-    /// Hides VDOM, runs imperative autocomplete (Console.ReadKey loop),
-    /// then completes with the full input line.
-    /// </summary>
-    private async Task HandleAutocompleteRequested(string currentInput)
-    {
-        if (_autocompleteActive) return;
-        _autocompleteActive = true;
-
-        try
-        {
-            // 1. Hide PromptInput so Console.ReadKey doesn't conflict with VDOM
-            _showPrompt = false;
-            await InvokeAsync(StateHasChanged);
-            await Task.Delay(100); // Wait for VDOM repaint
-
-            // 2. Run imperative autocomplete on a background thread
-            //    Console.ReadKey blocks, so we use Task.Run.
-            //    ContinueAutocomplete() picks up from the current state machine state
-            //    (already has "@" or "/..." from PromptInput's HandleInput) — no reset.
-            //    Returns null if user erased the trigger (@ or /) — go back to VDOM.
-            var result = await Task.Run(() => CommandAutocomplete.ContinueAutocomplete());
-
-            // Drain any buffered keystrokes typed while the prompt was hidden
-            var resumeText = result ?? StateMachine.State.InputText;
-            var buffered = DrainConsoleKeyBuffer();
-            if (!string.IsNullOrEmpty(buffered))
-            {
-                resumeText += buffered;
-                StateMachine.UpdateText(resumeText);
-            }
-
-            _promptInitialValue = resumeText;
-        }
-        finally
-        {
-            _autocompleteActive = false;
-            _showPrompt = true;
-            _isProcessing = false;
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
     /// <summary>
@@ -1666,14 +1703,9 @@
 
         var input = await _inputTcs.Task;
 
-        // Hide the prompt during processing
-        _showPrompt = false;
+        _showPrompt = true;
         _isProcessing = true;
         await InvokeAsync(StateHasChanged);
-
-        // Wait for the VDOM repaint to finish removing the PromptInput
-        // before any imperative Console.Write calls
-        await Task.Delay(100);
 
         return input;
     }
@@ -1782,26 +1814,6 @@
         return fullContext.ToString();
     }
 
-    private static string DrainConsoleKeyBuffer()
-    {
-        if (!Console.KeyAvailable)
-            return string.Empty;
-
-        var chars = new List<char>();
-        while (Console.KeyAvailable)
-        {
-            var key = Console.ReadKey(intercept: true);
-
-            if (key.Key is ConsoleKey.Enter or ConsoleKey.Escape)
-                continue;
-
-            if (!char.IsControl(key.KeyChar))
-                chars.Add(key.KeyChar);
-        }
-
-        return chars.Count > 0 ? new string(chars.ToArray()) : string.Empty;
-    }
-
     private void ShowOfflineGuidance()
     {
         var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
@@ -1817,6 +1829,7 @@
     /// </summary>
     private void StartCancelKeyListener()
     {
+        if (TuiConsole.Current is not null) return;
         var listenerCts = new CancellationTokenSource();
         _keyListenerCts = listenerCts;
 
@@ -3629,7 +3642,7 @@
             drops[i] = rng.Next(-height, 0); // stagger start positions
 
         Console.CursorVisible = false;
-        Console.Clear();
+        TuiConsole.Clear();
 
         // Phase 1: Digital rain (~14 frames)
         for (int frame = 0; frame < 14; frame++)
@@ -3675,7 +3688,7 @@
         }
 
         // Phase 2: Fade to black, then reveal the rabbit
-        Console.Clear();
+        TuiConsole.Clear();
         Thread.Sleep(300);
 
         var centerY = height / 2 - 1;
@@ -3697,7 +3710,7 @@
         Thread.Sleep(1500);
 
         // Clear and return
-        Console.Clear();
+        TuiConsole.Clear();
         Console.CursorVisible = true;
     }
 
@@ -3914,7 +3927,7 @@
                     Config,
                     promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
                 await AI.ReinitializeAsync(updatedConfig);
-                AnsiConsole.Clear();
+                TuiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
 
                 // Re-validate the model after config change

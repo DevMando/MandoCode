@@ -58,6 +58,15 @@ class Program
 
         hostBuilder.ConfigureServices(services =>
         {
+            // The widget canvas owns visible output; legacy output joins the transcript.
+            services.Configure<ConsoleAppOptions>(options =>
+            {
+                options.RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout;
+                options.ConsoleLiveDisplayOptions.UseAlternateScreenBuffer = true;
+                options.ConsoleLiveDisplayOptions.EnableMouseEvents = true;
+                options.EnableTerminalResizing = true;
+            });
+
             // Load configuration
             var config = MandoCodeConfig.Load();
 
@@ -202,6 +211,10 @@ class Program
                 return new InputStateMachine(commands, fileProvider);
             });
 
+            // Retain rich markdown/tool renderables inside the widget conversation.
+            services.AddSingleton<TuiSession>();
+            services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, TranscriptEntryTranslator>());
+
             // Register AnsiPassthrough translator for VDOM integration
             services.AddSingleton<ITranslationMiddleware, AnsiPassthroughTranslator>();
 
@@ -213,6 +226,7 @@ class Program
         });
 
         var host = hostBuilder.Build();
+        using var tuiOutput = TuiConsole.Begin(host.Services.GetRequiredService<TuiSession>());
         await host.RunAsync();
     }
 

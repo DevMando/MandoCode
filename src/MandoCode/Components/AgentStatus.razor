@@ -1,0 +1,36 @@
+@using Spectre.Console
+@using System.Text
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<Flex Direction="RazorConsole.Core.Renderables.FlexDirection.Column" FillWidth="true">
+    @if (State.Running)
+    {
+        <Box FillWidth="true" Height="1"><Markup Content="@Clip(State.Activity)" /></Box>
+        <Box FillWidth="true" Height="1"><Spinner SpinnerType="@State.Spinner" Message="@SpinnerMessage" Style="#c678dd" /></Box>
+        @if (PreviewLines > 0 && !string.IsNullOrWhiteSpace(State.Preview))
+        {
+            <Box FillWidth="true" Height="@PreviewLines"><Markup Content="@Preview" /></Box>
+        }
+    }
+</Flex>
+
+@code {
+    [Parameter, EditorRequired] public TuiSnapshot State { get; set; } = default!;
+    private int PreviewLines => Math.Min(3, Math.Max(0, Viewport.Height - 8));
+    private string SpinnerMessage => Clip($"{State.LoadingMessage} ({(int)State.Elapsed.TotalMinutes}:{State.Elapsed.Seconds:00})", State.Spinner.Frames.Max(frame => RazorConsole.Core.Input.TextSelectionState.CellWidth(frame)) + 1);
+    private string Preview => string.Join("\n", State.Preview.Replace("\r", "").Split('\n').TakeLast(PreviewLines).Select(line => Clip(line)));
+    private string Clip(string text, int reserved = 0)
+    {
+        var width = Math.Max(1, Viewport.Width - Math.Max(4, reserved));
+        var result = new StringBuilder();
+        var cells = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (Rune.IsControl(rune)) continue;
+            cells += RazorConsole.Core.Input.TextSelectionState.CellWidth(rune.ToString());
+            if (cells > width) break;
+            result.Append(rune.ToString());
+        }
+        return result.ToString();
+    }
+}

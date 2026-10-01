@@ -31,11 +31,7 @@
     }
     else if (!string.IsNullOrEmpty(ModelWarning))
     {
-        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Yellow">
-            <Rows>
-                <Markup Content="@ModelWarning" />
-            </Rows>
-        </Panel>
+        <Markup Content="@ModelWarning" Foreground="Color.Yellow" />
     }
     else
     {
