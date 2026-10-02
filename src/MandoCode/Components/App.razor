@@ -146,6 +146,10 @@
 }
 @if (_showWizardSelect)
 {
+    @if (_wizardSelectTitle is not null)
+    {
+        <Markup Content="@Spectre.Console.Markup.Escape(_wizardSelectTitle)" Foreground="Color.DeepSkyBlue1" />
+    }
     <ApprovalSelect Options="@_wizardSelectChoices" OnSubmit="HandleWizardSelectSubmit" />
 }
 
@@ -218,6 +222,7 @@
     private bool _showWizardInput = false;
     private bool _wizardInputSecret;
     private IReadOnlyList<ApprovalSelect.Option> _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+    private string? _wizardSelectTitle;
     private string _wizardInputValue = "";
     private string _wizardInputPlaceholder = "";
     private TaskCompletionSource<string>? _wizardInputTcs;
@@ -1658,11 +1663,18 @@
     /// Show a list of options rendered through the focused approval component. User navigates
     /// with arrow keys and commits with Enter. Returns the selected option string.
     /// </summary>
-    private async Task<string> WizardPromptSelectAsync(string title, params string[] options)
+    private Task<string> WizardPromptSelectAsync(string title, params string[] options) =>
+        WizardPromptSelectCoreAsync(title, options);
+
+    private async Task<string> WizardPromptSelectCoreAsync(string title, string[] options, string? silentChoice = null)
     {
         if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
 
-        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+        // Cancellable navigation menus show the title only in the live region.
+        // Persist it together with the choice only after the user commits an action.
+        _wizardSelectTitle = silentChoice is not null ? title : null;
+        if (silentChoice is null)
+            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
         _wizardSelectChoices = options.Select(option => new ApprovalSelect.Option(option, Color.DeepSkyBlue1)).ToArray();
         // Async continuations so the awaiting wizard step resumes off the dispatcher
@@ -1677,7 +1689,12 @@
         try
         {
             var result = await _wizardSelectTcs.Task;
-            AnsiConsole.Write(new Text("> " + result, new Style(new Color(255, 200, 80))));
+            if (result != silentChoice)
+            {
+                if (silentChoice is not null)
+                    AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+                AnsiConsole.Write(new Text("> " + result, new Style(new Color(255, 200, 80))));
+            }
             return result;
         }
         finally
@@ -1685,6 +1702,7 @@
             _showWizardSelect = false;
             _wizardSelectTcs = null;
             _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+            _wizardSelectTitle = null;
             _showPrompt = restorePrompt;
             await InvokeAsync(StateHasChanged);
         }
@@ -3980,10 +3998,10 @@
             PickModel = PickModelFromPromptAsync,
             Text = (title, initial, validate, secret) => WizardPromptTextCoreAsync(title, "", validate, initial, secret)
         };
-        var choice = await prompts.SelectAsync("Configuration Options:", new[]
+        var choice = await WizardPromptSelectCoreAsync("Configuration Options:", new[]
         {
             "Run configuration wizard", "View current configuration", "Cancel"
-        });
+        }, silentChoice: "Cancel");
 
         switch (choice)
         {
