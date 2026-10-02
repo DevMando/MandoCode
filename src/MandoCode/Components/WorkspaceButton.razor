@@ -1,0 +1,24 @@
+@using Spectre.Console
+@inject WorkspaceRegistry Registry
+
+<div data-focusable="true" data-focus-key="@_key" data-input-managed="true"
+     @onclick="OnClick" @onkeydown="Key" @onfocus="@(() => _focused = true)" @onfocusout="@(() => _focused = false)"
+     @onmouseenter="@(() => _hovered = true)" @onmouseleave="@(() => _hovered = false)">
+    <Markup Content="@Content" Foreground="@(_focused || _hovered || Selected ? Color.Grey93 : Color.Grey85)"
+            Background="@(_focused || _hovered ? HoverBackground : Selected ? SelectedBackground : new Color(22, 26, 30))" />
+</div>
+@code {
+    [Parameter] public string Content { get; set; } = "";
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public Color SelectedBackground { get; set; } = new(50, 80, 57);
+    [Parameter] public Color HoverBackground { get; set; } = new(63, 96, 70);
+    [Parameter] public EventCallback OnClick { get; set; }
+    private readonly string _key = "workspace-button-" + Guid.NewGuid().ToString("N");
+    private bool _focused;
+    private bool _hovered;
+    private async Task Key(KeyboardEventArgs key)
+    {
+        if (key.Key is "Enter" or "Return" or " ") await OnClick.InvokeAsync();
+        else if (Registry.Active.SelectedPane is { } pane) pane.Workspace.Key(pane, key);
+    }
+}

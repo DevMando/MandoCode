@@ -8,12 +8,12 @@ using Spectre.Console.Rendering;
 
 namespace MandoCode.Translators;
 
-public sealed class TranscriptEntryTranslator(TuiSession session, AgentWorkspace? workspace = null) : ITranslationMiddleware
+public sealed class TranscriptEntryTranslator(TuiSession session, AgentWorkspace? workspace = null, WorkspaceRegistry? registry = null) : ITranslationMiddleware
 {
     public IRenderable Translate(TranslationContext context, TranslationDelegate next, VNode node)
     {
         var id = VdomSpectreTranslator.GetAttribute(node, "data-transcript-entry");
         if (node.Kind != VNodeKind.Element || !long.TryParse(id, out var entryId)) return next(node);
-        return workspace?.Find(entryId) ?? session.Find(entryId) ?? new Text("");
+        return registry?.Workspaces.Select(w => w.Find(entryId)).FirstOrDefault(r => r is not null) ?? workspace?.Find(entryId) ?? session.Find(entryId) ?? new Text("");
     }
 }

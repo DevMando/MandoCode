@@ -41,6 +41,12 @@ public static class ConfigKeySetter
     {
         switch (key.ToLowerInvariant())
         {
+            case "agentnaming":
+                if (value.Trim().ToLowerInvariant() is not ("names" or "numbers"))
+                    return Fail("Error: agentNaming must be names or numbers.");
+                config.UseAgentNames = value.Trim().Equals("names", StringComparison.OrdinalIgnoreCase);
+                return new(true, $"✓ Agent naming: {(config.UseAgentNames ? "names" : "numbers")} (new agents only; existing names stay unchanged)");
+
             case "endpoint":
             case "ollamaendpoint":
                 config.OllamaEndpoint = value;
@@ -250,6 +256,7 @@ public static class ConfigKeySetter
     /// </summary>
     public static string DescribeKeys(MandoCodeConfig config) =>
         $"""
+        agentNaming          {(config.UseAgentNames ? "names" : "numbers")}  (names = unique Desktop callsigns, default; numbers = Agent 1, Agent 2; new agents only)
         model                {config.GetEffectiveModelName()}
         endpoint             {config.OllamaEndpoint}
         temperature          {config.Temperature}  (0.0-1.0)

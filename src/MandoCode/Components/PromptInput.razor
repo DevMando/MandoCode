@@ -39,14 +39,33 @@
     [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
+    [Parameter] public string? PersistenceKey { get; set; }
     [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
     private InputStateMachine SM => (InputStateMachine)(Pane?.Services ?? Services).GetService(typeof(InputStateMachine))!;
     private PromptComposerState _composer = default!;
     private readonly string _hook = "prompt-" + Guid.NewGuid().ToString("N");
     private string _lastInitialValue = "";
+    private string? StateKey => PersistenceKey is not null ? "instruction-composer" : ChatFeaturesEnabled ? "chat-composer" : null;
     [Inject] private RazorConsole.Core.Rendering.ITerminalViewport Viewport { get; set; } = default!;
     private int InputWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
-    protected override void OnInitialized() => _composer = new(SM);
+    protected override void OnInitialized()
+    {
+        var key = StateKey;
+        if (Pane is not null && key is not null && Pane.PresentationState.TryGetValue(key, out var saved) && saved is ComposerDraft draft
+            && draft.Key == PersistenceKey && draft.InitialValue == InitialValue && ReferenceEquals(draft.Picker, ModelPicker))
+        {
+            _composer = draft.Composer;
+            _lastInitialValue = InitialValue;
+            _previousPicker = ModelPicker;
+            _composer.Refresh();
+        }
+        else
+        {
+            _composer = new(SM);
+            if (Pane is not null && key is not null) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
+        }
+    }
+    private sealed record ComposerDraft(PromptComposerState Composer, string InitialValue, ModelPickerState? Picker, string? Key);
     protected override void OnParametersSet()
     {
         if (!ReferenceEquals(ModelPicker, _previousPicker))
@@ -60,6 +79,7 @@
             _lastInitialValue = InitialValue;
             _composer.SetText(InitialValue);
         }
+        if (Pane is not null && StateKey is { } key) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
