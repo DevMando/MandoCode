@@ -84,12 +84,20 @@
    Bridged via InstructionPromptCoordinator (TCS) so the imperative handler can await VDOM input. *@
 @if (InstructionCoordinator.IsActive)
 {
+    @if (InstructionCoordinator.Multiline)
+    {
+        <PlanStepEditor @key="@InstructionCoordinator.RequestId" Title="@InstructionCoordinator.Prompt" InitialValue="@InstructionCoordinator.InitialValue"
+                        OnSubmit="HandleInstructionSubmit" OnCancel="InstructionCoordinator.Cancel" />
+    }
+    else
+    {
     <PromptInput OnSubmit="HandleInstructionSubmit"
                  InitialValue="@InstructionCoordinator.InitialValue"
                  Label="@InstructionCoordinator.Prompt"
                  Placeholder=""
                  ChatFeaturesEnabled="false"
                  AllowEmpty="true" />
+    }
 }
 
 @* Approval menu — surfaced by DiffApprovalHandler for write / command / delete / MCP
@@ -120,13 +128,14 @@
     <HistoryView Messages="@_historyMessages" OnClose="CloseHistory" />
 }
 
-@* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
+@* Wizard primitives — RazorConsole TextInput / ApprovalSelect that bypass PromptInput's slash/at
    autocomplete machinery. Used by /mcp add and any future wizards that need free-form input. *@
 @if (_showWizardInput)
 {
     <TextInput @bind-Value="_wizardInputValue"
                OnSubmit="HandleWizardInputSubmit"
                Placeholder="@_wizardInputPlaceholder"
+               MaskInput="@_wizardInputSecret"
                ValueColor="@(new Color(255, 200, 80))"
                PlaceholderColor="Color.Grey"
                BorderColor="Color.Purple"
@@ -137,11 +146,7 @@
 }
 @if (_showWizardSelect)
 {
-    <Select TItem="string"
-            Options="_wizardSelectOptions"
-            Value="_wizardSelectValue"
-            ValueChanged="HandleWizardSelectSubmit"
-            Expand="true" />
+    <ApprovalSelect Options="@_wizardSelectChoices" OnSubmit="HandleWizardSelectSubmit" />
 }
 
 @* Plan-approval select — VDOM replacement for the Spectre SelectionPrompt so arrow keys
@@ -211,13 +216,13 @@
     // components for /mcp add and future wizards without inheriting PromptInput's
     // slash/at autocomplete state machine.
     private bool _showWizardInput = false;
+    private bool _wizardInputSecret;
+    private IReadOnlyList<ApprovalSelect.Option> _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
     private string _wizardInputValue = "";
     private string _wizardInputPlaceholder = "";
     private TaskCompletionSource<string>? _wizardInputTcs;
 
     private bool _showWizardSelect = false;
-    private string[] _wizardSelectOptions = Array.Empty<string>();
-    private string _wizardSelectValue = "";
     private TaskCompletionSource<string>? _wizardSelectTcs;
 
     // Approval menu options — projected from ApprovalSelectCoordinator.Options into the
@@ -524,16 +529,15 @@
     }
 
     /// <summary>
-    /// Runs the OnboardingFlow. Uses Spectre's imperative prompts for selects/confirms
-    /// (the VDOM Select had a `>` cursor redraw glitch on the second loop iteration),
-    /// but routes URL text entry through the VDOM TextInput because Spectre's
-    /// TextPrompt was dropping keystrokes alongside the live render loop.
+    /// Runs onboarding with component-based URL entry and the same model picker as
+    /// /model. Other installation and sign-in choices retain their existing prompts.
     /// </summary>
     private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
     {
         var flow = new OnboardingFlow(
             setStatus: SetOnboardingStatus,
-            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue),
+            pickModelVdom: PickModelFromPromptAsync);
 
         try
         {
@@ -1576,12 +1580,10 @@
     }
 
     /// <summary>
-    /// Bound to the wizard's Select.ValueChanged — fires when the user presses Enter on a
-    /// highlighted option (RazorConsole's Select uses Enter as the commit signal).
+    /// Completes the wizard choice when its focused approval selector submits an option.
     /// </summary>
     private void HandleWizardSelectSubmit(string value)
     {
-        _wizardSelectValue = value;
         _wizardSelectTcs?.TrySetResult(value);
     }
 
@@ -1591,53 +1593,69 @@
     /// conflict. Optional <paramref name="validate"/> returns null on success, an error message
     /// on failure — failure prints the error and re-prompts.
     /// </summary>
-    private async Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null)
+    private Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null) =>
+        WizardPromptTextCoreAsync(title, placeholder, validate, initialValue, false);
+
+    private async Task<string> WizardPromptTextCoreAsync(string title, string placeholder, Func<string, string?>? validate, string? initialValue, bool secret)
     {
-        while (true)
+        var restorePrompt = _showPrompt;
+        _wizardInputSecret = secret;
+        try
         {
-            // Render the title as a separate scrollback line above the input box so it
-            // persists after the input is dismissed.
-            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
-
-            // Pre-fill with initialValue when provided (e.g., default URL for endpoint
-            // entry — user can press Enter to accept or edit in place). Empty otherwise,
-            // and the placeholder hint shows in greyed text until the user types.
-            _wizardInputValue = initialValue ?? "";
-            _wizardInputPlaceholder = placeholder;
-            // Async continuations so the awaiting wizard step resumes off the dispatcher
-            // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
-            // note in WaitForVdomInputAsync.
-            _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _showWizardInput = true;
-            _showPrompt = false;
-            await InvokeAsync(StateHasChanged);
-
-            var result = await _wizardInputTcs.Task;
-
-            _showWizardInput = false;
-            await InvokeAsync(StateHasChanged);
-            // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
-            await Task.Delay(50);
-
-            if (validate != null)
+            while (true)
             {
-                var error = validate(result);
-                if (error != null)
-                {
-                    AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
-                    AnsiConsole.WriteLine();
-                    continue;
-                }
-            }
+                // Render the title as a separate scrollback line above the input box so it
+                // persists after the input is dismissed.
+                AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
-            // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
-            Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
-            return result;
+                // Pre-fill with initialValue when provided (e.g., default URL for endpoint
+                // entry — user can press Enter to accept or edit in place). Empty otherwise,
+                // and the placeholder hint shows in greyed text until the user types.
+                _wizardInputValue = initialValue ?? "";
+                _wizardInputPlaceholder = placeholder;
+                // Async continuations so the awaiting wizard step resumes off the dispatcher
+                // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
+                // note in WaitForVdomInputAsync.
+                _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _showWizardInput = true;
+                _showPrompt = false;
+                await InvokeAsync(StateHasChanged);
+
+                var result = await _wizardInputTcs.Task;
+
+                _showWizardInput = false;
+                await InvokeAsync(StateHasChanged);
+                // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
+                await Task.Delay(50);
+
+                if (validate != null)
+                {
+                    var error = validate(result);
+                    if (error != null)
+                    {
+                        AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
+                        AnsiConsole.WriteLine();
+                        continue;
+                    }
+                }
+
+                // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
+                Console.WriteLine($"\u001b[38;2;255;200;80m> {(secret ? "[hidden]" : result)}\u001b[0m");
+                return result;
+            }
+        }
+        finally
+        {
+            _showWizardInput = false;
+            _wizardInputTcs = null;
+            _wizardInputSecret = false;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
     /// <summary>
-    /// Show a list of options rendered through RazorConsole's Select component. User navigates
+    /// Show a list of options rendered through the focused approval component. User navigates
     /// with arrow keys and commits with Enter. Returns the selected option string.
     /// </summary>
     private async Task<string> WizardPromptSelectAsync(string title, params string[] options)
@@ -1646,8 +1664,7 @@
 
         AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
-        _wizardSelectOptions = options;
-        _wizardSelectValue = options[0];
+        _wizardSelectChoices = options.Select(option => new ApprovalSelect.Option(option, Color.DeepSkyBlue1)).ToArray();
         // Async continuations so the awaiting wizard step resumes off the dispatcher
         // thread (HandleWizardSelectSubmit completes this from a Blazor event). See the
         // note in WaitForVdomInputAsync.
@@ -1666,13 +1683,15 @@
         finally
         {
             _showWizardSelect = false;
+            _wizardSelectTcs = null;
+            _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
             _showPrompt = restorePrompt;
             await InvokeAsync(StateHasChanged);
         }
     }
 
     /// <summary>
-    /// Convenience: yes/no confirm rendered as a Select with two options. Used by wizards
+    /// Convenience: yes/no confirm rendered as a component selector. Used by wizards
     /// instead of <c>AnsiConsole.Confirm</c> so the entire flow stays inside the VDOM render
     /// pipeline.
     /// </summary>
@@ -2767,8 +2786,8 @@
         var step = selectableSteps[selectedIndex];
 
         var revised = await InstructionCoordinator.RequestAsync(
-            $"Edit step {step.StepNumber} instruction (Enter to save):",
-            step.Instruction);
+            $"Edit step {step.StepNumber} instruction",
+            step.Instruction, multiline: true);
 
         if (string.IsNullOrWhiteSpace(revised) ||
             string.Equals(revised.Trim(), step.Instruction?.Trim(), StringComparison.Ordinal))
@@ -3607,7 +3626,7 @@
 
         if (_isConnected)
         {
-            var wantChat = AnsiConsole.Confirm("Chat with an AI educator to learn more?", false);
+            var wantChat = await WizardConfirmAsync("Chat with an AI educator to learn more?", false);
             if (wantChat)
             {
                 await AI.EnterLearnModeAsync();
@@ -3955,24 +3974,23 @@
     private async Task HandleConfigCommandAsync()
     {
         AnsiConsole.WriteLine();
-        var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Configuration Options:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(new[]
-                {
-                    "Run configuration wizard",
-                    "View current configuration",
-                    "[rgb(255,200,80)]Cancel[/]"
-                })
-        );
+        var prompts = new ConfigurationPrompts
+        {
+            Select = (title, options) => WizardPromptSelectAsync(title, options),
+            PickModel = PickModelFromPromptAsync,
+            Text = (title, initial, validate, secret) => WizardPromptTextCoreAsync(title, "", validate, initial, secret)
+        };
+        var choice = await prompts.SelectAsync("Configuration Options:", new[]
+        {
+            "Run configuration wizard", "View current configuration", "Cancel"
+        });
 
         switch (choice)
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(
                     Config,
-                    promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+                    prompts: prompts);
                 await AI.ReinitializeAsync(updatedConfig);
                 TuiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");

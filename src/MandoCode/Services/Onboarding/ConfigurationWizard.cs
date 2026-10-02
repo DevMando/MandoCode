@@ -1,7 +1,6 @@
 using MandoCode.Models;
 using MandoCode.Plugins;
 using Spectre.Console;
-using System.Text.Json;
 
 namespace MandoCode.Services;
 
@@ -10,10 +9,6 @@ namespace MandoCode.Services;
 /// </summary>
 public class ConfigurationWizard
 {
-    // App-standard selection treatment — same black-on-deepskyblue1 as the approval
-    // prompts and command autocomplete, so selection reads the same everywhere.
-    private static readonly Style SelectionHighlight = new(foreground: Color.Black, background: Color.DeepSkyBlue1);
-
     /// <summary>
     /// Runs the interactive configuration wizard.
     /// </summary>
@@ -25,41 +20,44 @@ public class ConfigurationWizard
     /// but users have reported dropped keystrokes when Spectre's prompt runs while
     /// the VDOM is live.
     /// </param>
+    /// <param name="prompts">Host-owned input and menus for all wizard steps.</param>
     public static async Task<MandoCodeConfig> RunAsync(
         MandoCodeConfig? existingConfig = null,
-        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null,
+        ConfigurationPrompts? prompts = null)
     {
+        prompts ??= new ConfigurationPrompts();
         var config = existingConfig ?? MandoCodeConfig.CreateDefault();
 
-        AnsiConsole.Clear();
+        if (prompts.Select == null) AnsiConsole.Clear();
         DisplayWizardHeader();
 
         // Step 1: Ollama Endpoint
-        config.OllamaEndpoint = await ConfigureOllamaEndpoint(config.OllamaEndpoint, promptTextVdom);
+        config.OllamaEndpoint = await ConfigureOllamaEndpoint(config.OllamaEndpoint, promptTextVdom, prompts);
 
         // Step 2: Model Selection
-        config = await ConfigureModel(config);
+        config = await ConfigureModel(config, prompts);
 
         // Step 3: Temperature
-        config.Temperature = ConfigureTemperature(config.Temperature);
+        config.Temperature = await ConfigureTemperature(config.Temperature, prompts);
 
         // Step 4: Max Tokens
-        config.MaxTokens = ConfigureMaxTokens(config.MaxTokens);
+        config.MaxTokens = await ConfigureMaxTokensAsync(config.MaxTokens, prompts);
 
         // Step 5: Context Window (local models only)
-        ConfigureContextWindow(config);
+        await ConfigureContextWindowAsync(config, prompts);
 
         // Step 6: Request Timeout
-        config.RequestTimeoutMinutes = ConfigureRequestTimeout(config.RequestTimeoutMinutes);
+        config.RequestTimeoutMinutes = await ConfigureRequestTimeout(config.RequestTimeoutMinutes, prompts);
 
         // Step 7: Ignore Directories
-        config.IgnoreDirectories = ConfigureIgnoreDirectories(config.IgnoreDirectories);
+        config.IgnoreDirectories = await ConfigureIgnoreDirectories(config.IgnoreDirectories, prompts);
 
         // Step 8: Web Search (optional Tavily key — skippable, works without one)
-        await ConfigureWebSearchAsync(config);
+        await ConfigureWebSearchAsync(config, prompts);
 
         // Step 9: Save Configuration
-        if (ConfirmSave())
+        if (await ConfirmSave(prompts))
         {
             config.Save();
             AnsiConsole.MarkupLine("\n[green]✓ Configuration saved successfully![/]");
@@ -71,8 +69,7 @@ public class ConfigurationWizard
         }
 
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Press any key to continue...[/]");
-        Console.ReadKey(true);
+        await prompts.SelectAsync("Configuration complete", new[] { "Return to chat" });
 
         return config;
     }
@@ -94,7 +91,8 @@ public class ConfigurationWizard
 
     private static async Task<string> ConfigureOllamaEndpoint(
         string currentEndpoint,
-        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom,
+        ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]1. Ollama Connection[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -115,23 +113,11 @@ public class ConfigurationWizard
         }
         else
         {
-            endpoint = AnsiConsole.Prompt(
-                new TextPrompt<string>("[deepskyblue1]Ollama endpoint URL:[/]")
-                    .DefaultValue(currentEndpoint)
-                    .ValidationErrorMessage("[red]Please enter a valid URL[/]")
-                    .Validate(url =>
-                    {
-                        if (Uri.TryCreate(url, UriKind.Absolute, out _))
-                            return ValidationResult.Success();
-                        return ValidationResult.Error("[red]Invalid URL format[/]");
-                    })
-            );
+            endpoint = await prompts.TextAsync("Ollama endpoint URL:", currentEndpoint, value => Uri.TryCreate(value, UriKind.Absolute, out _) ? null : "Invalid URL format");
         }
 
         // Test connection
-        await AnsiConsole.Status()
-            .Spinner(LoadingMessages.GetRandomSpinner())
-            .StartAsync("[yellow]Testing connection to Ollama...[/]", async ctx =>
+        await prompts.WithStatusAsync("Testing connection to Ollama...", async () =>
             {
                 var isConnected = await TestOllamaConnection(endpoint);
                 if (isConnected)
@@ -149,23 +135,18 @@ public class ConfigurationWizard
         return endpoint;
     }
 
-    private static async Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config)
+    private static async Task<MandoCodeConfig> ConfigureModel(MandoCodeConfig config, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]2. Model Selection[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        var modelChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]How would you like to configure your model?[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(new[]
+        var modelChoice = await prompts.SelectAsync("How would you like to configure your model?", new[]
                 {
                     "Select from available Ollama models",
                     "Enter model name manually",
                     "Specify local model path (GGUF)",
                     "Keep current setting"
-                })
-        );
+                });
 
         switch (modelChoice)
         {
@@ -173,13 +154,10 @@ public class ConfigurationWizard
                 var availableModels = await GetAvailableOllamaModels(config.OllamaEndpoint);
                 if (availableModels.Any())
                 {
-                    var selectedModel = AnsiConsole.Prompt(
-                        new SelectionPrompt<string>()
-                            .Title("[deepskyblue1]Select a model:[/]")
-                            .HighlightStyle(SelectionHighlight)
-                            .PageSize(10)
-                            .AddChoices(availableModels)
-                    );
+                    var selectedModel = prompts.PickModel != null
+                        ? await prompts.PickModel(availableModels.ToArray())
+                        : await prompts.SelectAsync("Select a model:", availableModels);
+                    if (selectedModel == null) break;
                     config.ModelName = selectedModel;
                     config.ModelPath = null;
                     AnsiConsole.MarkupLine($"[green]✓ Selected model: {selectedModel}[/]");
@@ -189,20 +167,20 @@ public class ConfigurationWizard
                     AnsiConsole.MarkupLine("[yellow]No models found. You may need to pull a model first:[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull glm-5.2:cloud[/]");
                     AnsiConsole.MarkupLine("[dim]  ollama pull qwen2.5-coder:14b[/]");
-                    config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", "glm-5.2:cloud");
+                    config.ModelName = await prompts.TextAsync("Enter model name:", "glm-5.2:cloud");
                 }
                 break;
 
             case "Enter model name manually":
-                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Enter model name:[/]", config.ModelName ?? "glm-5.2:cloud");
+                config.ModelName = await prompts.TextAsync("Enter model name:", config.ModelName ?? "glm-5.2:cloud");
                 config.ModelPath = null;
                 AnsiConsole.MarkupLine($"[green]✓ Model set to: {config.ModelName}[/]");
                 break;
 
             case "Specify local model path (GGUF)":
-                config.ModelPath = AnsiConsole.Ask<string>("[deepskyblue1]Enter path to model file:[/]");
+                config.ModelPath = await prompts.TextAsync("Enter path to model file:");
                 var inferredName = Path.GetFileNameWithoutExtension(config.ModelPath);
-                config.ModelName = AnsiConsole.Ask<string>("[deepskyblue1]Model name:[/]", inferredName);
+                config.ModelName = await prompts.TextAsync("Model name:", inferredName);
                 AnsiConsole.MarkupLine($"[green]✓ Model path: {config.ModelPath}[/]");
                 AnsiConsole.MarkupLine($"[green]✓ Model name: {config.ModelName}[/]");
                 break;
@@ -216,7 +194,7 @@ public class ConfigurationWizard
         return config;
     }
 
-    private static double ConfigureTemperature(double currentTemperature)
+    private static async Task<double> ConfigureTemperature(double currentTemperature, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]3. Temperature (Creativity)[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -231,24 +209,16 @@ public class ConfigurationWizard
         AnsiConsole.MarkupLine("[dim]  0.8-1.0  Creative — brainstorming, naming ideas, prose. Can hallucinate more.[/]");
         AnsiConsole.WriteLine();
 
-        var temperature = AnsiConsole.Prompt(
-            new TextPrompt<double>("[deepskyblue1]Temperature (0.0-1.0):[/]")
-                .DefaultValue(currentTemperature)
-                .ValidationErrorMessage("[red]Please enter a number between 0.0 and 1.0[/]")
-                .Validate(temp =>
-                {
-                    if (MandoCodeConfig.IsValidTemperature(temp))
-                        return ValidationResult.Success();
-                    return ValidationResult.Error($"[red]Temperature must be between {MandoCodeConfig.MinTemperature} and {MandoCodeConfig.MaxTemperature}[/]");
-                })
-        );
+        var temperature = await prompts.NumberAsync("Temperature (0.0-1.0):", currentTemperature, MandoCodeConfig.IsValidTemperature, "Please enter a number between 0.0 and 1.0.");
 
         AnsiConsole.MarkupLine($"[green]✓ Temperature set to: {temperature}[/]");
         AnsiConsole.WriteLine();
         return temperature;
     }
 
-    public static int ConfigureMaxTokens(int currentMaxTokens)
+    public static int ConfigureMaxTokens(int currentMaxTokens) => ConfigureMaxTokensAsync(currentMaxTokens, new ConfigurationPrompts()).GetAwaiter().GetResult();
+
+    public static async Task<int> ConfigureMaxTokensAsync(int currentMaxTokens, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]4. Maximum Response Tokens[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -274,13 +244,7 @@ public class ConfigurationWizard
         var preferred = allTokens.Contains(currentMaxTokens) ? currentMaxTokens : 32768;
         var ordered = new[] { preferred }.Concat(allTokens.Where(t => t != preferred)).ToArray();
 
-        var maxTokens = AnsiConsole.Prompt(
-            new SelectionPrompt<int>()
-                .Title("[deepskyblue1]Max response tokens:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(ordered)
-                .UseConverter(tokens =>
-                {
+        var maxTokens = await prompts.SelectAsync("Max response tokens:", ordered, tokens => {
                     var marker = tokens == preferred ? "  ← current" : "";
                     return tokens switch
                     {
@@ -292,8 +256,7 @@ public class ConfigurationWizard
                         65536  => $"64k    Huge single-file generation on cloud models{marker}",
                         _      => tokens.ToString()
                     };
-                })
-        );
+                });
 
         AnsiConsole.MarkupLine($"[green]✓ Max tokens set to: {FormatK(maxTokens)}[/]");
         AnsiConsole.WriteLine();
@@ -306,7 +269,9 @@ public class ConfigurationWizard
     /// Local context window. "Automatic" follows the model's tier and resizes on model switches;
     /// any number is the user's own choice and model switches leave it alone.
     /// </summary>
-    public static void ConfigureContextWindow(MandoCodeConfig config)
+    public static void ConfigureContextWindow(MandoCodeConfig config) => ConfigureContextWindowAsync(config, new ConfigurationPrompts()).GetAwaiter().GetResult();
+
+    public static async Task ConfigureContextWindowAsync(MandoCodeConfig config, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]5. Context Window[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -333,13 +298,7 @@ public class ConfigurationWizard
         // Spectre highlights the first item, so the current choice goes first.
         var ordered = new[] { current }.Concat(choices.Where(c => c != current)).ToArray();
 
-        var picked = AnsiConsole.Prompt(
-            new SelectionPrompt<int>()
-                .Title("[deepskyblue1]Context window:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(ordered)
-                .UseConverter(tokens =>
-                {
+        var picked = await prompts.SelectAsync("Context window:", ordered, tokens => {
                     var marker = tokens == current ? "  ← current" : "";
                     return tokens switch
                     {
@@ -351,8 +310,7 @@ public class ConfigurationWizard
                         131072 => $"128k       Very large contexts, big GPU and a model that supports it{marker}",
                         _      => $"{FormatK(tokens)}{marker}"
                     };
-                })
-        );
+                });
 
         if (picked == auto)
         {
@@ -369,7 +327,7 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
     }
 
-    private static int ConfigureRequestTimeout(int currentTimeout)
+    private static async Task<int> ConfigureRequestTimeout(int currentTimeout, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]6. Per-Request Timeout[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -379,23 +337,14 @@ public class ConfigurationWizard
         AnsiConsole.MarkupLine("[dim]You can always cancel mid-request with Ctrl+C.[/]");
         AnsiConsole.WriteLine();
 
-        var timeout = AnsiConsole.Prompt(
-            new TextPrompt<int>($"[deepskyblue1]Timeout in minutes ({MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes}):[/]")
-                .DefaultValue(currentTimeout)
-                .Validate(value =>
-                {
-                    if (MandoCodeConfig.IsValidRequestTimeout(value))
-                        return ValidationResult.Success();
-                    return ValidationResult.Error($"[red]Timeout must be between {MandoCodeConfig.MinRequestTimeoutMinutes} and {MandoCodeConfig.MaxRequestTimeoutMinutes} minutes[/]");
-                })
-        );
+        var timeout = await prompts.NumberAsync($"Timeout in minutes ({MandoCodeConfig.MinRequestTimeoutMinutes}-{MandoCodeConfig.MaxRequestTimeoutMinutes}):", currentTimeout, MandoCodeConfig.IsValidRequestTimeout, $"Timeout must be between {MandoCodeConfig.MinRequestTimeoutMinutes} and {MandoCodeConfig.MaxRequestTimeoutMinutes} minutes.");
 
         AnsiConsole.MarkupLine($"[green]✓ Request timeout set to: {timeout} min[/]");
         AnsiConsole.WriteLine();
         return timeout;
     }
 
-    private static List<string> ConfigureIgnoreDirectories(List<string> currentIgnoreDirectories)
+    private static async Task<List<string>> ConfigureIgnoreDirectories(List<string> currentIgnoreDirectories, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]7. Ignore Directories[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -407,26 +356,21 @@ public class ConfigurationWizard
         }
         AnsiConsole.WriteLine();
 
-        var modify = AnsiConsole.Confirm("[deepskyblue1]Modify ignore directories?[/]", false);
+        var modify = await prompts.ConfirmAsync("Modify ignore directories?", false);
 
         if (modify)
         {
-            var choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]What would you like to do?[/]")
-                    .HighlightStyle(SelectionHighlight)
-                    .AddChoices(new[]
+            var choice = await prompts.SelectAsync("What would you like to do?", new[]
                     {
                         "Add directory to ignore list",
                         "Reset to defaults",
                         "Keep current list"
-                    })
-            );
+                    });
 
             switch (choice)
             {
                 case "Add directory to ignore list":
-                    var newDir = AnsiConsole.Ask<string>("[deepskyblue1]Directory name to ignore:[/]");
+                    var newDir = await prompts.TextAsync("Directory name to ignore:");
                     if (!currentIgnoreDirectories.Contains(newDir))
                     {
                         currentIgnoreDirectories.Add(newDir);
@@ -455,7 +399,7 @@ public class ConfigurationWizard
     /// rate-limiting yet has no reason to want a key — the in-context teaching happens
     /// at the moment a search actually gets blocked (see WebSearchPlugin).
     /// </summary>
-    private static async Task ConfigureWebSearchAsync(MandoCodeConfig config)
+    private static async Task ConfigureWebSearchAsync(MandoCodeConfig config, ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]8. Web Search[/]").LeftJustified());
         AnsiConsole.WriteLine();
@@ -469,11 +413,7 @@ public class ConfigurationWizard
 
         if (!string.IsNullOrWhiteSpace(config.TavilyApiKey))
         {
-            var choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title($"[deepskyblue1]Tavily key configured ({MandoCodeConfig.MaskApiKey(config.TavilyApiKey)}). What would you like to do?[/]")
-                    .HighlightStyle(SelectionHighlight)
-                    .AddChoices("Keep current key", "Replace key", "Remove key"));
+            var choice = await prompts.SelectAsync($"Tavily key configured ({MandoCodeConfig.MaskApiKey(config.TavilyApiKey)}). What would you like to do?", new[] { "Keep current key", "Replace key", "Remove key" });
 
             if (choice == "Keep current key")
             {
@@ -488,17 +428,14 @@ public class ConfigurationWizard
                 return;
             }
         }
-        else if (!AnsiConsole.Confirm("[deepskyblue1]Add a Tavily API key now?[/]", false))
+        else if (!await prompts.ConfirmAsync("Add a Tavily API key now?", false))
         {
             AnsiConsole.MarkupLine("[dim]Skipped — DuckDuckGo will be used. Add a key anytime: /config set tavilyKey <key>[/]");
             AnsiConsole.WriteLine();
             return;
         }
 
-        var key = AnsiConsole.Prompt(
-            new TextPrompt<string>("[deepskyblue1]Tavily API key (starts with tvly-; Enter to skip):[/]")
-                .Secret('*')
-                .AllowEmpty());
+        var key = await prompts.TextAsync("Tavily API key (starts with tvly-; Enter to skip):", secret: true, allowEmpty: true);
 
         if (string.IsNullOrWhiteSpace(key))
         {
@@ -513,9 +450,7 @@ public class ConfigurationWizard
         // biggest trust win for an optional key. The key stays set even if the probe
         // fails (the user may be offline); the message says so.
         string verification = "";
-        await AnsiConsole.Status()
-            .Spinner(LoadingMessages.GetRandomSpinner())
-            .StartAsync("[yellow]Verifying key with Tavily...[/]", async _ =>
+        await prompts.WithStatusAsync("Verifying key with Tavily...", async () =>
             {
                 verification = await WebSearchPlugin.ValidateTavilyKeyAsync(key.Trim());
             });
@@ -523,12 +458,12 @@ public class ConfigurationWizard
         AnsiConsole.WriteLine();
     }
 
-    private static bool ConfirmSave()
+    private static async Task<bool> ConfirmSave(ConfigurationPrompts prompts)
     {
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]9. Save Configuration[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
-        return AnsiConsole.Confirm("[deepskyblue1]Save this configuration?[/]", true);
+        return await prompts.ConfirmAsync("Save this configuration?", true);
     }
 
     private static async Task<bool> TestOllamaConnection(string endpoint)

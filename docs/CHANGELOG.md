@@ -17,6 +17,9 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **Learning mode keeps input in RazorConsole.** `/learn` asks whether to start the AI educator through the focused component selector, preventing its confirmation from competing with the chat keyboard handler.
+- **Configuration uses focused component menus and inputs.** `/config` routes every wizard choice and field through RazorConsole, masks API-key entry, and returns to chat without a competing console key reader.
+- **Setup keeps the chat prompt available after model selection.** `/setup` uses the same model picker as `/model`, and wizard text entry restores the previous prompt visibility when it finishes.
 - **New instructions replace the active plan.** Changing requirements during a tool approval stops the old plan and blocks its remaining tool calls. A fresh plan with updated acceptance checks must be reviewed before work resumes; completed file changes are preserved.
 - **Plan recovery menus render through RazorConsole.** Failed-step choices and revised-plan review now share the focused approval component instead of drawing a second Spectre prompt over the conversation. Choices are serialized with other approvals, and selection or cancellation removes the active menu.
 - **Approval menus receive keyboard focus.** File-write approval options now take focus when they open, so Up/Down selects an option and Enter confirms it. Preview scrolling remains available, and each new approval starts on the first option. This also applies to other menus using the same approval component.
@@ -26,6 +29,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Edit plan steps in a multiline editor.** Instructions wrap across the terminal width and the editor grows up to the available height. Arrow and page keys navigate long text; Enter saves, Shift/Alt+Enter adds a line, and Escape leaves the step unchanged.
 - **Match Desktop's plan shortcut.** Rename `Reject (answer without a plan)` to `One-shot it`, meaning the assistant attempts the request directly without step-by-step execution.
 - **Clearer statistics beneath each reply.** Show `In 12k · Out 195 · 74.2 tok/s` on the left in dim gray, matching the session/context text. Remove brackets, the approximation marker, and the extra blank line above the statistics.
 - **One session/context row above the prompt.** Right-align `Total Session Tokens 127k · Context [bar] 78% of 16k`, with a blank line above it to separate session status from reply statistics. The context label uses the configured model window.
