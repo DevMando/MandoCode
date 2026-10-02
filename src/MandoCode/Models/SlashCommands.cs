@@ -14,6 +14,9 @@ public static class SlashCommands
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
     {
         { "/help", "Show this help message" },
+        { "/new-agent", "Open another independent agent pane" },
+        { "/focus-agent", "Switch to the other agent (optional: left/right)" },
+        { "/close-agent", "Close the current idle agent pane" },
         { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
         { "/model", "Quick switch — pick a different model" },
         { "/config", "Adjust settings — guided wizard (model, temperature, tokens, context window, timeout)" },

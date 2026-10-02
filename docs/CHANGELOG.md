@@ -7,6 +7,7 @@ All notable changes to MandoCode will be documented in this file.
 **RazorConsole 0.6 migration — 0.16.0-alpha.** The CLI now uses a component-based terminal layout, with a scrolling conversation above a persistent prompt. This alpha is based on v0.15.2.
 
 ### Added
+- **Four independent agents in one CLI window.** `/new-agent` opens another pane, with its own conversation, model settings, token statistics, plan, and approvals. Headers identify each agent and offer New, focus, and Close controls. `/focus-agent` switches panes and `/close-agent` closes an idle pane. Alt+N, Alt+arrows, and Alt+W provide shortcuts; Windows/Command variants are accepted only when forwarded by the terminal.
 - **A conversation that stays in order.** Submitted prompts, replies, code snippets, and tool results render as conversation components. Page Up/Down and mouse-wheel scrolling let you review earlier output; Ctrl+End returns to the latest output.
 - **A searchable model picker above the prompt.** Type to filter, use Up/Down to navigate, Enter or Tab to select, and Escape to cancel. Choices are checked before saving; unavailable cloud models are removed from the current picker so you can choose another.
 - **Startup recovery for unavailable cloud models.** A missing or retired configured cloud model opens the picker automatically. One compact warning explains what to do; a valid replacement clears it.
@@ -17,6 +18,9 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **Keep theme colors when closing the original agent.** The terminal palette now belongs to the whole window and is restored only when the application exits, so closing Agent 1 does not replace the soft green with the terminal's default green.
+- **Keep surviving agents visible when closing Agent 1.** Grid rows and slots now have stable component identities, avoiding sibling reordering that the live terminal renderer does not apply correctly. Workspace revisions refresh slots even when pane dimensions stay the same. Regression checks use the actual incremental renderer.
+- **Collapse the agent grid after closing panes.** Two remaining agents return to full-height side-by-side panes, including when they occupied different grid rows, without restarting their conversations.
 - **Clipboard commands reach the terminal again.** `/copy` and `/copy-code` send clipboard control sequences directly to the terminal instead of through the conversation output filter, which removed them.
 - **Learning mode keeps input in RazorConsole.** `/learn` asks whether to start the AI educator through the focused component selector, preventing its confirmation from competing with the chat keyboard handler.
 - **Configuration uses focused component menus and inputs.** `/config` routes every wizard choice and field through RazorConsole, masks API-key entry, and returns to chat without a competing console key reader.
@@ -30,6 +34,8 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Give three agents more room.** Opening a third agent keeps the left pane at full height and stacks the other two on the right. Four agents use a 2×2 grid; removing a pane expands the lone pane in its column while retaining live agent components. Arrow shortcuts follow the displayed columns.
+- **Give conversation messages more breathing room.** Add a blank line after submitted prompts and each turn's token statistics. Keep the statistics directly beneath the reply, along with the existing gold prompt text and green `MandoCode` label.
 - **Cancel configuration without menu clutter.** The `/config` options title stays temporary until an action is selected. Choosing Cancel adds neither the title nor the selection to the conversation.
 - **Edit plan steps in a multiline editor.** Instructions wrap across the terminal width and the editor grows up to the available height. Arrow and page keys navigate long text; Enter saves, Shift/Alt+Enter adds a line, and Escape leaves the step unchanged.
 - **Match Desktop's plan shortcut.** Rename `Reject (answer without a plan)` to `One-shot it`, meaning the assistant attempts the request directly without step-by-step execution.

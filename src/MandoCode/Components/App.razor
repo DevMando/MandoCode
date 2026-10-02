@@ -1,33 +1,14 @@
+@inject IServiceProvider Services
+@using Microsoft.Extensions.DependencyInjection
 @using MandoCode.Models
 @using MandoCode.Services
 @using System.Collections.Generic
 @using System.Text.RegularExpressions
 @using Spectre.Console
-@inject AIService AI
-@inject MandoCodeConfig Config
-@inject TaskPlannerService TaskPlanner
-@inject PlanRunnerSelector PlanRunners
-@inject PlanHandoff PlanHandoff
-@inject FileAutocompleteProvider FileProvider
-@inject TokenTrackingService TokenTracker
-@inject MusicPlayerService MusicPlayer
-@inject ProjectRootAccessor ProjectRoot
-@inject SpinnerService Spinner
-@inject OperationDisplayRenderer OperationRenderer
-@inject DiffApprovalHandler DiffApproval
-@inject CancelKeyCoordinator KeyCoordinator
-@inject InstructionPromptCoordinator InstructionCoordinator
-@inject ApprovalSelectCoordinator ApprovalMenu
-@inject ShellCommandHandler Shell
-@inject TerminalThemeService ThemeService
-@inject InputStateMachine StateMachine
-@inject SkillLoader Skills
-@inject McpClientManager McpManager
-@inject McpApprovalGate McpGate
-@inject ApprovalPromptGate PromptGate
-@inject UpdateCheckService UpdateCheck
+
 @inject Microsoft.Extensions.Hosting.IHostApplicationLifetime Lifetime
 @implements IDisposable
+@implements IAsyncDisposable
 
 <ChatShell @ref="_chatShell">
 <Header>
@@ -166,6 +147,33 @@
 </ChatShell>
 
 @code {
+    private AIService AI { get; set; } = default!;
+    private MandoCodeConfig Config { get; set; } = default!;
+    private TaskPlannerService TaskPlanner { get; set; } = default!;
+    private PlanRunnerSelector PlanRunners { get; set; } = default!;
+    private PlanHandoff PlanHandoff { get; set; } = default!;
+    private FileAutocompleteProvider FileProvider { get; set; } = default!;
+    private TokenTrackingService TokenTracker { get; set; } = default!;
+    private MusicPlayerService MusicPlayer { get; set; } = default!;
+    private ProjectRootAccessor ProjectRoot { get; set; } = default!;
+    private SpinnerService Spinner { get; set; } = default!;
+    private OperationDisplayRenderer OperationRenderer { get; set; } = default!;
+    private DiffApprovalHandler DiffApproval { get; set; } = default!;
+    private CancelKeyCoordinator KeyCoordinator { get; set; } = default!;
+    private InstructionPromptCoordinator InstructionCoordinator { get; set; } = default!;
+    private ApprovalSelectCoordinator ApprovalMenu { get; set; } = default!;
+    private ShellCommandHandler Shell { get; set; } = default!;
+    private TerminalThemeService ThemeService { get; set; } = default!;
+    private InputStateMachine StateMachine { get; set; } = default!;
+    private SkillLoader Skills { get; set; } = default!;
+    private McpClientManager McpManager { get; set; } = default!;
+    private McpApprovalGate McpGate { get; set; } = default!;
+    private ApprovalPromptGate PromptGate { get; set; } = default!;
+    private UpdateCheckService UpdateCheck { get; set; } = default!;
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private bool _paneStopped;
+    private string? _headerModel;
+    private void StopPane() { _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -259,8 +267,6 @@
     private Task? _musicVisTask;
     private readonly object _musicVisLock = new();
 
-
-
     private void StartMusicVisualizer()
     {
         if (TuiConsole.Current is not null) return;
@@ -350,11 +356,40 @@
 
     protected override void OnInitialized()
     {
+        {
+            var agentServices = Pane?.Services ?? Services;
+            AI = agentServices.GetRequiredService<AIService>();
+            Config = agentServices.GetRequiredService<MandoCodeConfig>();
+            TaskPlanner = agentServices.GetRequiredService<TaskPlannerService>();
+            PlanRunners = agentServices.GetRequiredService<PlanRunnerSelector>();
+            PlanHandoff = agentServices.GetRequiredService<PlanHandoff>();
+            FileProvider = agentServices.GetRequiredService<FileAutocompleteProvider>();
+            TokenTracker = agentServices.GetRequiredService<TokenTrackingService>();
+            MusicPlayer = agentServices.GetRequiredService<MusicPlayerService>();
+            ProjectRoot = agentServices.GetRequiredService<ProjectRootAccessor>();
+            Spinner = agentServices.GetRequiredService<SpinnerService>();
+            OperationRenderer = agentServices.GetRequiredService<OperationDisplayRenderer>();
+            DiffApproval = agentServices.GetRequiredService<DiffApprovalHandler>();
+            KeyCoordinator = agentServices.GetRequiredService<CancelKeyCoordinator>();
+            InstructionCoordinator = agentServices.GetRequiredService<InstructionPromptCoordinator>();
+            ApprovalMenu = agentServices.GetRequiredService<ApprovalSelectCoordinator>();
+            Shell = agentServices.GetRequiredService<ShellCommandHandler>();
+            ThemeService = agentServices.GetRequiredService<TerminalThemeService>();
+            StateMachine = agentServices.GetRequiredService<InputStateMachine>();
+            Skills = agentServices.GetRequiredService<SkillLoader>();
+            McpManager = agentServices.GetRequiredService<McpClientManager>();
+            McpGate = agentServices.GetRequiredService<McpApprovalGate>();
+            PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
+            UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
+            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive;
+            if (Pane is not null) Pane.Stop = StopPane;
+        }
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
         // anything future starting with '-') are not folder names — same filtering as
         // Program.cs, or `mandocode --continue` would set the project root to "--continue".
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-        _continueRequested = args.Any(a => a is "--continue" or "-c");
+        _continueRequested = (Pane is null || Pane.Id == 1) && args.Any(a => a is "--continue" or "-c");
         var positional = args.Where(a => !a.StartsWith('-')).ToArray();
         if (positional.Length > 0 && !positional[0].StartsWith("config"))
         {
@@ -392,7 +427,7 @@
         }
 
         // Detect terminal theme and apply curated palette
-        if (Config.EnableThemeCustomization)
+        if (Config.EnableThemeCustomization && (Pane is null || Pane.Id == 1))
         {
             ThemeService.DetectTheme();
             ThemeService.ApplyPalette();
@@ -403,6 +438,7 @@
         // which would otherwise keep being dereferenced after teardown.
         _cancelKeyHandler = (_, e) =>
         {
+            if (Pane is not null && !Pane.Active) return;
             var cts = _requestCts;
             if (cts != null && !cts.IsCancellationRequested)
             {
@@ -420,6 +456,12 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (Pane is not null && _headerModel != Config.GetEffectiveModelName())
+        {
+            _headerModel = Config.GetEffectiveModelName();
+            Pane.Workspace.Refresh();
+        }
         if (firstRender && !_connectionChecked)
         {
             await InitializeConnectionAsync();
@@ -1073,6 +1115,7 @@
 
     private async Task RunInteractiveLoopAsync()
     {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         if (_offerStartupModelPicker)
         {
             _offerStartupModelPicker = false;
@@ -1091,6 +1134,7 @@
 
             // Await user input via VDOM PromptInput component.
             var input = await WaitForVdomInputAsync();
+            if (_paneStopped) return;
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
@@ -1122,7 +1166,7 @@
                 {
                     if (await AI.CompactHistoryAsync())
                     {
-                        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+                        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
                         catch { /* persistence must never break the chat */ }
                         AnsiConsole.MarkupLine("[green]Conversation context compacted into a recap. The visible transcript is unchanged.[/]");
                     }
@@ -1187,6 +1231,9 @@
                     table.AddRow("/config", "Adjust settings — guided wizard");
                     table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
                     table.AddRow("/retry", "Retry Ollama connection");
+                    table.AddRow("/new-agent", "Open another independent agent pane (four maximum)");
+                    table.AddRow("/focus-agent", "Switch agents; optional left/right direction");
+                    table.AddRow("/close-agent", "Close this pane after cancelling any running request");
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
                     table.AddRow("/music-stop", "Stop music playback");
@@ -1469,8 +1516,9 @@
 
     private void HandleVdomSubmit(string input)
     {
+        if (Pane is not null && Pane.Workspace.Command(Pane, input)) return;
         if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
-        if (!string.IsNullOrWhiteSpace(input)) TuiConsole.Current?.AppendUserPrompt(input);
+        if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input);
         _isProcessing = true;
         _inputTcs.TrySetResult(input);
     }
@@ -1742,6 +1790,7 @@
         await InvokeAsync(StateHasChanged);
 
         var input = await _inputTcs.Task;
+        if (_paneStopped) return string.Empty;
 
         _showPrompt = true;
         _isProcessing = true;
@@ -2054,7 +2103,7 @@
                                     ? $" · {lastOp.TokensPerSecond.Value:0.#} tok/s"
                                     : "";
                                 var tokenSummary = $"{inLabel} · {outLabel}{tpsLabel}";
-                                AnsiConsole.Write(new Text(tokenSummary, new Style(Color.Grey, decoration: Decoration.Dim)));
+                                AnsiConsole.WriteSpaced(new Text(tokenSummary, new Style(Color.Grey, decoration: Decoration.Dim)));
                             }
                         }
 
@@ -2114,7 +2163,7 @@
 
             // Persist the conversation as of this turn for `mandocode --continue`.
             // Runs on cancel too — whatever the history holds now is what "continue" means.
-            try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+            try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
             catch { /* persistence must never break the chat */ }
         }
     }
@@ -2551,7 +2600,7 @@
         AI.AppendAssistantNote(manifest);
 
         // Keep --continue honest: the plan's outcome is part of this turn.
-        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
         catch { /* persistence must never break the chat */ }
     }
 
@@ -4045,6 +4094,8 @@
 
     public void Dispose()
     {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        StopPane();
         StopCancelKeyListener();
         StopMusicVisualizer();
         Spinner.Stop();
@@ -4074,7 +4125,14 @@
         var cts = Interlocked.Exchange(ref _requestCts, null);
         cts?.Dispose();
         MusicPlayer?.Dispose();
-        ThemeService?.Dispose();
+        if (Pane is null || Pane.Id == 1) ThemeService?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Pane is null) { ((IDisposable)this).Dispose(); return; }
+        Dispose();
+        await Pane.DisposeAsync();
     }
 
 }

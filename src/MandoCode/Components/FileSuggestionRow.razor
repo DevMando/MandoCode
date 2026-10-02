@@ -20,13 +20,14 @@
 </Box>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public string Path { get; set; } = "";
     [Parameter] public bool Selected { get; set; }
     private bool Directory => Path.EndsWith('/');
     private Color Accent => Directory ? new Color(86, 182, 194) : new Color(255, 200, 80);
     private string Normalized => Path.Replace('\\', '/').TrimEnd('/');
     private int Separator => Normalized.LastIndexOf('/');
-    private int Width => Math.Max(1, Viewport.Width - 4);
+    private int Width => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
     private string Primary => Clip((Separator >= 0 ? Normalized[(Separator + 1)..] : Normalized) + (Directory ? "/" : ""), Width);
     private string Secondary => Separator >= 0 ? Clip(Normalized[..(Separator + 1)], Math.Max(0, Width - Cells(Primary) - 2)) : "";
     private string SelectedText

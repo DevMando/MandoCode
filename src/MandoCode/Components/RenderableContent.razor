@@ -1,10 +1,13 @@
 @using Spectre.Console.Rendering
-@inject TuiSession Session
+@inject IServiceProvider Services
 @implements IDisposable
 
 <div data-canvas="true" data-transcript-entry="@_id" />
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private TuiSession Session { get; set; } = default!;
+    protected override void OnInitialized() => Session = Pane?.Session ?? (TuiSession)Services.GetService(typeof(TuiSession))!;
     [Parameter, EditorRequired] public IRenderable Content { get; set; } = default!;
     private long _id;
     private IRenderable? _previous;

@@ -11,7 +11,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     private readonly object _sync = new();
     private readonly List<TuiEntry> _entries = new();
     private readonly Dictionary<long, IRenderable> _registered = new();
-    private long _nextId;
+    private static long _nextId;
     private long _revision;
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
     private DateTimeOffset _startedAt;
@@ -30,13 +30,21 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     public void Append(IRenderable content)
     {
         if (content is MandoCode.Translators.AnsiPassthroughRenderable ansi) content = AnsiTranscriptText.Parse(ansi.Content);
-        lock (_sync) { _entries.Add(new(++_nextId, content)); Interlocked.Increment(ref _revision); }
+        lock (_sync) { _entries.Add(new(Interlocked.Increment(ref _nextId), content)); Interlocked.Increment(ref _revision); }
     }
     public void AppendUserPrompt(string prompt)
     {
         lock (_sync)
         {
-            _entries.Add(new(++_nextId, new Text("> " + prompt, new Style(new Color(255, 200, 80)))) { UserPrompt = prompt });
+            _entries.Add(new(Interlocked.Increment(ref _nextId), new Text("> " + prompt, new Style(new Color(255, 200, 80)))) { UserPrompt = prompt });
+            Interlocked.Increment(ref _revision);
+        }
+    }
+    public void AppendSpaced(IRenderable content)
+    {
+        lock (_sync)
+        {
+            _entries.Add(new(Interlocked.Increment(ref _nextId), content) { SpaceAfter = true });
             Interlocked.Increment(ref _revision);
         }
     }
@@ -46,7 +54,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     }
     public long Register(IRenderable content)
     {
-        lock (_sync) { var id = ++_nextId; _registered[id] = content; return id; }
+        lock (_sync) { var id = Interlocked.Increment(ref _nextId); _registered[id] = content; return id; }
     }
     public void Unregister(long id) { lock (_sync) _registered.Remove(id); }
     public void Clear()
@@ -105,6 +113,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
 public sealed record TuiEntry(long Id, IRenderable Content)
 {
     public string? UserPrompt { get; init; }
+    public bool SpaceAfter { get; init; }
 }
 public sealed record TuiSnapshot(IReadOnlyList<TuiEntry> Entries, bool Running, string Activity, string Preview)
 {

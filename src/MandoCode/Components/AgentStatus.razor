@@ -15,13 +15,14 @@
 </Flex>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public TuiSnapshot State { get; set; } = default!;
-    private int PreviewLines => Math.Min(3, Math.Max(0, Viewport.Height - 8));
+    private int PreviewLines => Math.Min(3, Math.Max(0, (Pane?.Height ?? Viewport.Height) - 8));
     private string SpinnerMessage => Clip($"{State.LoadingMessage} ({(int)State.Elapsed.TotalMinutes}:{State.Elapsed.Seconds:00})", State.Spinner.Frames.Max(frame => RazorConsole.Core.Input.TextSelectionState.CellWidth(frame)) + 1);
     private string Preview => string.Join("\n", State.Preview.Replace("\r", "").Split('\n').TakeLast(PreviewLines).Select(line => Clip(line)));
     private string Clip(string text, int reserved = 0)
     {
-        var width = Math.Max(1, Viewport.Width - Math.Max(4, reserved));
+        var width = Math.Max(1, (Pane?.Width ?? Viewport.Width) - Math.Max(4, reserved));
         var result = new StringBuilder();
         var cells = 0;
         foreach (var rune in text.EnumerateRunes())

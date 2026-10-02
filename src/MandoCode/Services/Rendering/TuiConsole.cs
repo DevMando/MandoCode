@@ -8,16 +8,25 @@ namespace MandoCode.Services;
 public static class TuiConsole
 {
     private static TextWriter? _terminalWriter;
-    public static TuiSession? Current { get; private set; }
+    private static readonly AsyncLocal<TuiSession?> Ambient = new();
+    private static TuiSession? _fallback;
+    public static TuiSession? Current => Ambient.Value ?? _fallback;
+    internal static void SetActive(TuiSession session) { if (_fallback is not null) _fallback = session; }
+    public static IDisposable Enter(TuiSession session)
+    {
+        var previous = Ambient.Value;
+        Ambient.Value = session;
+        return new SessionScope(previous);
+    }
     public static IDisposable Begin(TuiSession session)
     {
         if (Current is not null) throw new InvalidOperationException("A TUI session is already active.");
         // Force Spectre to retain the physical writer before redirecting ordinary stdout.
         _ = PhysicalConsole.Console;
         var previous = System.Console.Out;
-        var writer = new TuiTranscriptWriter(session);
+        var writer = new RoutedTranscriptWriter(session);
         _terminalWriter = previous;
-        Current = session;
+        _fallback = session;
         System.Console.SetOut(writer);
         return new OutputScope(previous, writer);
     }
@@ -35,6 +44,11 @@ public static class TuiConsole
         if (Current is { } session) session.Append(content);
         else PhysicalConsole.Write(content);
     }
+    public static void WriteSpaced(IRenderable content)
+    {
+        if (Current is { } session) session.AppendSpaced(content);
+        else PhysicalConsole.Write(content);
+    }
     public static void Write(string text) { if (Current is { } session) session.Append(new Text(text)); else PhysicalConsole.Write(text); }
     public static void WriteLine() { if (Current is null) PhysicalConsole.WriteLine(); }
     public static void WriteLine(string text) { if (Current is { } session) session.Append(new Text(text)); else PhysicalConsole.WriteLine(text); }
@@ -48,13 +62,26 @@ public static class TuiConsole
     public static T Ask<T>(string prompt, T defaultValue) => PhysicalConsole.Ask(prompt, defaultValue);
     public static bool Confirm(string prompt, bool defaultValue = true) => PhysicalConsole.Confirm(prompt, defaultValue);
     public static Status Status() => PhysicalConsole.Status();
-    private sealed class OutputScope(TextWriter previous, TuiTranscriptWriter writer) : IDisposable
+    private sealed class SessionScope(TuiSession? previous) : IDisposable
+    {
+        public void Dispose() => Ambient.Value = previous;
+    }
+    private sealed class RoutedTranscriptWriter(TuiSession fallback) : TextWriter
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<TuiSession, TuiTranscriptWriter> _writers = new();
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+        public override void Write(string? value) => _writers.GetOrAdd(Current ?? fallback, s => new TuiTranscriptWriter(s)).Write(value);
+        public override void Write(char value) => Write(value.ToString());
+        public override void Write(char[] buffer, int index, int count) => Write(new string(buffer, index, count));
+        public override void Flush() { foreach (var writer in _writers.Values) writer.Flush(); }
+    }
+    private sealed class OutputScope(TextWriter previous, RoutedTranscriptWriter writer) : IDisposable
     {
         public void Dispose()
         {
             System.Console.SetOut(previous);
             writer.Flush();
-            Current = null;
+            _fallback = null;
             _terminalWriter = null;
         }
     }

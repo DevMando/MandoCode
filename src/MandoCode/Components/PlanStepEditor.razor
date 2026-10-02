@@ -15,6 +15,7 @@
 </Panel>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public string Title { get; set; } = "Edit plan step";
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
@@ -22,10 +23,10 @@
     private readonly TextSelectionState _buffer = new();
     private readonly string _hook = "plan-step-" + Guid.NewGuid().ToString("N");
     private bool _initialized;
-    private int EditorWidth => Math.Max(1, Viewport.Width - 4);
+    private int EditorWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
     private IReadOnlyList<TextSelectionState.TextRow> WrappedRows => _buffer.Wrap(EditorWidth, wordWrap: true);
     private int EditorHeight => Math.Clamp(WrappedRows.Count, Math.Min(3, MaximumHeight), MaximumHeight);
-    private int MaximumHeight => Math.Max(1, Math.Min(12, Viewport.Height - 7));
+    private int MaximumHeight => Math.Max(1, Math.Min(12, (Pane?.Height ?? Viewport.Height) - 7));
 
     protected override void OnParametersSet()
     {
@@ -36,13 +37,15 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) await Focus.FocusAsync(_hook);
+        if (Pane is not null) Pane.FocusKey = _hook;
+        if (firstRender && (Pane is null || Pane.Active)) await Focus.FocusAsync(_hook);
     }
 
     private void HandleChanged() => StateHasChanged();
 
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
         if (key.Key == "Escape")
         {
             await OnCancel.InvokeAsync();
