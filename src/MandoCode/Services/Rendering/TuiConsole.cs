@@ -21,7 +21,7 @@ public static class TuiConsole
         System.Console.SetOut(writer);
         return new OutputScope(previous, writer);
     }
-    // Palette OSC sequences change terminal colors without drawing into the canvas.
+    // Palette and clipboard OSC sequences act on the terminal without drawing into the canvas.
     // Send them to the retained terminal writer rather than the transcript sanitizer.
     internal static void WriteTerminalControl(string sequence)
     {

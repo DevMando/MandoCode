@@ -3649,7 +3649,7 @@
 
         // OSC 52: copy to system clipboard via terminal escape code
         var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
-        Console.Write($"\u001b]52;c;{base64}\u0007");
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
         AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
         AnsiConsole.WriteLine();
@@ -3688,7 +3688,7 @@
             AnsiConsole.MarkupLine("[yellow]Warning: Code blocks truncated to fit clipboard limit.[/]");
         }
 
-        Console.Write($"\u001b]52;c;{base64}\u0007");
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
         AnsiConsole.MarkupLine($"[green]Copied {matches.Count} code block(s) to clipboard[/] [dim]({codeContent.Length} chars)[/]");
         AnsiConsole.WriteLine();
