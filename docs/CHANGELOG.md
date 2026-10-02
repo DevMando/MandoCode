@@ -17,6 +17,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **Clipboard commands reach the terminal again.** `/copy` and `/copy-code` send clipboard control sequences directly to the terminal instead of through the conversation output filter, which removed them.
 - **Learning mode keeps input in RazorConsole.** `/learn` asks whether to start the AI educator through the focused component selector, preventing its confirmation from competing with the chat keyboard handler.
 - **Configuration uses focused component menus and inputs.** `/config` routes every wizard choice and field through RazorConsole, masks API-key entry, and returns to chat without a competing console key reader.
 - **Setup keeps the chat prompt available after model selection.** `/setup` uses the same model picker as `/model`, and wizard text entry restores the previous prompt visibility when it finishes.
