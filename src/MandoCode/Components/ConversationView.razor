@@ -3,7 +3,7 @@
 @implements IDisposable
 
 <view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
-    <div data-focusable="true" data-focus-order="1" @onkeydown="HandleKey" @onwheel="HandleWheel">
+    <div data-focusable="@(Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)" data-focus-order="1" @onkeydown="HandleKey" @onwheel="HandleWheel">
         @Header
         @foreach (var entry in Entries)
         {
@@ -19,6 +19,11 @@
     private readonly string _scrollId = Guid.NewGuid().ToString("N");
     private int _offset;
     private bool _following = true;
+    protected override void OnInitialized()
+    {
+        if (Pane?.PresentationState.GetValueOrDefault("scroll") is ValueTuple<int, bool> saved)
+            (_offset, _following) = saved;
+    }
     public void Scroll(string key)
     {
         var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
@@ -55,5 +60,9 @@
         StateHasChanged();
     }
     private static int SafeHeight { get { try { return Math.Max(12, Console.WindowHeight); } catch { return 24; } } }
-    public void Dispose() => LayoutCoordinator.Remove(_scrollId);
+    public void Dispose()
+    {
+        if (Pane is not null) Pane.PresentationState["scroll"] = (_offset, _following);
+        LayoutCoordinator.Remove(_scrollId);
+    }
 }

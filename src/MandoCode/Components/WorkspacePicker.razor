@@ -1,0 +1,83 @@
+@using RazorConsole.Core.Input
+@using Spectre.Console
+@inject WorkspaceRegistry Registry
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+@inject RazorConsole.Core.Focus.FocusManager Focus
+
+<Box FillWidth="true" Height="@Height" Border="BoxBorder.Rounded" Title="All workspaces">
+    <Rows>
+        <TextArea Buffer="_query" Editable="true" Height="1" Width="@Math.Max(1, Viewport.Width - 4)" Hook="@_hook"
+                  Placeholder="Find workspace · ↑/↓ select · Enter switch · Esc close"
+                  OnChanged="Filter" OnPreviewKey="Key" />
+        @for (var i = _start; i < Math.Min(_filtered.Length, _start + VisibleRows); i++)
+        {
+            var workspace = _filtered[i];
+            <WorkspaceButton Content="@WorkspaceTabWindow.Fit($" {WorkspaceTab.Label(workspace)} ", Math.Max(1, Viewport.Width - 4))"
+                             Selected="@(i == _selected)" OnClick="@(() => Choose(workspace))" />
+        }
+        @if (_filtered.Length == 0) { <Markup Content="No matching workspaces" Foreground="Color.Grey" /> }
+    </Rows>
+</Box>
+@code {
+    [Parameter] public int Height { get; set; } = 9;
+    [Parameter] public long Revision { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    private readonly TextSelectionState _query = new();
+    private readonly string _hook = "workspace-picker-" + Guid.NewGuid().ToString("N");
+    private AgentWorkspace[] _filtered = [];
+    private int _selected;
+    private int _start;
+    private int VisibleRows => Math.Max(1, Height - 3);
+    protected override void OnInitialized()
+    {
+        Filter();
+        _selected = Math.Max(0, Array.IndexOf(_filtered, Registry.Active));
+        Reveal();
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await Focus.FocusAsync(_hook);
+    }
+    protected override void OnParametersSet()
+    {
+        var selected = _filtered.ElementAtOrDefault(_selected);
+        _filtered = Matches();
+        _selected = Math.Max(0, Array.IndexOf(_filtered, selected));
+        Reveal();
+    }
+    private AgentWorkspace[] Matches() => Registry.Workspaces.Where(w => w.Name.Contains(_query.Text, StringComparison.OrdinalIgnoreCase) || w.Id.ToString().Contains(_query.Text, StringComparison.OrdinalIgnoreCase)).ToArray();
+    private void Filter()
+    {
+        _filtered = Matches();
+        _selected = 0;
+        _start = 0;
+    }
+    private void Reveal() => _start = Math.Clamp(_selected - VisibleRows + 1, 0, Math.Max(0, _filtered.Length - VisibleRows));
+    private async Task Choose(AgentWorkspace workspace)
+    {
+        Registry.Switch(workspace);
+        await OnClose.InvokeAsync();
+    }
+    private async Task<bool> Key(KeyboardEventArgs key)
+    {
+        if (key.Key == "Escape") { await OnClose.InvokeAsync(); return true; }
+        if (key.Key is "Enter" or "Return")
+        {
+            if (_filtered.Length > 0) await Choose(_filtered[_selected]);
+            return true;
+        }
+        if (key.Key is "ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")
+        {
+            _selected = Math.Clamp(_selected + (key.Key is "ArrowUp" or "UpArrow" ? -1 : 1), 0, Math.Max(0, _filtered.Length - 1));
+            Reveal();
+            StateHasChanged();
+            return true;
+        }
+        if (Registry.Active.SelectedPane is { } pane && pane.Workspace.Key(pane, key))
+        {
+            await OnClose.InvokeAsync();
+            return true;
+        }
+        return false;
+    }
+}

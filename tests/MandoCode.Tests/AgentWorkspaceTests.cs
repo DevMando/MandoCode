@@ -30,7 +30,7 @@ public class AgentWorkspaceTests
         registrations.AddRazorConsoleServices();
         registrations.AddSingleton<ITerminalViewport>(new FixedViewport());
         registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
-        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
         await using var services = registrations.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         var workspace = services.GetRequiredService<AgentWorkspace>();
         for (var i = 0; i < count; i++) workspace.Add();
@@ -106,7 +106,7 @@ public class AgentWorkspaceTests
         registrations.AddRazorConsoleServices();
         registrations.AddSingleton<ITerminalViewport>(new FixedViewport());
         registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
-        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
         await using var services = registrations.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         var workspace = services.GetRequiredService<AgentWorkspace>();
         var first = workspace.Add();
@@ -117,15 +117,15 @@ public class AgentWorkspaceTests
         {
             var root = await renderer.RenderComponentAsync<AgentWorkspaceView>();
             var html = System.Net.WebUtility.HtmlDecode(root.ToHtmlString());
-            Assert.Contains("Agent 1", html);
+            if (count > 1) Assert.Contains("Agent 1", html);
             if (count > 1) Assert.Contains("Agent 2", html);
-            Assert.Contains("+ New", html);
+            Assert.DoesNotContain("+ New", html);
             Assert.Equal(count > 1 ? 58 : 120, first.Width);
             Assert.Equal(count > 1 ? 58 : 120, second.Width);
-            Assert.Equal(count == 4 ? 12 : count == 1 ? 29 : 27, first.Height);
-            Assert.Equal(count > 2 ? 12 : count == 1 ? 29 : 27, second.Height);
+            Assert.Equal(count == 4 ? 13 : count == 1 ? 30 : 28, first.Height);
+            Assert.Equal(count > 2 ? 13 : count == 1 ? 30 : 28, second.Height);
             Assert.Equal(count, workspace.Panes.Count);
-            foreach (var pane in workspace.Panes) Assert.Contains($"Agent {pane.Id}", html);
+            foreach (var pane in workspace.Panes.Where(_ => count > 1)) Assert.Contains($"Agent {pane.Id}", html);
             var document = new HtmlDocument();
             document.LoadHtml(root.ToHtmlString());
             var vdom = VNode.CreateRegion();
@@ -139,7 +139,7 @@ public class AgentWorkspaceTests
             console.Write(layout.PaintToRenderable());
             var lines = writer.ToString().Split('\n');
             var top = Array.FindIndex(lines, line => line.Contains("Agent 1"));
-            Assert.True(top >= 0);
+            if (count > 1) Assert.True(top >= 0);
             if (count > 1) Assert.Contains("Agent 2", lines[top]);
             if (count > 2)
             {
@@ -177,7 +177,7 @@ public class AgentWorkspaceTests
                     workspace.Close(removed);
                 }
                 await Task.Yield();
-                Assert.Equal(27, survivor.Height);
+                Assert.Equal(28, survivor.Height);
                 Assert.Same(survivorConfig, survivor.Services.GetRequiredService<MandoCodeConfig>());
                 Assert.Single(survivor.Session.Snapshot().Entries);
                 document.LoadHtml(root.ToHtmlString());
@@ -232,7 +232,7 @@ public class AgentWorkspaceTests
     private static ServiceProvider Services()
     {
         var services = new ServiceCollection();
-        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
 
@@ -319,11 +319,11 @@ public class AgentWorkspaceTests
         using var services = Services();
         var workspace = services.GetRequiredService<AgentWorkspace>();
         var first = workspace.Add();
-        Assert.True(workspace.Command(first, "/new-agent"));
+        Assert.True(workspace.Command(first, "/agent-new"));
         var second = workspace.Panes[1];
-        workspace.Command(second, "/new-agent");
-        workspace.Command(second, "/new-agent");
-        workspace.Command(second, "/new-agent");
+        workspace.Command(second, "/agent-new");
+        workspace.Command(second, "/agent-new");
+        workspace.Command(second, "/agent-new");
         Assert.Equal(4, workspace.Panes.Count);
         workspace.Focus(second);
         Assert.True(workspace.Key(second, new KeyboardEventArgs { Key = "ArrowLeft", MetaKey = true }));
@@ -335,18 +335,18 @@ public class AgentWorkspaceTests
         workspace.Key(workspace.Panes[2], new KeyboardEventArgs { Key = "ArrowUp", AltKey = true });
         Assert.True(second.Active);
         second.IsBusy = () => true;
-        workspace.Command(second, "/close-agent");
+        workspace.Command(second, "/agent-close");
         Assert.Equal(4, workspace.Panes.Count);
         var stopped = false;
         second.IsBusy = () => false;
         second.Stop = () => stopped = true;
-        workspace.Command(second, "/close-agent");
+        workspace.Command(second, "/agent-close");
         Assert.Equal(3, workspace.Panes.Count);
         Assert.True(stopped);
         Assert.True(first.Active);
         second.Dispose();
         foreach (var pane in workspace.Panes.Where(p => p != first).ToArray()) { workspace.Close(pane); pane.Dispose(); }
-        workspace.Command(first, "/close-agent");
+        workspace.Command(first, "/agent-close");
         Assert.Single(workspace.Panes);
     }
 }

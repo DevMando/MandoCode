@@ -1,0 +1,84 @@
+@using RazorConsole.Core.Renderables
+@using Spectre.Console
+@inject WorkspaceRegistry Registry
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<Box Height="1" FillWidth="true">
+    <Flex Direction="FlexDirection.Row" FillWidth="true">
+        @if (LabelWidth > 0)
+        {
+            <Box Width="@LabelWidth"><Markup Content="@(Compact ? " AG " : " AGENTS ")" Foreground="Color.Grey70" Background="@Background" Decoration="Decoration.Bold" /></Box>
+        }
+        @if (ArrowWidth > 0)
+        {
+            <Box Width="3"><WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content=" ‹ " OnClick="@(() => Scroll(-1))" /></Box>
+        }
+        @if (AvailableWidth > 0)
+        {
+            <Box Width="@AvailableWidth">
+                <Flex Direction="FlexDirection.Row">
+                    @for (var i = _start; i < Math.Min(Workspace.Panes.Count, _start + Capacity); i++)
+                    {
+                        var pane = Workspace.Panes[i];
+                        <WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content="@Caption(pane)" Selected="@(pane == Workspace.SelectedPane)" OnClick="@(() => Select(pane))" />
+                    }
+                    <Markup Content="@(new string(' ', Padding))" Background="@Background" />
+                </Flex>
+            </Box>
+        }
+        @if (ArrowWidth > 0)
+        {
+            <Box Width="3"><WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content=" › " OnClick="@(() => Scroll(1))" /></Box>
+        }
+        <Box Width="@ActionsWidth">
+            <Flex Direction="FlexDirection.Row">
+                <WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content="@(Compact ? " + " : " + New ")" OnClick="NewAgent" />
+                <WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content="@(Compact ? " × " : " × Close ")" OnClick="CloseAgent" />
+            </Flex>
+        </Box>
+    </Flex>
+</Box>
+@code {
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter] public long Revision { get; set; }
+    private static readonly Color Background = new(22, 26, 30);
+    private static readonly Color SelectedBackground = new(80, 55, 101);
+    private static readonly Color HoverBackground = new(96, 69, 119);
+    private bool Compact => Viewport.Width < 70;
+    private int LabelWidth => Viewport.Width < 24 ? 0 : Compact ? 4 : 8;
+    private int ArrowWidth => Viewport.Width < 36 ? 0 : 6;
+    private int ActionsWidth => Compact ? 6 : 16;
+    private int AvailableWidth => Math.Max(0, Viewport.Width - LabelWidth - ArrowWidth - ActionsWidth);
+    private int Capacity => AvailableWidth == 0 ? 0 : Math.Min(Workspace.Panes.Count, Math.Max(1, AvailableWidth / 24));
+    private int TabWidth => Capacity == 0 ? 0 : Math.Min(40, AvailableWidth / Capacity);
+    private int Padding => Math.Max(0, AvailableWidth - Math.Min(Capacity, Workspace.Panes.Count - _start) * TabWidth);
+    private int _start;
+    private int _lastAgentId = -1;
+    private int _lastWidth = -1;
+    protected override void OnParametersSet()
+    {
+        _start = Math.Clamp(_start, 0, Math.Max(0, Workspace.Panes.Count - Capacity));
+        var selected = Workspace.SelectedPane;
+        if (selected is not null && (_lastAgentId != selected.Id || _lastWidth != AvailableWidth))
+        {
+            var index = Workspace.Panes.ToList().IndexOf(selected);
+            if (index < _start) _start = index;
+            else if (index >= _start + Capacity) _start = Math.Max(0, index - Capacity + 1);
+            _lastAgentId = selected.Id;
+            _lastWidth = AvailableWidth;
+        }
+    }
+    private string Caption(AgentPane pane)
+    {
+        var label = WorkspaceTabWindow.Fit($" {pane.Name} · {pane.Model} ", TabWidth);
+        return label + new string(' ', Math.Max(0, TabWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(label)));
+    }
+    private void Scroll(int direction) => _start = Math.Clamp(_start + direction * Math.Max(1, Capacity), 0, Math.Max(0, Workspace.Panes.Count - Capacity));
+    private void Select(AgentPane pane) { Registry.ClosePicker(); Workspace.Focus(pane); }
+    private void NewAgent() { Registry.ClosePicker(); Workspace.Add(); }
+    private void CloseAgent()
+    {
+        Registry.ClosePicker();
+        if (Workspace.SelectedPane is { } pane) Workspace.Close(pane);
+    }
+}

@@ -30,7 +30,17 @@
     private int CommandWidth => Math.Min(Width, CommandColumn);
     private int DescriptionWidth => Math.Max(0, Width - CommandWidth - 1);
     private string CommandField => Fit(Command, CommandWidth);
-    private string DescriptionField => Fit(Description, DescriptionWidth);
+    private string DescriptionField
+    {
+        get
+        {
+            var separator = Description.LastIndexOf(" (Alt+", StringComparison.Ordinal);
+            if (separator < 0) return Fit(Description, DescriptionWidth);
+            var shortcut = Description[(separator + 1)..];
+            if (DescriptionWidth < shortcut.Length + 1) return Fit(shortcut, DescriptionWidth);
+            return Fit(Description[..separator], DescriptionWidth - shortcut.Length - 1) + " " + shortcut;
+        }
+    }
     private static string Fit(string text, int width)
     {
         var result = new System.Text.StringBuilder();

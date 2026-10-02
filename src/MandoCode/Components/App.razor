@@ -10,6 +10,8 @@
 @implements IDisposable
 @implements IAsyncDisposable
 
+@if (Pane is null || Pane.Visible)
+{
 <ChatShell @ref="_chatShell">
 <Header>
 <Banner />
@@ -35,6 +37,8 @@
 
 </Header>
 <Footer>
+@if (Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)
+{
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
 @if (_showPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
@@ -67,12 +71,12 @@
 {
     @if (InstructionCoordinator.Multiline)
     {
-        <PlanStepEditor @key="@InstructionCoordinator.RequestId" Title="@InstructionCoordinator.Prompt" InitialValue="@InstructionCoordinator.InitialValue"
+        <PlanStepEditor @key="@InstructionCoordinator.RequestId" PersistenceKey="@InstructionCoordinator.RequestId.ToString()" Title="@InstructionCoordinator.Prompt" InitialValue="@InstructionCoordinator.InitialValue"
                         OnSubmit="HandleInstructionSubmit" OnCancel="InstructionCoordinator.Cancel" />
     }
     else
     {
-    <PromptInput OnSubmit="HandleInstructionSubmit"
+    <PromptInput OnSubmit="HandleInstructionSubmit" PersistenceKey="@($"instruction-{InstructionCoordinator.RequestId}")"
                  InitialValue="@InstructionCoordinator.InitialValue"
                  Label="@InstructionCoordinator.Prompt"
                  Placeholder=""
@@ -143,8 +147,10 @@
                     OnSubmit="HandlePlanSelectSubmit" />
 }
 
+}
 </Footer>
 </ChatShell>
+}
 
 @code {
     private AIService AI { get; set; } = default!;
@@ -382,6 +388,7 @@
             PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
             UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
             if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive;
+            if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
@@ -755,6 +762,9 @@
 
         Config.Save();
 
+        if (parts[0].Equals("agentNaming", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } registry)
+            foreach (var agent in registry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().UseAgentNames = Config.UseAgentNames;
         // Some keys (tavilyKey) carry a live verification probe — instant "your key
         // works" feedback at set time instead of a silent failure on first real use.
         if (result.PostSetValidation != null)
@@ -1215,6 +1225,22 @@
                     continue;
                 }
 
+                if (command == "keybindings")
+                {
+                    foreach (var group in Keybindings.All.GroupBy(binding => binding.Group))
+                    {
+                        var bindings = new Spectre.Console.Table { Border = TableBorder.Rounded };
+                        bindings.Title = new TableTitle(group.Key);
+                        bindings.AddColumn("Keys");
+                        bindings.AddColumn("Action");
+                        foreach (var binding in group)
+                            bindings.AddRow(Spectre.Console.Markup.Escape(binding.Keys), Spectre.Console.Markup.Escape(binding.Action));
+                        AnsiConsole.Write(bindings);
+                        AnsiConsole.WriteLine();
+                    }
+                    AnsiConsole.WriteLine("Alt is the default modifier. Windows/Command variants work only when the terminal forwards them.");
+                    continue;
+                }
                 if (command == "help")
                 {
                     Console.WriteLine();
@@ -1226,14 +1252,20 @@
                     table.AddColumn("Command");
                     table.AddColumn("Description");
                     table.AddRow("/help", "Show this help message");
+                    table.AddRow("/keybindings", SlashCommands.All["/keybindings"]);
                     table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
                     table.AddRow("/model", "Quick switch — pick a different model");
                     table.AddRow("/config", "Adjust settings — guided wizard");
                     table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
                     table.AddRow("/retry", "Retry Ollama connection");
-                    table.AddRow("/new-agent", "Open another independent agent pane (four maximum)");
-                    table.AddRow("/focus-agent", "Switch agents; optional left/right direction");
-                    table.AddRow("/close-agent", "Close this pane after cancelling any running request");
+                    table.AddRow("/agent-new", SlashCommands.All["/agent-new"]);
+                    table.AddRow("/agent-focus [left/right/up/down]", SlashCommands.All["/agent-focus"]);
+                    table.AddRow("/agent-close", SlashCommands.All["/agent-close"]);
+                    table.AddRow("/workspace-new [name]", SlashCommands.All["/workspace-new"]);
+                    table.AddRow("/workspace [name or number]", SlashCommands.All["/workspace"]);
+                    table.AddRow("/workspace-all", SlashCommands.All["/workspace-all"]);
+                    table.AddRow("/workspace-rename <name>", SlashCommands.All["/workspace-rename"]);
+                    table.AddRow("/workspace-close", SlashCommands.All["/workspace-close"]);
                     table.AddRow("/learn", "Learn about LLMs and local AI models");
                     table.AddRow("/music", "Play lofi/synthwave coding music");
                     table.AddRow("/music-stop", "Stop music playback");
@@ -4049,7 +4081,7 @@
         };
         var choice = await WizardPromptSelectCoreAsync("Configuration Options:", new[]
         {
-            "Run configuration wizard", "View current configuration", "Cancel"
+            "Run configuration wizard", "View current configuration", "Agent naming", "Cancel"
         }, silentChoice: "Cancel");
 
         switch (choice)
@@ -4082,6 +4114,13 @@
                     AnsiConsole.MarkupLine("[dim]Pull the model or run /config again to select a different one.[/]");
                     AnsiConsole.WriteLine();
                 }
+                break;
+
+            case "Agent naming":
+                var naming = await WizardPromptSelectCoreAsync($"Agent naming (current: {(Config.UseAgentNames ? "Names" : "Numbers")}; applies to new agents, existing names stay unchanged):",
+                    new[] { "Names (default): unique callsigns such as Neo or Kernel, like Desktop", "Numbers: sequential labels such as Agent 1 or Agent 2; reuse available numbers", "Cancel" }, silentChoice: "Cancel");
+                if (naming != "Cancel")
+                    await HandleConfigSetCommandAsync("agentNaming " + (naming.StartsWith("Names", StringComparison.Ordinal) ? "names" : "numbers"));
                 break;
 
             case "View current configuration":

@@ -20,7 +20,8 @@
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnCancel { get; set; }
-    private readonly TextSelectionState _buffer = new();
+    [Parameter] public string? PersistenceKey { get; set; }
+    private TextSelectionState _buffer = new();
     private readonly string _hook = "plan-step-" + Guid.NewGuid().ToString("N");
     private bool _initialized;
     private int EditorWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
@@ -32,8 +33,15 @@
     {
         if (_initialized) return;
         _initialized = true;
-        _buffer.SetText(InitialValue);
+        if (Pane is not null && PersistenceKey is { } key && Pane.PresentationState.TryGetValue("editor", out var saved)
+            && saved is EditorDraft draft && draft.Key == key) _buffer = draft.Buffer;
+        else
+        {
+            _buffer.SetText(InitialValue);
+            if (Pane is not null && PersistenceKey is { } newKey) Pane.PresentationState["editor"] = new EditorDraft(newKey, _buffer);
+        }
     }
+    private sealed record EditorDraft(string Key, TextSelectionState Buffer);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

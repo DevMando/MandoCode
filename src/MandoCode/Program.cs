@@ -54,7 +54,7 @@ class Program
         var projectRoot = positional.Length > 0 ? positional[0] : Environment.CurrentDirectory;
 
         var hostBuilder = Host.CreateDefaultBuilder(args)
-            .UseRazorConsole<AgentWorkspaceView>();
+            .UseRazorConsole<TerminalWorkspaceView>();
 
         hostBuilder.ConfigureServices(services =>
         {
@@ -234,7 +234,9 @@ class Program
         services.AddScoped<TuiSession>();
         services.AddScoped<AgentIdentity>();
         services.AddSingleton<AgentWorkspace>();
-        services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware>(provider => new TranscriptEntryTranslator(new TuiSession(), provider.GetRequiredService<AgentWorkspace>())));
+        services.AddSingleton<WorkspaceRegistry>();
+        services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, WorkspaceVisibilityTranslator>());
+        services.Insert(1, ServiceDescriptor.Singleton<ITranslationMiddleware>(provider => new TranscriptEntryTranslator(new TuiSession(), provider.GetRequiredService<AgentWorkspace>(), provider.GetRequiredService<WorkspaceRegistry>())));
 
         // Register AnsiPassthrough translator for VDOM integration
         services.AddSingleton<ITranslationMiddleware, AnsiPassthroughTranslator>();

@@ -163,6 +163,9 @@ public class MandoCodeConfig
     [JsonIgnore]
     public string? AgentName { get; set; }
 
+    /// <summary>Use Desktop-style callsigns for newly created CLI agents; false uses numbers.</summary>
+    public bool UseAgentNames { get; set; } = true;
+
     /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
     /// If specified, this will be used instead of pulling from Ollama registry.

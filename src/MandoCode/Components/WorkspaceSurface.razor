@@ -1,0 +1,13 @@
+@if (!Workspace.IsClosed)
+{
+    @* grid selects the renderer's Spectre fallback, which emits zero cells when hidden. *@
+    <div class="@(Workspace.IsVisible ? "workspace-surface" : "grid")" data-workspace-hidden="@(!Workspace.IsVisible ? "true" : "false")">
+        <AgentWorkspaceView Workspace="Workspace" ReservedHeight="ReservedHeight" AgentBody="AgentBody" />
+    </div>
+}
+@code {
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter] public RenderFragment<AgentPane>? AgentBody { get; set; }
+    [Parameter] public long Revision { get; set; }
+    [Parameter] public int ReservedHeight { get; set; } = 1;
+}

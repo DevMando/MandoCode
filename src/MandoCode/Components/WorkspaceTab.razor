@@ -1,0 +1,24 @@
+@using Spectre.Console
+@inject WorkspaceRegistry Registry
+
+@if (!Workspace.IsClosed && Show && Width > 0)
+{
+    <WorkspaceButton Content="@Caption" Selected="Workspace.IsVisible"
+                OnClick="@(() => Registry.Switch(Workspace))" />
+}
+@code {
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter] public long Revision { get; set; }
+    [Parameter] public bool Show { get; set; } = true;
+    [Parameter] public int Width { get; set; } = 22;
+    private string Caption
+    {
+        get
+        {
+            var nameWidth = Math.Max(0, Width - 2);
+            var text = WorkspaceTabWindow.Fit($" {WorkspaceTabWindow.Fit(Workspace.Name, nameWidth)} ", Width);
+            return text + new string(' ', Math.Max(0, Width - RazorConsole.Core.Input.TextSelectionState.CellWidth(text)));
+        }
+    }
+    public static string Label(AgentWorkspace workspace) => workspace.Name;
+}

@@ -14,9 +14,15 @@ public static class SlashCommands
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
     {
         { "/help", "Show this help message" },
-        { "/new-agent", "Open another independent agent pane" },
-        { "/focus-agent", "Switch to the other agent (optional: left/right)" },
-        { "/close-agent", "Close the current idle agent pane" },
+        { "/keybindings", "Show keyboard shortcuts grouped by task" },
+        { "/agent-new", $"Open another independent agent pane ({Keybindings.AgentNew})" },
+        { "/agent-focus", $"Switch agents (optional: left/right/up/down) ({Keybindings.AgentFocus})" },
+        { "/agent-close", $"Close the current idle agent pane ({Keybindings.AgentClose})" },
+        { "/workspace-new", $"Open a workspace (optional: name), with up to four agents ({Keybindings.WorkspaceNew})" },
+        { "/workspace", $"Switch workspace (optional: name or tab number) ({Keybindings.WorkspaceSwitch})" },
+        { "/workspace-all", $"Find a workspace in the All picker ({Keybindings.WorkspaceAll})" },
+        { "/workspace-rename", "Rename this workspace: /workspace-rename <name>" },
+        { "/workspace-close", $"Close this workspace when all its agents are idle ({Keybindings.WorkspaceClose})" },
         { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
         { "/model", "Quick switch — pick a different model" },
         { "/config", "Adjust settings — guided wizard (model, temperature, tokens, context window, timeout)" },

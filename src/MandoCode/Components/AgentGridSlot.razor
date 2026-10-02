@@ -5,7 +5,7 @@
     <Box Width="@PaneWidth" Height="@PaneHeight"
          Border="@(Pane is not null && Workspace.Panes.Count > 1 ? BoxBorder.Rounded : BoxBorder.None)"
          BorderColor="@(Pane?.Active == true ? Color.Green : Color.Grey)"
-         Title="@(Pane is not null && Workspace.Panes.Count > 1 ? $"Agent {Pane.Id}{(Pane.Active ? " · active" : "")}" : "")">
+         Title="@(Pane is not null && Workspace.Panes.Count > 1 ? $"{Pane.Name}{(Pane.Active ? " · active" : "")}" : "")">
         @if (Pane is { } pane)
         {
             <AgentPaneContent @key="pane.Id" Pane="pane" AgentBody="AgentBody" />
@@ -14,7 +14,7 @@
 }
 
 @code {
-    [Inject] private AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
     [Parameter] public int Slot { get; set; }
     [Parameter] public int PaneWidth { get; set; }
     [Parameter] public int PaneHeight { get; set; }
