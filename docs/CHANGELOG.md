@@ -30,6 +30,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Cancel configuration without menu clutter.** The `/config` options title stays temporary until an action is selected. Choosing Cancel adds neither the title nor the selection to the conversation.
 - **Edit plan steps in a multiline editor.** Instructions wrap across the terminal width and the editor grows up to the available height. Arrow and page keys navigate long text; Enter saves, Shift/Alt+Enter adds a line, and Escape leaves the step unchanged.
 - **Match Desktop's plan shortcut.** Rename `Reject (answer without a plan)` to `One-shot it`, meaning the assistant attempts the request directly without step-by-step execution.
 - **Clearer statistics beneath each reply.** Show `In 12k · Out 195 · 74.2 tok/s` on the left in dim gray, matching the session/context text. Remove brackets, the approximation marker, and the extra blank line above the statistics.
