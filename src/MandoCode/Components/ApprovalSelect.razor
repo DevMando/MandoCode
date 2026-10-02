@@ -34,6 +34,7 @@
 </div>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     /// <summary>A selectable entry: display text plus its palette color.</summary>
     public sealed record Option(string Text, Color Color);
 
@@ -66,7 +67,8 @@
     {
         // The prompt is removed while approvals are active. Explicitly take focus
         // from the scrollable conversation, which otherwise receives the arrows.
-        if (firstRender || _requestFocus)
+        if (Pane is not null) Pane.FocusKey = _focusKey;
+        if ((Pane is null || Pane.Active) && (firstRender || _requestFocus))
         {
             _requestFocus = false;
             await Focus.FocusAsync(_focusKey);
@@ -98,6 +100,8 @@
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (Pane is not null && Pane.Workspace.Key(Pane, e)) return;
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
         if (AsScrollKey(e.Key) is { } scroll)
         {
             await OnScroll.InvokeAsync(scroll);

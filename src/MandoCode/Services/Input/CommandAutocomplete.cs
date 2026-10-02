@@ -17,7 +17,8 @@ public static class CommandAutocomplete
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> Commands = SlashCommands.All;
 
-    private static InputStateMachine? _stateMachine;
+    private static readonly AsyncLocal<InputStateMachine?> AmbientState = new();
+    private static InputStateMachine? _stateMachine { get => AmbientState.Value; set => AmbientState.Value = value; }
     private static ConsoleInputReader _keySource = new();
 
     /// <summary>

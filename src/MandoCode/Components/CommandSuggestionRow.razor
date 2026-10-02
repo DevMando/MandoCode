@@ -21,11 +21,12 @@
 </Box>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public string Command { get; set; } = "";
     [Parameter] public string Description { get; set; } = "";
     [Parameter] public int CommandColumn { get; set; } = 14;
     [Parameter] public bool Selected { get; set; }
-    private int Width => Math.Max(1, Viewport.Width - 4);
+    private int Width => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
     private int CommandWidth => Math.Min(Width, CommandColumn);
     private int DescriptionWidth => Math.Max(0, Width - CommandWidth - 1);
     private string CommandField => Fit(Command, CommandWidth);

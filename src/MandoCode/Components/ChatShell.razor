@@ -1,5 +1,5 @@
 @using RazorConsole.Core.Renderables
-@inject TuiSession Session
+@inject IServiceProvider Services
 @implements IDisposable
 
 <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
@@ -17,6 +17,8 @@
 </Flex>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private TuiSession Session { get; set; } = default!;
     [Parameter] public RenderFragment? Header { get; set; }
     [Parameter] public RenderFragment? Footer { get; set; }
     private ConversationView? _conversation;
@@ -25,6 +27,7 @@
     private readonly CancellationTokenSource _shutdown = new();
     protected override void OnInitialized()
     {
+        Session = Pane?.Session ?? (TuiSession)Services.GetService(typeof(TuiSession))!;
         _state = Session.Snapshot();
         _ = RefreshAsync(_shutdown.Token);
     }

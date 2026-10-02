@@ -1,3 +1,4 @@
+@inject IServiceProvider Services
 @using MandoCode.Models
 @using MandoCode.Services
 @using Spectre.Console
@@ -21,6 +22,7 @@
 </Rows>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback<string> OnAutocompleteRequested { get; set; }
     [Parameter] public EventCallback<string> OnScroll { get; set; }
@@ -38,12 +40,12 @@
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
     [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
-    [Inject] private InputStateMachine SM { get; set; } = default!;
+    private InputStateMachine SM => (InputStateMachine)(Pane?.Services ?? Services).GetService(typeof(InputStateMachine))!;
     private PromptComposerState _composer = default!;
     private readonly string _hook = "prompt-" + Guid.NewGuid().ToString("N");
     private string _lastInitialValue = "";
     [Inject] private RazorConsole.Core.Rendering.ITerminalViewport Viewport { get; set; } = default!;
-    private int InputWidth => Math.Max(1, Viewport.Width - 4);
+    private int InputWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
     protected override void OnInitialized() => _composer = new(SM);
     protected override void OnParametersSet()
     {
@@ -64,7 +66,8 @@
         // The conversation can already own focus when connection startup reveals
         // this prompt. Request its stable TextArea key once, without stealing focus
         // back from transcript navigation on subsequent streaming redraws.
-        if (firstRender || _focusPicker)
+        if (Pane is not null) Pane.FocusKey = _hook;
+        if ((Pane is null || Pane.Active) && (firstRender || _focusPicker))
         {
             _focusPicker = false;
             await Focus.FocusAsync(_hook);
@@ -73,6 +76,8 @@
 
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
         if (key.Key is "PageUp" or "PageDown" || (key.CtrlKey && key.Key == "End"))
         {
             await OnScroll.InvokeAsync(key.Key);

@@ -1,7 +1,10 @@
 @* A submitted prompt is a stable transcript child, independent of the live composer. *@
-<Box FillWidth="true">
-    <div data-canvas="true" data-transcript-entry="@Entry.Id" />
-</Box>
+<Rows>
+    <Box FillWidth="true">
+        <div data-canvas="true" data-transcript-entry="@Entry.Id" />
+    </Box>
+    <Markup Content=" " />
+</Rows>
 
 @code {
     [Parameter, EditorRequired] public TuiEntry Entry { get; set; } = default!;

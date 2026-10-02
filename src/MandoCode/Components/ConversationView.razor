@@ -13,6 +13,7 @@
 </view-height-scrollable>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public RenderFragment? Header { get; set; }
     [Parameter] public IReadOnlyList<TuiEntry> Entries { get; set; } = Array.Empty<TuiEntry>();
     private readonly string _scrollId = Guid.NewGuid().ToString("N");
@@ -23,7 +24,7 @@
         var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
         if (maximum == int.MaxValue) return;
         var current = _following ? maximum : _offset;
-        var page = Math.Max(1, SafeHeight / 2);
+        var page = Math.Max(1, (Pane?.Height ?? SafeHeight) / 2);
         var next = key switch
         {
             "PageUp" => current - page,
@@ -36,7 +37,12 @@
         };
         SetOffset(next, maximum);
     }
-    private void HandleKey(KeyboardEventArgs key) => Scroll(key.Key);
+    private void HandleKey(KeyboardEventArgs key)
+    {
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        Scroll(key.Key);
+    }
     private void HandleWheel(WheelEventArgs wheel)
     {
         var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
