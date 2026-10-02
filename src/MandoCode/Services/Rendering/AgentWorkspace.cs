@@ -105,6 +105,25 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         Focus(_panes[0]);
         // The component releases subscriptions before its service scope is disposed.
     }
+    public bool Rename(AgentPane pane, string name)
+    {
+        name = name.Trim();
+        if (!_panes.Contains(pane)) return false;
+        if (name.Length == 0 || name.Length > 60 || name.Any(char.IsControl))
+        {
+            pane.Session.Append(new Text("Usage: /agent-rename <name> (1–60 characters, one line)"));
+            return false;
+        }
+        if ((Registry?.Workspaces.SelectMany(w => w.Panes) ?? Panes).Any(p => p != pane && p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            pane.Session.Append(new Text("That agent name is already in use. Choose a different name."));
+            return false;
+        }
+        pane.Name = name;
+        pane.Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>().AgentName = name;
+        Refresh();
+        return true;
+    }
     public bool Command(AgentPane pane, string command)
     {
         if (Registry?.Command(pane, command) == true) return true;

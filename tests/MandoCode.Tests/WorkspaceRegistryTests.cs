@@ -21,6 +21,32 @@ namespace MandoCode.Tests;
 public class WorkspaceRegistryTests
 {
     [Fact]
+    public async Task RenameAgent_PreservesHistoryAndRefreshesPromptIdentity()
+    {
+        await using var services = Services();
+        var registry = services.GetRequiredService<WorkspaceRegistry>();
+        var pane = registry.Active.Add();
+        var ai = pane.Services.GetRequiredService<AIService>();
+        ai.AppendAssistantNote("Existing conversation");
+        Assert.True(pane.Workspace.Rename(pane, " Jetik [dev] "));
+        var config = pane.Services.GetRequiredService<MandoCodeConfig>();
+        await ai.RefreshSettingsAsync(config);
+        Assert.Equal("Jetik [dev]", pane.Name);
+        Assert.Equal(pane.Name, config.AgentName);
+        var prompt = (string)typeof(AIService).GetField("_systemPrompt", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ai)!;
+        Assert.Contains("You are Jetik [dev],", prompt);
+        var history = (IEnumerable<Microsoft.Extensions.AI.ChatMessage>)typeof(AIService).GetField("_chatHistory", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ai)!;
+        Assert.Contains(history, message => message.Text == "Existing conversation");
+        Assert.Contains(history, message => message.Role == Microsoft.Extensions.AI.ChatRole.System && message.Text!.Contains("You are Jetik [dev],"));
+        var other = registry.Add("Other").SelectedPane!;
+        Assert.False(other.Workspace.Rename(other, "jetik [dev]"));
+        Assert.False(other.Workspace.Rename(other, " "));
+        Assert.False(other.Workspace.Rename(other, "line\nbreak"));
+        Assert.False(other.Workspace.Rename(other, new string('x', 61)));
+        Assert.Equal(pane.Name, config.AgentName);
+    }
+
+    [Fact]
     public async Task CallsignsAndNumbering_AreUniqueAndPersistThePreference()
     {
         Assert.True(new MandoCodeConfig().UseAgentNames);

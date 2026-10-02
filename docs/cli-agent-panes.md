@@ -41,6 +41,8 @@ the selected idle agent. The selected tab uses a dark purple (#503765) highlight
 New and Close stay on the right, with compact controls and tab arrows in narrow terminals.
 Switching workspaces updates this bar to that workspace's agents while preserving the pane layout.
 
+Use `/agent-rename <name>` to rename the selected idle agent. Names may contain spaces, retain their casing, and must be unique across open workspaces. Future replies and the system prompt use the new identity; existing conversation history is preserved.
+
 Run `/agent-new` or choose **+ New** in the AGENTS bar to open another agent.
 The new agent starts with the selected agent's model settings and an empty conversation.
 Both agents can work concurrently; each has separate prompts, token statistics, approvals,

@@ -1261,6 +1261,7 @@
                     table.AddRow("/agent-new", SlashCommands.All["/agent-new"]);
                     table.AddRow("/agent-focus [left/right/up/down]", SlashCommands.All["/agent-focus"]);
                     table.AddRow("/agent-close", SlashCommands.All["/agent-close"]);
+                    table.AddRow("/agent-rename <name>", SlashCommands.All["/agent-rename"]);
                     table.AddRow("/workspace-new [name]", SlashCommands.All["/workspace-new"]);
                     table.AddRow("/workspace [name or number]", SlashCommands.All["/workspace"]);
                     table.AddRow("/workspace-all", SlashCommands.All["/workspace-all"]);
@@ -1546,8 +1547,28 @@
     private void ScrollConversation(string key) => _chatShell?.Scroll(key);
     private void CancelCurrentRequest() => _requestCts?.Cancel();
 
-    private void HandleVdomSubmit(string input)
+    private async Task HandleVdomSubmit(string input)
     {
+        var rename = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (Pane is not null && rename.Length > 0 && rename[0].Equals("/agent-rename", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_isProcessing || Pane.IsBusy?.Invoke() == true)
+            {
+                Pane.Session.Append(new Spectre.Console.Text("Finish or cancel the current request before renaming this agent."));
+                return;
+            }
+            if (Pane.Workspace.Rename(Pane, rename.Length > 1 ? rename[1] : ""))
+            {
+                _isProcessing = true;
+                try
+                {
+                    await AI.RefreshSettingsAsync(Config);
+                    Pane.Session.Append(new Spectre.Console.Text($"Agent renamed to {Pane.Name}."));
+                }
+                finally { _isProcessing = false; }
+            }
+            return;
+        }
         if (Pane is not null && Pane.Workspace.Command(Pane, input)) return;
         if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
         if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input);

@@ -71,7 +71,7 @@
     private string Caption(AgentPane pane)
     {
         var label = WorkspaceTabWindow.Fit($" {pane.Name} · {pane.Model} ", TabWidth);
-        return label + new string(' ', Math.Max(0, TabWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(label)));
+        return Spectre.Console.Markup.Escape(label + new string(' ', Math.Max(0, TabWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(label))));
     }
     private void Scroll(int direction) => _start = Math.Clamp(_start + direction * Math.Max(1, Capacity), 0, Math.Max(0, Workspace.Panes.Count - Capacity));
     private void Select(AgentPane pane) { Registry.ClosePicker(); Workspace.Focus(pane); }

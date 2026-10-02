@@ -18,6 +18,7 @@ public static class SlashCommands
         { "/agent-new", $"Open another independent agent pane ({Keybindings.AgentNew})" },
         { "/agent-focus", $"Switch agents (optional: left/right/up/down) ({Keybindings.AgentFocus})" },
         { "/agent-close", $"Close the current idle agent pane ({Keybindings.AgentClose})" },
+        { "/agent-rename", "Rename this agent: /agent-rename <name>" },
         { "/workspace-new", $"Open a workspace (optional: name), with up to four agents ({Keybindings.WorkspaceNew})" },
         { "/workspace", $"Switch workspace (optional: name or tab number) ({Keybindings.WorkspaceSwitch})" },
         { "/workspace-all", $"Find a workspace in the All picker ({Keybindings.WorkspaceAll})" },

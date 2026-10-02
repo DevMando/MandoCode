@@ -36,6 +36,7 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Rename the selected agent.** `/agent-rename <name>` updates its tab, pane title, future reply labels, history heading, and system-prompt identity while preserving conversation history. Names retain their casing and must be unique across open agents.
 - **Identify each agent in its replies.** CLI response headings and history use the agent name, such as Jetik, instead of a fixed MandoCode label. Each agent receives the same name in its system prompt, matching Desktop.
 - **Desktop-style agent names by default.** New CLI agents draw unique callsigns from the Desktop pool. Choose Names or Numbers under `/config` → Agent naming, or use `/config set agentNaming names|numbers`. Save the preference for future agents without renaming existing ones.
 - **Add an AGENTS navigation bar below WORKSPACES.** Show the current workspace's agents and model names in dark purple tabs (#503765) with light text and a lighter hover, highlight the selected pane, and keep New and Close on the far right. Remove the repeated agent/model and action header from each pane. Narrow terminals can browse agent tabs with arrows. Selecting a tab focuses its existing pane without changing the layout.
