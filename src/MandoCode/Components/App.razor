@@ -1015,7 +1015,7 @@
             _replyPrinted.Add(text);
         }
         Spinner.UpdatePreview(null);
-        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+        AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
         RenderMarkdownGuarded(text);
     }
 
@@ -2055,7 +2055,7 @@
                         var unprinted = SettleReply(chunk);
                         if (unprinted.Length > 0)
                         {
-                            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+                            AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
                             RenderMarkdownGuarded(unprinted);
                         }
 

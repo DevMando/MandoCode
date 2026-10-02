@@ -42,6 +42,7 @@
 </Panel>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public IReadOnlyList<ChatMsg> Messages { get; set; } = Array.Empty<ChatMsg>();
     [Parameter] public EventCallback OnClose { get; set; }
 
@@ -109,7 +110,7 @@
 
             var isUser = message.Role == "user";
             if (_lines.Count > 0) _lines.Add(new Line(string.Empty, Color.Default));
-            _lines.Add(new Line(isUser ? "You" : "MandoCode", isUser ? UserColor : AgentColor, Decoration.Bold));
+            _lines.Add(new Line(isUser ? "You" : Spectre.Console.Markup.Escape(Pane?.Name ?? "MandoCode"), isUser ? UserColor : AgentColor, Decoration.Bold));
             foreach (var text in ReplyPreview.Tail(message.Text, width, int.MaxValue))
             {
                 var hit = query.Length > 0 && text.Contains(query, StringComparison.OrdinalIgnoreCase);

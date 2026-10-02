@@ -36,6 +36,9 @@ public class WorkspaceRegistryTests
         Assert.NotEqual(named.Name, other.Name);
         var otherConfig = other.Services.GetRequiredService<MandoCodeConfig>();
         Assert.Equal(other.Name, otherConfig.AgentName);
+        var ai = other.Services.GetRequiredService<AIService>();
+        var prompt = (string)typeof(AIService).GetField("_systemPrompt", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ai)!;
+        Assert.Contains($"You are {other.Name},", prompt);
         Assert.True(ConfigKeySetter.TrySet(otherConfig, "agentNaming", "numbers").Ok);
         Assert.Equal("Agent 2", registry.Active.Add().Name);
         Assert.Contains(other.Name, AgentCallsigns.Pool);
