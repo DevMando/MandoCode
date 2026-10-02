@@ -26,6 +26,7 @@ public sealed class OnboardingFlow
 {
     private readonly Action<string> _setStatus;
     private readonly Func<string, string, Func<string, string?>?, string?, Task<string>>? _promptTextVdom;
+    private readonly Func<string[], Task<string?>>? _pickModelVdom;
 
     /// <param name="setStatus">Updates the ambient VDOM status indicator during long ops.</param>
     /// <param name="promptTextVdom">
@@ -36,12 +37,15 @@ public sealed class OnboardingFlow
     /// can hit Enter to accept the default URL or edit it in place). Without this
     /// delegate, falls back to Spectre's TextPrompt for non-VDOM callers.
     /// </param>
+    /// <param name="pickModelVdom">Optional host model picker; null selection pauses setup.</param>
     public OnboardingFlow(
         Action<string> setStatus,
-        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null,
+        Func<string[], Task<string?>>? pickModelVdom = null)
     {
         _setStatus = setStatus;
         _promptTextVdom = promptTextVdom;
+        _pickModelVdom = pickModelVdom;
     }
 
     public sealed record FlowResult(bool Connected, bool Skipped, string? FinalModel);
@@ -554,6 +558,13 @@ public sealed class OnboardingFlow
     {
         if (models.Count == 0)
             return await PickWhenEmptyAsync(url, ct);
+
+        // Component hosts share the chat prompt's picker with /model. Spectre's
+        // cursor-driven selector competes with the live terminal render loop.
+        if (_pickModelVdom != null)
+            return await _pickModelVdom(models
+                .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
+                .ThenBy(m => m, StringComparer.OrdinalIgnoreCase).ToArray());
 
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]Pick a model[/]").LeftJustified());
         AnsiConsole.WriteLine();
