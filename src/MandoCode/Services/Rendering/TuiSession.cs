@@ -61,7 +61,8 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     {
         lock (_sync) { _entries.Clear(); Interlocked.Increment(ref _revision); }
     }
-    public void SetRunning(bool running, string? activity = null)
+    private bool _fixedLoadingMessage;
+    public void SetRunning(bool running, string? activity = null, string? message = null)
     {
         lock (_sync)
         {
@@ -70,7 +71,8 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
             if (running)
             {
                 _spinner = MandoCode.Models.LoadingMessages.GetRandomSpinner();
-                _loadingMessage = MandoCode.Models.LoadingMessages.GetRandom();
+                _fixedLoadingMessage = message is not null;
+                _loadingMessage = message ?? MandoCode.Models.LoadingMessages.GetRandom();
                 _startedAt = _verbChangedAt = _clock.GetUtcNow();
                 _elapsed = TimeSpan.Zero;
             }
@@ -92,7 +94,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
             var elapsed = TimeSpan.FromSeconds(Math.Max(0, (long)(now - _startedAt).TotalSeconds));
             var changed = elapsed != _elapsed;
             _elapsed = elapsed;
-            if (now - _verbChangedAt >= TimeSpan.FromSeconds(15))
+            if (!_fixedLoadingMessage && now - _verbChangedAt >= TimeSpan.FromSeconds(15))
             {
                 _loadingMessage = MandoCode.Models.LoadingMessages.GetRandom();
                 _verbChangedAt = now;

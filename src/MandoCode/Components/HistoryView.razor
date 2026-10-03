@@ -14,7 +14,7 @@
    focus stop. Only shown while the app is idle, so nothing prints underneath it. Rows keep one
    Markup shape per line, as ApprovalSelect does, so the VDOM diff stays stable. *@
 
-<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="Color.Purple" Expand="true">
+<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, Color.Purple)" Expand="true">
     <Rows>
         <TextInput @bind-Value="_query"
                    OnInput="HandleQuery"
@@ -22,8 +22,8 @@
                    Placeholder="Type to filter messages"
                    ValueColor="@(new Color(255, 200, 80))"
                    PlaceholderColor="Color.Grey"
-                   BorderColor="Color.Grey"
-                   FocusedBorderColor="Color.Purple"
+                   BorderColor="@PaneColors.For(Pane, Color.Grey)"
+                   FocusedBorderColor="@PaneColors.For(Pane, Color.Purple)"
                    BorderStyle="BoxBorder.Rounded"
                    Expand="true"
                    FocusOrder="0" />
@@ -32,12 +32,12 @@
                 <Rows>
                     @foreach (var line in context)
                     {
-                        <Markup Content="@line.Text" Foreground="@line.Color" Decoration="@line.Decoration" />
+                        <Markup Content="@line.Text" Foreground="@PaneColors.For(Pane, line.Color)" Decoration="@line.Decoration" />
                     }
                 </Rows>
             </Scrollable>
         </div>
-        <Markup Content="@Footer" Foreground="Color.Grey" Decoration="Decoration.Dim" />
+        <Markup Content="@Footer" Foreground="@PaneColors.For(Pane, Color.Grey)" Decoration="Decoration.Dim" />
     </Rows>
 </Panel>
 

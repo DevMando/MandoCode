@@ -16,6 +16,7 @@
     private int AvailableHeight => Math.Max(1, Viewport.Height - ReservedHeight);
     private int RowWidth => SplitRowsSideBySide ? Viewport.Width : PaneWidth;
     private long _lastFocusVersion = -1;
+    private string? _lastFocusKey;
     private bool SplitRowsSideBySide => Workspace.Panes.Count == 2 && Workspace.Panes.Select(p => AgentWorkspace.Column(p.Slot)).Distinct().Count() == 1;
     private int PaneWidth => Math.Max(1, Viewport.Width / (Workspace.Panes.Count > 1 ? 2 : 1));
     private int PaneHeight => Math.Max(1, AvailableHeight / (Workspace.Panes.Count > 2 ? 2 : 1));
@@ -33,7 +34,7 @@
         {
             pane.Width = Math.Max(1, PaneWidth - (Workspace.Panes.Count > 1 ? 2 : 0));
             pane.Height = Math.Max(1, Workspace.Panes.Count == 3 && Workspace.Panes.Count(p => AgentWorkspace.Column(p.Slot) == AgentWorkspace.Column(pane.Slot)) == 1
-                ? AvailableHeight - 2 : PaneHeight - (Workspace.Panes.Count > 1 ? 2 : 0));
+                ? AvailableHeight - 3 : PaneHeight - (Workspace.Panes.Count > 1 ? 3 : 1));
         }
     }
     protected override void OnParametersSet() => UpdateSizes();
@@ -42,9 +43,10 @@
     {
         UpdateSizes();
         var active = Workspace.Panes.FirstOrDefault(p => p.Active);
-        if (_lastFocusVersion != Workspace.FocusVersion && active?.FocusKey is { } key)
+        if (active?.FocusKey is { } key && (_lastFocusVersion != Workspace.FocusVersion || _lastFocusKey != key))
         {
             _lastFocusVersion = Workspace.FocusVersion;
+            _lastFocusKey = key;
             await Focus.FocusAsync(key);
         }
     }

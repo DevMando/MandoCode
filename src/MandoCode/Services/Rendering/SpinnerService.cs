@@ -31,14 +31,15 @@ public class SpinnerService
     // How often to rotate the random "fun" message so long waits don't feel frozen.
     private static readonly TimeSpan MessageRotationInterval = TimeSpan.FromSeconds(15);
 
-    public void Start(string? activity = null)
+    public void Start(string? activity = null, string? message = null)
     {
-        if (TuiConsole.Current is { } session) { session.SetRunning(true, activity); return; }
+        if (TuiConsole.Current is { } session) { session.SetRunning(true, activity, message); return; }
         Stop();
         SetTaskbarIndeterminate();
         var cts = new CancellationTokenSource();
         var token = cts.Token;
-        var message = LoadingMessages.GetRandom();
+        var fixedMessage = message is not null;
+        message ??= LoadingMessages.GetRandom();
         var spinner = LoadingMessages.GetRandomSpinner();
         var frames = spinner.Frames.ToArray();
         var interval = (int)spinner.Interval.TotalMilliseconds;
@@ -74,7 +75,7 @@ public class SpinnerService
                         var now = DateTime.UtcNow;
 
                         // Rotate the random message periodically so long waits feel alive.
-                        if (now - lastMessageRotation >= MessageRotationInterval)
+                        if (!fixedMessage && now - lastMessageRotation >= MessageRotationInterval)
                         {
                             message = LoadingMessages.GetRandom();
                             lastMessageRotation = now;

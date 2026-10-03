@@ -41,7 +41,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         if (sourceConfig is not null && pane.Services.GetService<MandoCode.Models.MandoCodeConfig>() is { } targetConfig)
         {
             var copy = System.Text.Json.JsonSerializer.Deserialize<MandoCode.Models.MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(sourceConfig))!;
-            foreach (var property in typeof(MandoCode.Models.MandoCodeConfig).GetProperties().Where(p => p.CanWrite))
+            foreach (var property in typeof(MandoCode.Models.MandoCodeConfig).GetProperties().Where(p => p.CanWrite && p.Name != nameof(MandoCode.Models.MandoCodeConfig.AllowPersistence)))
                 property.SetValue(targetConfig, property.GetValue(copy));
         }
         var config = pane.Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>();
@@ -63,27 +63,10 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     }
     public void Move(int direction)
     {
-        if (_panes.Count == 2)
-        {
-            var index = _panes.FindIndex(p => p.Active);
-            Focus(_panes[Math.Clamp(index + direction, 0, 1)]);
-            return;
-        }
-        var active = _panes.FirstOrDefault(p => p.Active);
-        if (active is null) return;
-        var column = Column(active.Slot) + direction;
-        var target = _panes.Where(p => Column(p.Slot) == column)
-            .OrderBy(p => Math.Abs((p.Slot >= 2 ? 1 : 0) - (active.Slot >= 2 ? 1 : 0)))
-            .FirstOrDefault();
-        if (target is not null) Focus(target);
-    }
-    public void MoveVertical(int direction)
-    {
-        if (_panes.Count <= 2) return;
-        var active = _panes.FirstOrDefault(p => p.Active);
-        if (active is null) return;
-        var row = (active.Slot >= 2 ? 1 : 0) + direction;
-        if (_panes.FirstOrDefault(p => Column(p.Slot) == Column(active.Slot) && (p.Slot >= 2 ? 1 : 0) == row) is { } target) Focus(target);
+        if (_panes.Count == 0) return;
+        var index = _panes.FindIndex(p => p.Selected);
+        if (index < 0) return;
+        Focus(_panes[(index + direction + _panes.Count) % _panes.Count]);
     }
     public void Close(AgentPane pane)
     {
@@ -133,14 +116,19 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
             case "/agent-focus": Focus(_panes[(_panes.IndexOf(pane) + 1) % _panes.Count]); return true;
             case "/agent-focus left": Move(-1); return true;
             case "/agent-focus right": Move(1); return true;
-            case "/agent-focus up": MoveVertical(-1); return true;
-            case "/agent-focus down": MoveVertical(1); return true;
+
+
             case "/agent-close": Close(pane); return true;
             default: return false;
         }
     }
     public bool Key(AgentPane pane, KeyboardEventArgs key)
     {
+        if (key.Key == "Tab" && pane.Active && pane.ExplorerFocus is { Active: true } scope)
+        {
+            _ = scope.ToggleAsync();
+            return true;
+        }
         // Alt is the default; Meta variants also work when forwarded by a terminal.
         if (!key.MetaKey && !key.AltKey) return false;
         if (Registry is not null)
@@ -153,12 +141,19 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         switch (key.Key.ToLowerInvariant())
         {
+            case "e":
+                if (!key.ShiftKey && pane.Active && pane.ToggleFileExplorer is not null) _ = pane.ToggleFileExplorer();
+                return true;
+            case "d":
+                if (!key.ShiftKey && pane.Active && pane.IsBusy?.Invoke() != true && pane.IsAwaitingInput?.Invoke() != true && pane.SubmitCommand is not null)
+                    _ = pane.SubmitCommand("/change-directory");
+                return true;
             case "n": Add(); return true;
             case "w": Close(pane); return true;
             case "arrowleft": case "leftarrow": Move(-1); return true;
             case "arrowright": case "rightarrow": Move(1); return true;
-            case "arrowup": case "uparrow": MoveVertical(-1); return true;
-            case "arrowdown": case "downarrow": MoveVertical(1); return true;
+
+
             default: return false;
         }
     }
@@ -192,6 +187,10 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Func<bool>? IsBusy { get; set; }
     public Func<bool>? IsAwaitingInput { get; set; }
     public Action? Stop { get; set; }
+    public Func<string, Task>? SubmitCommand { get; set; }
+    public Func<Task>? ToggleFileExplorer { get; set; }
+    public Func<bool>? IsFileExplorerOpen { get; set; }
+    public ExplorerFocusScope? ExplorerFocus { get; set; }
     private bool _disposed;
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
     public async ValueTask DisposeAsync() { if (_disposed) return; _disposed = true; await scope.DisposeAsync().ConfigureAwait(false); }

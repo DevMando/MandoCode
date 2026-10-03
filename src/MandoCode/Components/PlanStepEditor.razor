@@ -5,12 +5,12 @@
 @inject FocusManager Focus
 @inject ITerminalViewport Viewport
 
-<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="Color.Purple" Expand="true">
+<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, Color.Purple)" Expand="true">
     <Rows>
         <TextArea Buffer="@_buffer" Editable="true" Width="@EditorWidth" Height="@EditorHeight"
-                  WordWrap="true" Hook="@_hook" CharacterStyle="@(_ => new Style(new Color(255, 200, 80)))"
+                  WordWrap="true" Hook="@_hook" CharacterStyle="@(_ => new Style(PaneColors.For(Pane, new Color(255, 200, 80))))"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="OnSubmit" />
-        <Markup Content="Enter save · Shift/Alt+Enter new line · ↑/↓ move · PgUp/PgDn scroll · Esc cancel" Foreground="Color.Grey" />
+        <Markup Content="Enter save · Shift/Alt+Enter new line · ↑/↓ move · PgUp/PgDn scroll · Esc cancel" Foreground="@PaneColors.For(Pane, Color.Grey)" />
     </Rows>
 </Panel>
 
@@ -54,6 +54,7 @@
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
         if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (Pane is not null && !Pane.Active) return true;
         if (key.Key == "Escape")
         {
             await OnCancel.InvokeAsync();

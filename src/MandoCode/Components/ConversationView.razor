@@ -3,7 +3,7 @@
 @implements IDisposable
 
 <view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
-    <div data-focusable="@(Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)" data-focus-order="1" @onkeydown="HandleKey" @onwheel="HandleWheel">
+    <div data-focusable="@(Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)" data-focus-order="1" data-input-managed="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" data-manage-tab="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" @onkeydown="HandleKey" @onwheel="HandleWheel">
         @Header
         @foreach (var entry in Entries)
         {
@@ -45,7 +45,7 @@
     private void HandleKey(KeyboardEventArgs key)
     {
         if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
-        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        if (Pane is not null && !Pane.Active) return;
         Scroll(key.Key);
     }
     private void HandleWheel(WheelEventArgs wheel)

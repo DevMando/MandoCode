@@ -8,6 +8,15 @@ namespace MandoCode.Models;
 /// </summary>
 public static class SlashCommands
 {
+    public static bool IsAvailable(string command, MandoCodeConfig config) => command switch
+    {
+        "/agent-dim" => false,
+        "/agent-dim-on" => !config.DimUnfocusedAgents,
+        "/agent-dim-off" => config.DimUnfocusedAgents,
+        "/tips-on" => !config.ShowTips,
+        "/tips-off" => config.ShowTips,
+        _ => true
+    };
     /// <summary>
     /// Command name → description. Keys include the leading slash.
     /// </summary>
@@ -16,9 +25,15 @@ public static class SlashCommands
         { "/help", "Show this help message" },
         { "/keybindings", "Show keyboard shortcuts grouped by task" },
         { "/agent-new", $"Open another independent agent pane ({Keybindings.AgentNew})" },
-        { "/agent-focus", $"Switch agents (optional: left/right/up/down) ({Keybindings.AgentFocus})" },
+        { "/agent-file-explorer", $"Show or hide this agent's files and folders ({Keybindings.AgentFileExplorer})" },
+        { "/agent-focus", $"Switch agents (optional: left/right) ({Keybindings.AgentFocus})" },
         { "/agent-close", $"Close the current idle agent pane ({Keybindings.AgentClose})" },
         { "/agent-rename", "Rename this agent: /agent-rename <name>" },
+        { "/agent-dim", "Toggle grayscale for unfocused agents (optional: on/off)" },
+        { "/agent-dim-off", "Keep unfocused agents in full color" },
+        { "/agent-dim-on", "Show unfocused agents in grayscale" },
+        { "/tips-off", "Hide helpful tips in the CLI" },
+        { "/tips-on", "Show helpful tips in the CLI" },
         { "/workspace-new", $"Open a workspace (optional: name), with up to four agents ({Keybindings.WorkspaceNew})" },
         { "/workspace", $"Switch workspace (optional: name or tab number) ({Keybindings.WorkspaceSwitch})" },
         { "/workspace-all", $"Find a workspace in the All picker ({Keybindings.WorkspaceAll})" },
@@ -26,6 +41,7 @@ public static class SlashCommands
         { "/workspace-close", $"Close this workspace when all its agents are idle ({Keybindings.WorkspaceClose})" },
         { "/setup", "Reconnect to Ollama or pick a different model (guided wizard)" },
         { "/model", "Quick switch — pick a different model" },
+        { "/change-directory", $"Change only this agent's directory (optional: path) ({Keybindings.ChangeDirectory})" },
         { "/config", "Adjust settings — guided wizard (model, temperature, tokens, context window, timeout)" },
         { "/config set", "Set one setting inline (usage: /config set modelResponseTimeout 300)" },
         { "/copy", "Copy last AI response to clipboard" },

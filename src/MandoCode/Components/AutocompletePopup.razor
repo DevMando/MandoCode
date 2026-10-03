@@ -3,7 +3,7 @@
 
 @if (Composer.IsOpen)
 {
-    <Panel Border="BoxBorder.Rounded" BorderColor="@(new Color(86, 182, 194))" Title="@(Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
+    <Panel Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
         <Rows>
             @foreach (var index in VisibleIndices)
             {
@@ -25,6 +25,7 @@
 }
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
     private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Max(command => command.Length));
     private IEnumerable<int> VisibleIndices

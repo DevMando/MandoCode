@@ -19,7 +19,7 @@
    Palette matches the Spectre prompts this replaces: per-option colors with the
    black-on-deepskyblue1 focus highlight. *@
 
-<div data-focusable="true" data-focus-order="0" data-focus-key="@_focusKey" @onkeydown="HandleKeyDown">
+<div @key="_focusKey" data-focusable="@((Pane is null || Pane.Active) ? "true" : "false")" data-input-managed="true" data-focus-order="0" data-focus-key="@_focusKey" @onkeydown="HandleKeyDown">
     <Rows>
         @for (var i = 0; i < Options.Count; i++)
         {
@@ -75,10 +75,12 @@
         // The prompt is removed while approvals are active. Explicitly take focus
         // from the scrollable conversation, which otherwise receives the arrows.
         if (Pane is not null) Pane.FocusKey = _focusKey;
-        if ((Pane is null || Pane.Active) && (firstRender || _requestFocus))
+        if ((Pane is null || Pane.Active) && (firstRender || _requestFocus || !Focus.IsFocused(_focusKey)))
         {
-            _requestFocus = false;
             await Focus.FocusAsync(_focusKey);
+            // A newly mounted selector may not yet be in the framework's focus
+            // snapshot. Keep retrying until its registered target owns focus.
+            _requestFocus = !Focus.IsFocused(_focusKey);
         }
     }
 
@@ -108,7 +110,7 @@
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
         if (Pane is not null && Pane.Workspace.Key(Pane, e)) return;
-        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        if (Pane is not null && !Pane.Active) return;
         if (AsScrollKey(e.Key) is { } scroll)
         {
             await OnScroll.InvokeAsync(scroll);

@@ -1,9 +1,84 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@using Microsoft.Extensions.DependencyInjection
+@implements IDisposable
 <CascadingValue Value="Pane">
-    @if (AgentBody is not null) { @AgentBody(Pane) }
-    else { <App /> }
+    <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+        <Box Height="1" FillWidth="true">
+            @if (Pane.Visible && Pane.Workspace.Registry?.IsWorkspacePickerOpen != true)
+            {
+                <Flex Direction="FlexDirection.Row" FillWidth="true">
+                    <Box Width="@NameWidth"><WorkspaceButton Content="@Caption(Pane.Name + (Pane.IsAwaitingInput?.Invoke() == true ? " !" : ""), NameWidth)" Selected="Pane.Active"
+                        Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground"
+                        SelectedBackground="@(new Color(80, 55, 101))" HoverBackground="@(new Color(96, 69, 119))"
+                        OnClick="@(() => Pane.Workspace.Focus(Pane))" /></Box>
+                    <Box Width="@ModelWidth"><WorkspaceButton Content="@Caption(Pane.Model, ModelWidth)"
+                        Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground"
+                        SelectedBackground="@(new Color(80, 55, 101))" HoverBackground="@(new Color(96, 69, 119))"
+                        OnClick="PickModel" /></Box>
+                    @if (GitWidth > 0 && _git is not null)
+                    {
+                        <Box Width="@GitWidth">
+                            <Flex Direction="FlexDirection.Row">
+                                <Markup Content=" ● " Foreground="@PaneColors.For(Pane, _git.Conflicted ? Color.Red : _git.Dirty ? Color.Gold1 : Color.Green)" Background="@EffectiveHeaderBackground" />
+                                <Markup Content="@Caption(_git.Label, GitWidth - 3)" Foreground="@PaneColors.For(Pane, Color.Grey85)" Background="@EffectiveHeaderBackground" />
+                            </Flex>
+                        </Box>
+                    }
+                </Flex>
+            }
+        </Box>
+        <Box FillWidth="true" FillHeight="true">
+            @if (AgentBody is not null) { @AgentBody(Pane) }
+            else { <App /> }
+        </Box>
+    </Flex>
 </CascadingValue>
 
 @code {
     [Parameter, EditorRequired] public AgentPane Pane { get; set; } = default!;
     [Parameter] public RenderFragment<AgentPane>? AgentBody { get; set; }
+    private static readonly Color HeaderBackground = new(36, 41, 47);
+    private static readonly Color MutedHeaderBackground = new(38, 38, 38);
+    private Color EffectiveHeaderBackground => PaneColors.Muted(Pane) ? MutedHeaderBackground : HeaderBackground;
+    private GitPaneSnapshot? _git;
+    private readonly CancellationTokenSource _shutdown = new();
+    private int GitWidth => _git is null || Pane.Width < 35 ? 0 : Math.Min(Math.Min(36, Pane.Width / 3), RazorConsole.Core.Input.TextSelectionState.CellWidth(_git.Label) + 5);
+    private int NameWidth => Math.Min(Math.Max(1, Pane.Width / 3), Math.Max(1, RazorConsole.Core.Input.TextSelectionState.CellWidth(Pane.Name) + 4));
+    private int ExplorerWidth => Pane.Width >= 70 ? 10 : 4;
+    private int ModelWidth => Math.Max(1, Pane.Width - NameWidth - GitWidth);
+    protected override void OnInitialized() => _ = RefreshGitAsync();
+    private async Task RefreshGitAsync()
+    {
+        var rootAccessor = Pane.Services.GetRequiredService<ProjectRootAccessor>();
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        try
+        {
+            do
+            {
+                if (!Pane.Visible) continue;
+                var root = rootAccessor.ProjectRoot;
+                var status = await GitPaneStatus.ReadAsync(root, _shutdown.Token);
+                if (_shutdown.IsCancellationRequested) break;
+                await InvokeAsync(() =>
+                {
+                    _git = root == rootAccessor.ProjectRoot ? status : null;
+                    StateHasChanged();
+                });
+            } while (await timer.WaitForNextTickAsync(_shutdown.Token));
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+    }
+    public void Dispose() { _shutdown.Cancel(); _shutdown.Dispose(); }
+    private static string Caption(string text, int width)
+    {
+        var label = WorkspaceTabWindow.Fit($" {text} ", width);
+        return Spectre.Console.Markup.Escape(label + new string(' ', Math.Max(0, width - RazorConsole.Core.Input.TextSelectionState.CellWidth(label))));
+    }
+    private async Task PickModel()
+    {
+        if (Pane.IsBusy?.Invoke() == true || Pane.IsAwaitingInput?.Invoke() == true || Pane.SubmitCommand is null) return;
+        Pane.Workspace.Focus(Pane);
+        await Pane.SubmitCommand("/model");
+    }
 }

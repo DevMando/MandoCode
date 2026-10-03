@@ -47,7 +47,7 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
                 var config = source.Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>();
                 var target = pane.Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>();
                 var copy = System.Text.Json.JsonSerializer.Deserialize<MandoCode.Models.MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;
-                foreach (var property in typeof(MandoCode.Models.MandoCodeConfig).GetProperties().Where(p => p.CanWrite && p.Name != nameof(MandoCode.Models.MandoCodeConfig.AgentName)))
+                foreach (var property in typeof(MandoCode.Models.MandoCodeConfig).GetProperties().Where(p => p.CanWrite && p.Name != nameof(MandoCode.Models.MandoCodeConfig.AgentName) && p.Name != nameof(MandoCode.Models.MandoCodeConfig.AllowPersistence)))
                     property.SetValue(target, property.GetValue(copy));
             }
             Switch(workspace);

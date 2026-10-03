@@ -2,7 +2,9 @@
 @using MandoCode.Models
 @using MandoCode.Services
 @using Spectre.Console
+@implements IDisposable
 
+<div data-focusable="false" @onclick="FocusPromptAsync">
 <Rows>
     @if (ModelPicker is not null)
     {
@@ -12,17 +14,28 @@
     {
         <AutocompletePopup Composer="_composer" />
     }
-    <Panel Border="BoxBorder.Double" BorderColor="Color.Green" Expand="true" Title="@Label">
+    <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
         <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="1"
-                  WordWrap="false" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="Color.Grey"
-                  CharacterStyle="@(_ => new Style(new Color(255, 200, 80)))"
-                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ModelPicker is not null || _composer.IsOpen)"
+                  WordWrap="false" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
+                  CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
+                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen)"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
     </Panel>
 </Rows>
+</div>
 
 @code {
     [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter(Name = "AgentContentWidth")] public int? ContentWidth { get; set; }
+    [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+    private Color InputColor(Color color) => ExplorerFocus is { Active: true, PromptFocused: false } ? Color.Grey62 : PaneColors.For(Pane, color);
+    private async Task InsertExplorerReference(string path)
+    {
+        if (Disabled) throw new InvalidOperationException("Wait for the current response before adding a file reference.");
+        _composer.InsertFileReference(path);
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback<string> OnAutocompleteRequested { get; set; }
     [Parameter] public EventCallback<string> OnScroll { get; set; }
@@ -47,9 +60,19 @@
     private string _lastInitialValue = "";
     private string? StateKey => PersistenceKey is not null ? "instruction-composer" : ChatFeaturesEnabled ? "chat-composer" : null;
     [Inject] private RazorConsole.Core.Rendering.ITerminalViewport Viewport { get; set; } = default!;
-    private int InputWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
+    private int InputWidth => Math.Max(1, (ContentWidth ?? Pane?.Width ?? Viewport.Width) - 4);
+    public async Task FocusPromptAsync()
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (Pane is not null) Pane.FocusKey = _hook;
+        await Focus.FocusAsync(_hook);
+        ExplorerFocus?.SetPromptFocused(true);
+    }
     protected override void OnInitialized()
     {
+        if (ExplorerFocus is not null) ExplorerFocus.Changed += ExplorerFocusChanged;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
         var key = StateKey;
         if (Pane is not null && key is not null && Pane.PresentationState.TryGetValue(key, out var saved) && saved is ComposerDraft draft
             && draft.Key == PersistenceKey && draft.InitialValue == InitialValue && ReferenceEquals(draft.Picker, ModelPicker))
@@ -66,6 +89,11 @@
         }
     }
     private sealed record ComposerDraft(PromptComposerState Composer, string InitialValue, ModelPickerState? Picker, string? Key);
+    private void ExplorerFocusChanged() => _ = InvokeAsync(StateHasChanged);
+    public void Dispose()
+    {
+        if (ExplorerFocus is not null) ExplorerFocus.Changed -= ExplorerFocusChanged;
+    }
     protected override void OnParametersSet()
     {
         if (!ReferenceEquals(ModelPicker, _previousPicker))
@@ -83,10 +111,17 @@
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
+        // Narrow panes move the prompt below the explorer and remount it. The
+        // explorer owns initial focus; mounting its companion prompt must not
+        // overwrite that request. Tab and clicks still focus the prompt explicitly.
+        if (firstRender && ExplorerFocus?.Active == true) return;
+        if (Focus.IsFocused(_hook)) ExplorerFocus?.SetPromptFocused(true);
         // The conversation can already own focus when connection startup reveals
         // this prompt. Request its stable TextArea key once, without stealing focus
         // back from transcript navigation on subsequent streaming redraws.
-        if (Pane is not null) Pane.FocusKey = _hook;
+        if (Pane is not null && (firstRender || _focusPicker || Focus.IsFocused(_hook))) Pane.FocusKey = _hook;
         if ((Pane is null || Pane.Active) && (firstRender || _focusPicker))
         {
             _focusPicker = false;
@@ -96,8 +131,15 @@
 
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
+        if (key.Key == "Tab" && ExplorerFocus?.Active == true && (Pane is null || Pane.Active))
+        {
+            await ExplorerFocus.ToggleAsync();
+            return true;
+        }
         if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
-        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        if (Pane is not null && !Pane.Active) return true;
+        if (Pane is not null) Pane.FocusKey = _hook;
+        ExplorerFocus?.SetPromptFocused(true);
         if (key.Key is "PageUp" or "PageDown" || (key.CtrlKey && key.Key == "End"))
         {
             await OnScroll.InvokeAsync(key.Key);
@@ -138,6 +180,7 @@
     }
     private async Task HandleSubmit(string value)
     {
+        if (Pane is not null && !Pane.Active) return;
         if (Disabled || (!AllowEmpty && string.IsNullOrWhiteSpace(value))) return;
         if (ChatFeaturesEnabled) _composer.Submitted(value);
         _composer.SetText("");
