@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -61,7 +61,7 @@
                  OnCancel="CancelCurrentRequest"
                  OnScroll="ScrollConversation"
                  InitialValue="@_promptInitialValue"
-                 Disabled="@_isProcessing" />
+                 Disabled="@(_isProcessing || _historyActive)" />
 }
 
 @* Instruction input — surfaced by DiffApprovalHandler's "Provide new instructions" branch.
@@ -105,12 +105,6 @@
                     OnScroll="HandleApprovalPreviewScroll" />
 }
 
-@* /history — this session's conversation in a scrollable, filterable window. Idle-only, like the
-   prompt it replaces while open. *@
-@if (_historyActive)
-{
-    <HistoryView Messages="@_historyMessages" OnClose="CloseHistory" />
-}
 
 @* Wizard primitives — RazorConsole TextInput / ApprovalSelect that bypass PromptInput's slash/at
    autocomplete machinery. Used by /mcp add and any future wizards that need free-form input. *@
@@ -181,7 +175,7 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     private bool _paneStopped;
     private string? _headerModel;
-    private void StopPane() { _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
+    private void StopPane() { _historyTcs?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -368,6 +362,7 @@
             var agentServices = Pane?.Services ?? Services;
             AI = agentServices.GetRequiredService<AIService>();
             AI.UseExplicitPlanningOnly();
+            if (Pane is not null) { Pane.SaveHistory = SaveAgentHistory; Pane.IsHistoryOpen = () => _historyActive; Pane.CloseHistory = CloseHistory; }
             Config = agentServices.GetRequiredService<MandoCodeConfig>();
             PlanRunners = agentServices.GetRequiredService<PlanRunnerSelector>();
             PlanHandoff = agentServices.GetRequiredService<PlanHandoff>();
@@ -402,7 +397,7 @@
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
         _continueRequested = (Pane is null || Pane.Id == 1) && args.Any(a => a is "--continue" or "-c");
         var positional = args.Where(a => !a.StartsWith('-')).ToArray();
-        if (positional.Length > 0 && !positional[0].StartsWith("config"))
+        if (Pane?.RestoreFrom is null && positional.Length > 0 && !positional[0].StartsWith("config"))
         {
             ProjectRoot.ProjectRoot = positional[0];
         }
@@ -481,6 +476,7 @@
         if (_connectionChecked && !_hasRendered)
         {
             _hasRendered = true;
+            RestoreAgentHistory();
 
             // --continue: reload the most recent conversation for this project folder,
             // full fidelity (tool calls included). Failure degrades to a fresh start with
@@ -544,6 +540,7 @@
             }
         }
 
+        if (!probe.Ok) probe = await RecoverOllamaConnectionAsync();
         _isConnected = probe.Ok;
         _connectionChecked = true;
 
@@ -1149,7 +1146,7 @@
 
     private Task ToggleFileExplorer() => InvokeAsync(async () =>
     {
-        if (_directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         if (_isProcessing && !_fileExplorerOpen) return;
         _fileExplorerOpen = !_fileExplorerOpen;
         _gitChangesOpen = false;
@@ -1159,7 +1156,7 @@
     private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
     private Task ToggleGitChanges() => InvokeAsync(async () =>
     {
-        if (_directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         _gitChangesOpen = !_gitChangesOpen;
         _fileExplorerOpen = false;
         StateHasChanged();
@@ -1243,6 +1240,7 @@
                     {
                         try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
                         catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
                         AnsiConsole.MarkupLine("[green]Conversation context compacted into a recap. The visible transcript is unchanged.[/]");
                     }
                     else
@@ -1258,6 +1256,8 @@
                     StateMachine.ClearHistory();
                     SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
                     TuiConsole.Clear();
+                    _messages.Clear();
+                    if (Pane is not null) Pane.Services.GetRequiredService<AgentArchiveStore>().Delete(Pane.PersistKey);
                     AnsiConsole.MarkupLine("[yellow]Conversation context wiped completely. Start a new conversation.[/]");
                     continue;
                 }
@@ -1276,6 +1276,7 @@
 
                 if (command == "plan" || command.StartsWith("plan "))
                 {
+                    _messages.Add(new ChatMsg { Role = "user", Text = input });
                     // GetCommandName lower-cases for dispatch. Recover arguments from the original
                     // input so paths, identifiers, and quoted goal text keep their casing.
                     var planCommand = input.TrimStart()[1..];
@@ -1284,7 +1285,7 @@
                     continue;
                 }
 
-                if (command == "history")
+                if (command is "history" or "agent-history")
                 {
                     await ShowHistoryAsync();
                     continue;
@@ -1436,6 +1437,11 @@
                     await HandleRetryCommandAsync();
                     continue;
                 }
+                if (command == "ollama-serve")
+                {
+                    await HandleRetryCommandAsync();
+                    continue;
+                }
 
                 if (command == "copy")
                 {
@@ -1535,8 +1541,8 @@
 
             if (!_isConnected)
             {
-                ShowOfflineGuidance();
-                continue;
+                await HandleRetryCommandAsync();
+                if (!_isConnected) continue;
             }
 
             // Block AI requests when model is not available
@@ -1677,39 +1683,84 @@
     /// list isn't rebuilt on every unrelated render pass.
     /// </summary>
     private bool _historyActive;
-    private IReadOnlyList<ChatMsg> _historyMessages = Array.Empty<ChatMsg>();
     private TaskCompletionSource? _historyTcs;
 
     /// <summary>Opens /history and waits for it to close. The loop is idle while it's open, so the
     /// view owns the screen's live region the way the prompt normally does.</summary>
     private async Task ShowHistoryAsync()
     {
-        if (_messages.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[dim]Nothing in this session's history yet.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        // A snapshot: the view builds its lines once, and the list mustn't change under it.
-        _historyMessages = _messages.ToList();
+        (Pane?.Services ?? Services).GetRequiredService<AgentArchiveStore>().RecoverAbandoned();
         // Async continuations, so closing from a Blazor event resumes the loop off the dispatcher
         // thread (see WaitForVdomInputAsync).
         _historyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _historyActive = true;
-        _showPrompt = false;
+        _fileExplorerOpen = _gitChangesOpen = false;
+        _showPrompt = true;
         await InvokeAsync(StateHasChanged);
 
         await _historyTcs.Task;
 
         _historyActive = false;
-        _historyMessages = Array.Empty<ChatMsg>();
         await InvokeAsync(StateHasChanged);
         // Let the VDOM remove the view before anything prints below it.
         await Task.Delay(100);
     }
 
     private void CloseHistory() => _historyTcs?.TrySetResult();
+    private void RestoreArchivedAgent(ArchivedAgent archive)
+    {
+        if (Pane?.Workspace.Registry is not { } registry) return;
+        if (registry.Restore(archive) is not null) CloseHistory();
+    }
+    private DateTimeOffset? _archiveClosedAt;
+    private bool SaveAgentHistory(bool closed)
+    {
+        if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        try
+        {
+            Pane.ArchiveLease ??= store.Claim(Pane.PersistKey);
+            if (Pane.ArchiveLease is null) throw new IOException(store.Error);
+            var archive = new ArchivedAgent(Pane.PersistKey, Pane.Name, ProjectRoot.ProjectRoot, Pane.Workspace.Name,
+                closed ? _archiveClosedAt ?? DateTimeOffset.Now : _archiveClosedAt,
+                new(Config.GetEffectiveModelName(), Config.Temperature, Config.MaxTokens, Config.ContextLength) { OllamaEndpoint = Config.OllamaEndpoint, ContextLengthSetByUser = Config.ContextLengthSetByUser },
+                _messages.ToList(), AgentArchiveStore.Capture(Pane.Session), AI.ExportHistoryJson(),
+                TokenTracker.TotalPromptTokens, TokenTracker.TotalCompletionTokens, TokenTracker.LastOperation) { MessageCount = _messages.Count };
+            if (!store.Save(archive)) throw new IOException(store.Error);
+            if (closed) _archiveClosedAt = archive.ClosedAt;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Pane.Session.Append(new Text("Agent history could not be saved. " + ex.Message, new Style(Color.Yellow)));
+            return false;
+        }
+    }
+    private void RestoreAgentHistory()
+    {
+        if (Pane?.RestoreFrom is not { } archive) return;
+        using var output = TuiConsole.Enter(Pane.Session);
+        AgentArchiveStore.Replay(archive, Pane.Session);
+        _messages.AddRange(archive.Messages);
+        TokenTracker.Restore(archive.PromptTokens, archive.CompletionTokens, archive.LastUsage);
+        var restored = archive.HistoryJson is null ? 0 : AI.TryRestoreHistoryJson(archive.HistoryJson);
+        if (restored == 0)
+        {
+            var recent = string.Join("\n\n", archive.Messages.TakeLast(20).Select(m => $"{m.Role}: {m.Text}"));
+            if (recent.Length > 12000) recent = recent[^12000..];
+            AI.AppendUserNote("Restored conversation excerpt (full model memory was unavailable):\n" + recent);
+            AnsiConsole.MarkupLine("[yellow]Transcript restored; recent conversation will be re-briefed to the agent.[/]");
+        }
+        else AnsiConsole.MarkupLine("[green]Agent restored with conversation context.[/]");
+        if (!Directory.Exists(archive.ProjectRoot))
+        {
+            AI.AppendUserNote($"Original project directory {archive.ProjectRoot} is unavailable. Current directory is {ProjectRoot.ProjectRoot}; re-read files before working.");
+            AnsiConsole.MarkupLine("[yellow]Original folder unavailable. Using the current project; /change-directory selects another folder.[/]");
+        }
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        if (!store.MarkOpen(archive)) AnsiConsole.MarkupLine("[yellow]Restored agent, but its archive entry could not be updated.[/]");
+        Pane.RestoreFrom = null;
+    }
 
     private void OnApprovalMenuStateChanged()
     {
@@ -2023,7 +2074,7 @@
         var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[yellow]MandoCode can't reach Ollama at {endpoint}.[/]");
-        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect — or /setup to walk through setup again.[/]");
+        AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, /ollama-serve to start local Ollama, or /setup to check the server URL. You can also run 'ollama serve' in another terminal.[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -2196,6 +2247,13 @@
                             Role = "assistant",
                             Text = responseText
                         });
+                        if (responseText.Contains("Error: Connection to Ollama failed.", StringComparison.Ordinal)
+                            && !await CheckOllamaConnectionAsync())
+                        {
+                            CloseReply();
+                            await HandleRetryCommandAsync();
+                            if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
+                        }
 
                         // 401 auto-recovery: if the response is a 401 sign-in error,
                         // immediately launch the cloud sign-in walkthrough so the user
@@ -2268,6 +2326,12 @@
             Spinner.Stop();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
+            if (IsOllamaTransportFailure(ex))
+            {
+                CloseReply();
+                await HandleRetryCommandAsync();
+                if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
+            }
         }
         finally
         {
@@ -2280,6 +2344,7 @@
             // Runs on cancel too — whatever the history holds now is what "continue" means.
             try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
             catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
         }
     }
 
@@ -2717,6 +2782,7 @@
         // Keep --continue honest: the plan's outcome is part of this turn.
         try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
         catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
     }
 
     private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
@@ -4131,26 +4197,53 @@
 
     private async Task HandleRetryCommandAsync()
     {
-        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Checking Ollama connection...[/]");
+        var probe = await RecoverOllamaConnectionAsync();
+        _isConnected = probe.Ok;
 
-        var connected = await CheckOllamaConnectionAsync();
-        _isConnected = connected;
-
-        if (connected)
+        if (probe.Ok)
         {
             AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
             await ValidateCurrentModelAsync();
         }
         else
         {
-            AnsiConsole.MarkupLine($"[red]Unable to reach Ollama at {endpoint}.[/]");
-            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry — or /setup to walk through setup again.[/]");
+            AnsiConsole.WriteLine(probe.Error ?? "Ollama is still unavailable.");
+            ShowOfflineGuidance();
         }
 
         AnsiConsole.WriteLine();
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<OllamaSetupHelper.ProbeResult> RecoverOllamaConnectionAsync()
+    {
+        var processing = _isProcessing;
+        _isProcessing = true;
+        Spinner.Start(message: "Checking Ollama connection");
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var recovery = (Pane?.Services ?? Services).GetRequiredService<OllamaConnectionRecovery>();
+            var probe = await recovery.RecoverAsync(Config.OllamaEndpoint, Config.ContextLength,
+                message => Spinner.Start(message: message), _requestCts?.Token ?? Lifetime.ApplicationStopping);
+            if (probe.WasHealed)
+            {
+                Config.OllamaEndpoint = probe.NormalizedUrl;
+                Config.Save();
+                await AI.ReinitializeAsync(Config);
+            }
+            return probe;
+        }
+        catch (OperationCanceledException) { return new(false, Config.OllamaEndpoint, false, "Ollama recovery cancelled."); }
+        finally { Spinner.Stop(); _isProcessing = processing; await InvokeAsync(StateHasChanged); }
+    }
+
+    private static bool IsOllamaTransportFailure(Exception error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            if (current is System.Net.Http.HttpRequestException { StatusCode: null } or System.Net.Sockets.SocketException) return true;
+        return false;
     }
 
     private async Task HandleConfigCommandAsync()
@@ -4216,6 +4309,8 @@
 
     public void Dispose()
     {
+        SaveAgentHistory(true);
+        if (Pane is not null) Pane.SaveHistory = null;
         _directorySelection?.TrySetResult(null);
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         StopPane();

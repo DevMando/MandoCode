@@ -157,7 +157,7 @@ Lofi and synthwave tracks bundled right in. A waveform visualizer runs in the co
 
 ### Offline-Friendly Startup
 
-If Ollama isn't running, MandoCode shows setup guidance inline instead of a bare error. Use `/retry` to reconnect without restarting.
+If Ollama isn't running, the CLI attempts to start the local server with `ollama serve` and checks the connection twice with visible progress. `/retry` or `/ollama-serve` runs recovery again without restarting MandoCode. Remote endpoints require the server to be started on that machine. Recovery reconnects without replaying a failed agent request.
 
 <img src="docs/images/offline-guidance.png" alt="Offline guidance" width="400">
 
@@ -208,6 +208,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/config` | Adjust settings — guided wizard |
 | `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
+| `/ollama-serve` | Start local Ollama if unavailable and retry the connection twice |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
 | `/copy-code` | Copy code blocks from last response |
@@ -226,6 +227,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/mcp tools <server>` | List tools exposed by connected MCP servers (server optional) |
 | `/mcp-reload` | Restart all MCP servers and re-register their tools |
 | `/clear` | Clear conversation history |
+| `/history` | Search and restore closed agents, including transcripts and conversation context (Alt+H) |
 | `/exit` | Exit MandoCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
 | `!cd <path>` | Change project root directory |

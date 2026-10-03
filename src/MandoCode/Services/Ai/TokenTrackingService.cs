@@ -68,6 +68,12 @@ public class TokenTrackingService
         Interlocked.Exchange(ref _totalCompletionTokens, 0);
         _lastOperation = null;
     }
+    public void Restore(long promptTokens, long completionTokens, TokenUsageInfo? lastUsage)
+    {
+        Interlocked.Exchange(ref _totalPromptTokens, Math.Max(0, promptTokens));
+        Interlocked.Exchange(ref _totalCompletionTokens, Math.Max(0, completionTokens));
+        _lastOperation = lastUsage;
+    }
 
     /// <summary>
     /// Formats a token count for compact display.

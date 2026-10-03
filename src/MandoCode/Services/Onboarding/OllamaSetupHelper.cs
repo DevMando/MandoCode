@@ -289,7 +289,7 @@ public static class OllamaSetupHelper
     /// it harmlessly. Only applies when WE start the daemon; an already-running Ollama is
     /// untouched.
     /// </summary>
-    public static bool TryStartOllamaProcess(int contextLength = 0)
+    public static bool TryStartOllamaProcess(int contextLength = 0, string? endpoint = null)
     {
         try
         {
@@ -304,13 +304,33 @@ public static class OllamaSetupHelper
             {
                 psi.Environment["OLLAMA_CONTEXT_LENGTH"] = contextLength.ToString();
             }
+            if (endpoint is not null)
+            {
+                if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "http" || !uri.IsLoopback) return false;
+                psi.Environment["OLLAMA_HOST"] = uri.GetLeftPart(UriPartial.Authority);
+            }
             var proc = Process.Start(psi);
+            if (proc is not null) _ = DrainServerOutputAsync(proc);
             return proc != null;
         }
         catch
         {
             return false;
         }
+    }
+
+    private static async Task DrainServerOutputAsync(Process process)
+    {
+        using (process)
+        {
+            try
+            {
+                // Drain both pipes concurrently so daemon logging cannot fill a pipe and stall it.
+                await Task.WhenAll(DrainAsync(process.StandardOutput), DrainAsync(process.StandardError), process.WaitForExitAsync());
+            }
+            catch { /* The daemon's lifetime is independent of the CLI window. */ }
+        }
+        static async Task DrainAsync(StreamReader reader) { while (await reader.ReadLineAsync() is not null) { } }
     }
 
     /// <summary>

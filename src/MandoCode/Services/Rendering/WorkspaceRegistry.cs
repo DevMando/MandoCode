@@ -107,6 +107,7 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
             return;
         }
         var closing = Active;
+        foreach (var item in closing.Panes) if (!item.ArchiveForClose()) return;
         closing.IsClosed = true;
         foreach (var item in closing.Panes) item.Stop?.Invoke();
         Switch(Workspaces.First());
@@ -136,6 +137,21 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
         }
     }
     public void Notify() { if (!_changing) Changed?.Invoke(); }
+    public AgentPane? Restore(ArchivedAgent archive)
+    {
+        var existing = Workspaces.SelectMany(w => w.Panes).FirstOrDefault(p => p.PersistKey == archive.Key);
+        if (existing is not null) { Switch(existing.Workspace); existing.Workspace.Focus(existing); return existing; }
+        var store = Active.SelectedPane!.Services.GetRequiredService<AgentArchiveStore>();
+        var claim = store.Claim(archive.Key);
+        if (claim is null) { Active.SelectedPane.Session.Append(new Text(store.Error ?? "Conversation unavailable.", new Style(Color.Yellow))); return null; }
+        if (Active.Panes.Count < 4) { var restored = Active.Add(archive); restored.ArchiveLease = claim; return restored; }
+        var workspace = new AgentWorkspace(_scopes);
+        Attach(workspace, "Restored agents");
+        var pane = workspace.Add(archive);
+        pane.ArchiveLease = claim;
+        Switch(workspace);
+        return pane;
+    }
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
     public async ValueTask DisposeAsync()
     {
