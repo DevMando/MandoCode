@@ -99,3 +99,8 @@ existing agents when the grid expands or a closed slot is reused. Incremental-re
 checks exercise closing Agent 1 with two, three, or four agents, including App initialization
 and disposal. Live terminal testing is still needed for focus, mouse controls, terminal
 shortcuts, resizing, and concurrent tool approvals.
+
+
+## Explicit plan mode
+
+Use /plan <request> to generate a structured plan for review. Regular prompts run directly, even when they include multiple steps or ask for an outline in prose. The model cannot activate plan mode during an ordinary CLI turn. Existing plan editing, approval, execution, and /plan-resume remain available.
