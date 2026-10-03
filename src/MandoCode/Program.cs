@@ -101,6 +101,7 @@ class Program
     internal static void RegisterAgentServices(IServiceCollection services, MandoCodeConfig config, string projectRoot)
     {
         config.DefaultAgentModel ??= config.GetEffectiveModelName();
+        config.DefaultAgentOptions ??= AgentSettingsDraft.Capture(config);
         services.AddSingleton(new AgentModelDefaults(config));
         // Register configuration per agent
         services.AddScoped(_ =>

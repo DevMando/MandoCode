@@ -11,6 +11,7 @@ public sealed record ArchivedSettings(string? Model, double Temperature, int Max
 {
     public string? OllamaEndpoint { get; init; }
     public bool ContextLengthSetByUser { get; init; }
+    public Dictionary<string, string>? AgentOptions { get; init; }
 }
 public sealed record ArchivedAgent(
     string Key, string Name, string ProjectRoot, string Workspace, DateTimeOffset? ClosedAt,

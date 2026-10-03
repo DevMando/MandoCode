@@ -39,6 +39,33 @@ public static class ConfigKeySetter
 
     public static SetResult TrySet(MandoCodeConfig config, string key, string value)
     {
+        var result = TrySetCore(config, key, value);
+        if (result.Ok && config.DefaultAgentOptions is not null)
+        {
+            var canonical = key.ToLowerInvariant() switch
+            {
+                "contextwindow" or "numctx" => "contextLength",
+                "responsestreaming" => "streaming",
+                "enablediffapprovals" => "diffApprovals",
+                "autocontinuation" or "enableautocontinuation" => "autoContinue",
+                "maxautocontinuations" => "maxContinuations",
+                "requesttimeout" or "requesttimeoutminutes" => "timeout",
+                "modelresponsetimeoutseconds" or "watchdog" => "modelResponseTimeout",
+                "toolresultbudget" or "toolresultcharbudget" => "toolBudget",
+                "markdownrendertimeout" or "markdownrendertimeoutseconds" => "renderTimeout",
+                "enablewebsearch" => "webSearch",
+                "enablemcp" => "mcp",
+                _ => key
+            };
+            var setting = MandoCode.Services.AgentSettingsDraft.Fields.FirstOrDefault(item => item.Key.Equals(canonical, StringComparison.OrdinalIgnoreCase));
+            if (setting is not null) config.DefaultAgentOptions[setting.Key] = setting.Read(config);
+        }
+        if (result.Ok && key.ToLowerInvariant() is "model" or "modelname") config.DefaultAgentModel = config.GetEffectiveModelName();
+        return result;
+    }
+
+    private static SetResult TrySetCore(MandoCodeConfig config, string key, string value)
+    {
         switch (key.ToLowerInvariant())
         {
             case "showtips":

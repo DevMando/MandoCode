@@ -1,0 +1,258 @@
+@using MandoCode.Models
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@inject RazorConsole.Core.Focus.FocusManager Focus
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="Agent Settings" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+ <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+  <Box Height="1" FillWidth="true"><Flex Direction="FlexDirection.Row">
+   @for (var i = 0; i < Groups.Length; i++)
+   {
+    var tab = i;
+    <div data-focusable="false" @onclick="@(() => ChangeTab(tab))"><Markup Content="@($" {Groups[i]} ")" Foreground="@(_tab == i ? Color.Black : Color.Grey85)" Background="@(_tab == i ? Color.DeepSkyBlue1 : Color.Default)" /></div>
+   }
+  </Flex></Box>
+  <Box FillWidth="true" FillHeight="true">
+  @if (_custom && _editing is { } field)
+  {
+   <Rows><Markup Content="@Spectre.Console.Markup.Escape(field.Label)" Foreground="Color.Purple" />
+   <PromptInput @ref="_customInput" ChatFeaturesEnabled="false" InitialValue="@field.Read(_draft.Config)" OnSubmit="SubmitValue" OnCancel="CancelCustom" Placeholder="Custom value" />
+   </Rows>
+  }
+  else
+  {
+   <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+    <Rows>
+     @if (ModelPicker is not null)
+     {
+      <ModelPickerPopup Picker="ModelPicker" AvailableHeight="@(Math.Max(3, Height - 4))" />
+     }
+     else
+     {
+     @foreach (var index in VisibleOptions)
+     {
+      <div data-focusable="false" @onclick="@(() => Activate(index))"><Rows>
+       @foreach (var line in AgentSettingsDraft.Wrap(Items[index], TextWidth - 2).Select((text, row) => (text, row)))
+       {
+        <Markup Content="@Spectre.Console.Markup.Escape((line.row == 0 && index == _selected ? "> " : "  ") + line.text)" Foreground="@(index == _selected ? Color.Black : IsCurrentPreset(index) ? Color.Green : PaneColors.For(Pane, Color.Grey85))" Background="@(index == _selected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+       }
+      </Rows></div>
+     }
+     }
+    </Rows>
+   </div>
+  }
+  </Box>
+  @if (ModelPicker is null)
+  {
+  <Box Height="@DescriptionLines.Length" FillWidth="true"><Rows>
+   @foreach (var line in DescriptionLines) { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="Color.Grey70" /> }
+  </Rows></Box>
+  @for (var action = 0; action < Actions.Length; action++)
+  {
+   var index = OptionCount + action;
+   var actionLabel = Actions[action];
+   @if (action >= 2) { <Box Height="1"><Markup Content=" " /></Box> }
+   <Box Height="@AgentSettingsDraft.Wrap(actionLabel, TextWidth - 2).Length" FillWidth="true"><div data-focusable="false" @onclick="@(() => Activate(index))"><Rows>
+    @foreach (var line in AgentSettingsDraft.Wrap(actionLabel, TextWidth - 2).Select((text, row) => (text, row)))
+    {
+     <Markup Content="@((index == _selected && line.row == 0 ? "> " : "  ") + line.text)" Foreground="@(index == _selected && !_custom ? Color.Black : Color.Grey85)" Background="@(index == _selected && !_custom ? Color.DeepSkyBlue1 : Color.Default)" />
+    }
+   </Rows>
+   </div></Box>
+  }
+  @if (Config.ShowTips) { <Box Height="@TipLines.Length" FillWidth="true"><Rows>@foreach (var line in TipLines) { <Markup Content="@line" Foreground="Color.Grey50" /> }</Rows></Box> }
+  @if (_status.Length > 0) { <Box Height="@StatusLines.Length" FillWidth="true"><Rows>@foreach (var line in StatusLines) { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="Color.Gold1" /> }</Rows></Box> }
+  }
+ </Flex>
+</Box>
+
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+ [Parameter, EditorRequired] public MandoCodeConfig Config { get; set; } = default!;
+ [Parameter] public int Width { get; set; } = 50;
+ [Parameter] public int Height { get; set; } = 24;
+ [Parameter] public EventCallback OnClose { get; set; }
+ [Parameter] public EventCallback OnModel { get; set; }
+ [Parameter] public ModelPickerState? ModelPicker { get; set; }
+ [Parameter] public EventCallback<string> OnModelSelected { get; set; }
+ [Parameter] public EventCallback OnModelCancel { get; set; }
+ [Parameter] public EventCallback<AgentSettingsDraft> OnSave { get; set; }
+ [Parameter] public EventCallback OnApplyDefaults { get; set; }
+ [Parameter] public EventCallback<AgentSettingsDraft> OnSaveDefaults { get; set; }
+ private static readonly string[] Groups = ["Model", "Behavior", "Integrations"];
+ private AgentSettingsDraft _draft = default!;
+ private string _draftModel = "";
+ private AgentSettingsDraft.Field? _editing;
+ private string _status = "";
+ private int _tab, _selected, _returnSelection;
+ private bool _saving, _custom, _focusCustom;
+ private PromptInput? _customInput;
+ private readonly string _focusKey = "agent-settings-" + Guid.NewGuid().ToString("N");
+ private AgentSettingsDraft.Field[] Fields => AgentSettingsDraft.Fields.Where(f => f.Group == Groups[_tab] && (f.Key != "contextLength" || !MandoCodeConfig.IsCloudModel(Config.GetEffectiveModelName()))).ToArray();
+ private string[] Presets => _editing is null ? [] : AgentSettingsDraft.OrderedPresets(_editing, _draft.Config);
+ private static readonly string[] Actions = ["Save", "Cancel", "Apply Global Defaults", "Save to Global Defaults"];
+ private string[] Items => _editing is not null
+  ? Presets.Select(PresetLabel).Concat(_editing.Key == "streaming" ? new[] { "Back" } : new[] { "Custom value", "Back" }).Concat(Actions).ToArray()
+  : (_tab == 0 ? new[] { "Model: " + Config.GetEffectiveModelName() } : Array.Empty<string>())
+  .Concat(Fields.Select(f => f.Label + ": " + (f.Toggle ? (f.Read(_draft.Config) == "True" ? "On" : "Off") : f.Read(_draft.Config))))
+  .Concat(Actions).ToArray();
+ private int FieldOffset => _tab == 0 ? 1 : 0;
+ private int TextWidth => Math.Max(3, Width - 4);
+ private int OptionCount => Items.Length - Actions.Length;
+ private string[] DescriptionLines => AgentSettingsDraft.Wrap(Description, TextWidth);
+ private string[] StatusLines => AgentSettingsDraft.Wrap(_status, TextWidth);
+ private string[] TipLines => AgentSettingsDraft.Wrap("Tab/↑/↓ select · ←/→ tabs · Enter choose · Esc back", TextWidth);
+ private int PageSize => Math.Max(1, Height - 3 - DescriptionLines.Length - (Config.ShowTips ? TipLines.Length : 0) - (_status.Length > 0 ? StatusLines.Length : 0) - 2 - Actions.Sum(action => AgentSettingsDraft.Wrap(action, TextWidth - 2).Length));
+ private int[] VisibleOptions
+ {
+  get
+  {
+   var count = OptionCount;
+   var selected = Math.Clamp(_selected, 0, Math.Max(0, count - 1));
+   int Cost(int index) => AgentSettingsDraft.Wrap(Items[index], TextWidth - 2).Length;
+   var start = selected; var used = Cost(selected);
+   while (start > 0 && used + Cost(start - 1) <= PageSize) used += Cost(--start);
+   var indices = new List<int>(); used = 0;
+   for (var i = start; i < count && (indices.Count == 0 || used + Cost(i) <= PageSize); i++) { indices.Add(i); used += Cost(i); }
+   return indices.ToArray();
+  }
+ }
+ private bool IsCurrentPreset(int index) => _editing is not null && index < Presets.Length && Presets[index] == _editing.Read(_draft.Config);
+ private string Description => _selected >= OptionCount ? ActionDescription : _editing is not null ? PresetDescription : (_selected >= FieldOffset && _selected < Fields.Length + FieldOffset ? Fields[_selected - FieldOffset].Description : "Choose a model for this agent.");
+ private string PresetDescription => _editing!.Label + ": " + (_editing.Key == "temperature" && _selected < Presets.Length && double.TryParse(Presets[_selected], out var temperature)
+  ? temperature <= 0.2 ? "Focused wording for precise code edits. Higher values allow more varied answers." : temperature <= 0.4 ? "A little variety while keeping code edits focused." : temperature <= 0.7 ? "Balanced wording for general coding and explanations. Lower values keep replies more focused." : "More inventive wording for brainstorming. Check generated code carefully."
+  : _editing.Description);
+ private string ActionDescription => Items.ElementAtOrDefault(_selected) switch
+ {
+  "Apply Global Defaults" => "Use the saved MandoCode settings for this agent. This replaces its custom settings and unsaved edits.",
+  "Save to Global Defaults" => "Save these settings for this agent and for new agents. Other open agents keep their settings.",
+  "Cancel" => "Close without saving your pending edits. Settings already saved stay in effect.",
+  _ => "Save these settings for this agent only. New agents keep the global defaults."
+ };
+ private string PresetLabel(string value) => (_editing?.Key switch
+ {
+  "temperature" => value,
+  "contextLength" when value == "auto" => "Auto — size for the model",
+  "contextLength" when value == "0" => "Ollama default",
+  "maxTokens" or "contextLength" => value + " tokens",
+  "timeout" => value + " minutes",
+  "modelResponseTimeout" or "renderTimeout" => value + " seconds",
+  "maxContinuations" => value + " extra rounds",
+  "toolBudget" => value + " characters",
+  _ => value
+ }) + (_editing is not null && value == _editing.Read(_draft.Config) ? " ✓ current" : "");
+ protected override void OnInitialized() { _draft = new(Config); _draftModel = Config.GetEffectiveModelName(); }
+ protected override void OnParametersSet()
+ {
+  var model = Config.GetEffectiveModelName();
+  if (_draftModel != model)
+  {
+   _draft.Config.ModelName = Config.ModelName;
+   _draft.Config.ModelPath = Config.ModelPath;
+   _draft.Config.ApplyRecommendedContextLength(_draftModel, model);
+   _draftModel = model;
+  }
+  if (ExplorerFocus is not null) { ExplorerFocus.FocusExplorer = FocusPanel; ExplorerFocus.NavigateTab = Cycle; }
+ }
+ protected override async Task OnAfterRenderAsync(bool firstRender)
+ {
+  if (Pane is not null && !Pane.Active) return;
+  if (_custom)
+  {
+   if (_focusCustom && _customInput is not null) { _focusCustom = false; await _customInput.FocusPromptAsync(); }
+  }
+  else if (!Focus.IsFocused(_focusKey)) await FocusPanel();
+ }
+ private async Task FocusPanel()
+ {
+  if (Pane is not null && !Pane.Active) return;
+  if (_custom && _customInput is not null) { await _customInput.FocusPromptAsync(); return; }
+  if (Pane is not null) Pane.FocusKey = _focusKey;
+  await Focus.FocusAsync(_focusKey);
+  ExplorerFocus?.SetPromptFocused(false);
+ }
+ private Task Cycle(bool reverse)
+ {
+  if (_saving || ModelPicker is not null) return Task.CompletedTask;
+  _custom = false;
+  _selected = (_selected + (reverse ? Items.Length - 1 : 1)) % Items.Length;
+  StateHasChanged();
+  return Task.CompletedTask;
+ }
+ private void ChangeTab(int tab) { if (_saving || _editing is not null) return; _tab = tab; _selected = 0; }
+ private void Back() { _custom = false; _editing = null; _selected = _returnSelection; _status = ""; }
+ private void CancelCustom() { _custom = false; _status = ""; }
+ private void SubmitValue(string value)
+ {
+  if (_editing is null) return;
+  var result = _draft.Set(_editing, value);
+  _status = result.Ok ? "" : result.Message;
+  if (result.Ok) Back();
+ }
+ private async Task Activate(int index)
+ {
+  if (_saving || ModelPicker is not null) return;
+  _selected = index;
+  if (index >= OptionCount) { await PerformAction(Items[index]); return; }
+  if (_editing is not null)
+  {
+   if (index < Presets.Length) SubmitValue(Presets[index]);
+   else if (Items[index] == "Back") Back();
+   else { _custom = _focusCustom = true; _status = ""; }
+   return;
+  }
+  if (_tab == 0 && index == 0)
+  {
+   await OnModel.InvokeAsync();
+   return;
+  }
+  var fieldIndex = index - FieldOffset;
+  if (fieldIndex >= 0 && fieldIndex < Fields.Length)
+  {
+   var field = Fields[fieldIndex];
+   if (field.Toggle) _draft.Set(field, (field.Read(_draft.Config) != "True").ToString());
+   else { _returnSelection = index; _editing = field; _selected = Array.IndexOf(Presets, field.Read(_draft.Config)); _status = ""; }
+   return;
+  }
+ }
+ private async Task PerformAction(string action)
+ {
+  if (action == "Cancel") { await OnClose.InvokeAsync(); return; }
+  {
+   _saving = true; _status = "Saving";
+   try
+   {
+    if (action == "Apply Global Defaults") await OnApplyDefaults.InvokeAsync();
+    else if (action == "Save to Global Defaults") await OnSaveDefaults.InvokeAsync(_draft);
+    else await OnSave.InvokeAsync(_draft);
+    _draft = new(Config);
+    _editing = null; _custom = false;
+    _selected = OptionCount + Array.IndexOf(Actions, action);
+    _status = action == "Save to Global Defaults" ? "Global defaults saved for new agents." : action == "Apply Global Defaults" ? "Global defaults applied to this agent." : "Settings saved for this agent.";
+   }
+   catch (Exception ex) { _status = "Couldn't save: " + ex.Message; }
+   finally { _saving = false; }
+  }
+ }
+ private async Task Key(KeyboardEventArgs key)
+ {
+  if (Pane is not null && !Pane.Active || _saving) return;
+  if (ModelPicker is not null)
+  {
+   if (key.Key == "Escape") await OnModelCancel.InvokeAsync();
+   else if (key.Key == "ArrowUp") ModelPicker.Move(-1);
+   else if (key.Key == "ArrowDown") ModelPicker.Move(1);
+   else if (key.Key is "Enter" or "Return" && ModelPicker.Selected is { } model) await OnModelSelected.InvokeAsync(model);
+   return;
+  }
+  if (key.Key == "Tab") { await Cycle(key.ShiftKey); return; }
+  if (Pane?.Workspace.Key(Pane, key) == true) return;
+  if (key.Key == "Escape") { if (_editing is not null) Back(); else await OnClose.InvokeAsync(); }
+  else if (key.Key is "ArrowLeft" or "ArrowRight") ChangeTab((_tab + (key.Key == "ArrowLeft" ? 2 : 1)) % 3);
+  else if (key.Key == "ArrowUp") _selected = Math.Max(0, _selected - 1);
+  else if (key.Key == "ArrowDown") await Cycle(false);
+  else if (key.Key is "Enter" or "Return") await Activate(_selected);
+ }
+}

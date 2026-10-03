@@ -59,6 +59,8 @@ public class ConfigurationWizard
         // Step 9: Save Configuration
         if (await ConfirmSave(prompts))
         {
+            config.DefaultAgentModel = config.GetEffectiveModelName();
+            config.DefaultAgentOptions = AgentSettingsDraft.Capture(config);
             config.Save();
             AnsiConsole.MarkupLine("\n[green]✓ Configuration saved successfully![/]");
             AnsiConsole.MarkupLine($"[dim]Location: {MandoCodeConfig.GetDefaultConfigPath()}[/]");

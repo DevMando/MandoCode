@@ -4,6 +4,7 @@ namespace MandoCode.Models;
 public static class Keybindings
 {
     public const string AgentNew = "Alt+N";
+    public const string AgentSettings = "Alt+S";
     public const string ChangeDirectory = "Alt+D";
     public const string AgentFileExplorer = "Alt+E";
     public const string AgentGitChanges = "Alt+G";
@@ -23,6 +24,7 @@ public static class Keybindings
         new("Workspaces", WorkspaceAll, "Toggle the All workspaces picker (/workspace-all opens it)"),
         new("Workspaces", WorkspaceClose, "Close the current idle workspace (/workspace-close)"),
         new("Agents", AgentNew, "Create an agent (/agent-new)"),
+        new("Agents", AgentSettings, "Toggle this agent's settings (/agent-settings)"),
         new("Agents", ChangeDirectory, "Change this agent's directory (/change-directory)"),
         new("Agents", AgentFileExplorer, "Toggle this agent's file explorer (/agent-file-explorer)"),
         new("Agents", AgentGitChanges, "View this agent's Git changes (/git-changes)"),

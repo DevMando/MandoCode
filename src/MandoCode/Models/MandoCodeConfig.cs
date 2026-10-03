@@ -156,6 +156,8 @@ public class MandoCodeConfig
     /// <summary>Saved model for newly created CLI agents; existing agents retain their own model.</summary>
     [JsonPropertyName("defaultAgentModel")]
     public string? DefaultAgentModel { get; set; }
+    [JsonPropertyName("defaultAgentOptions")]
+    public Dictionary<string, string>? DefaultAgentOptions { get; set; }
 
     /// <summary>
     /// Optional display identity for this AI instance — "Blazor" instead of "MandoCode" in the

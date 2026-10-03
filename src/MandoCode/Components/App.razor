@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -40,7 +40,7 @@
 {
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+@if (_showPrompt && !_settingsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
@@ -150,6 +150,7 @@
     private bool _directoryBrowserOpen;
     private bool _fileExplorerOpen;
     private bool _gitChangesOpen;
+    private bool _settingsOpen;
     private TaskCompletionSource<string?>? _directorySelection;
     private MandoCodeConfig Config { get; set; } = default!;
     private PlanRunnerSelector PlanRunners { get; set; } = default!;
@@ -384,11 +385,11 @@
             McpGate = agentServices.GetRequiredService<McpApprovalGate>();
             PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
             UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
-            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive;
+            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _settingsOpen;
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
             if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
-            if (Pane is not null) { Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
+            if (Pane is not null) { Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
@@ -639,7 +640,7 @@
 
     private readonly AgentModelSelectionGate _modelSelection = new();
 
-    private async Task SelectModelAsync()
+    private async Task SelectModelAsync(bool fromSettings = false)
     {
         string[] labeled;
         Spinner.Start(message: "Loading models...");
@@ -738,11 +739,15 @@
         }
 
         Spinner.Start($"Loading {modelTag}…");
-        try { await AI.ReinitializeAsync(Config); }
+        try
+        {
+            if (fromSettings) await AI.RefreshSettingsAsync(Config);
+            else await AI.ReinitializeAsync(Config);
+        }
         finally { Spinner.Stop(); }
 
         await ValidateCurrentModelAsync();
-        if (_modelError) return;
+        if (_modelError || fromSettings) return;
         var defaultChoice = await WizardPromptSelectCoreAsync(
             $"Make {modelTag} the default model for new agents?",
             new[] { "No — only this agent", "Yes — new agents use this model" },
@@ -789,6 +794,10 @@
             return;
         }
 
+        var agentsForDefaults = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        Services.GetRequiredService<AgentModelDefaults>().UpdateSetting(parts[0], parts[1], agentsForDefaults);
         Config.Save();
 
         if (parts[0].Equals("showTips", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } tipsRegistry)
@@ -1167,6 +1176,7 @@
 
     private Task ToggleFileExplorer() => InvokeAsync(async () =>
     {
+        if (_settingsOpen) return;
         if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         if (_isProcessing && !_fileExplorerOpen) return;
         _fileExplorerOpen = !_fileExplorerOpen;
@@ -1177,6 +1187,7 @@
     private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
     private Task ToggleGitChanges() => InvokeAsync(async () =>
     {
+        if (_settingsOpen) return;
         if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         _gitChangesOpen = !_gitChangesOpen;
         _fileExplorerOpen = false;
@@ -1184,6 +1195,73 @@
         if (!_gitChangesOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
     });
     private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleSettings() => InvokeAsync(() =>
+    {
+        if (!_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
+        _settingsOpen = !_settingsOpen;
+        _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
+        StateHasChanged();
+    });
+    private Task CloseSettings() => InvokeAsync(async () =>
+    {
+        _settingsOpen = false;
+        StateHasChanged();
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task SettingsModel()
+    {
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (_isProcessing || !gate.TryEnter()) return Task.CompletedTask;
+        _isProcessing = true;
+        _ = RunSettingsModelAsync(gate);
+        return Task.CompletedTask;
+    }
+    private async Task RunSettingsModelAsync(AgentModelSelectionGate gate)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        try { await SelectModelAsync(fromSettings: true); }
+        catch (Exception ex) { _modelWarning = $"Couldn't change the model: {ex.Message}"; }
+        finally { _isProcessing = false; gate.Exit(); await InvokeAsync(StateHasChanged); }
+    }
+    private async Task SaveAgentSettings(AgentSettingsDraft draft)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (_isProcessing) throw new InvalidOperationException("Wait for the current request to finish.");
+        _isProcessing = true;
+        Spinner.Start("Applying settings");
+        try
+        {
+            var mcpChanged = Config.EnableMcp != draft.Config.EnableMcp;
+            draft.ApplyTo(Config);
+            AI.OnWriteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDiffApproval : null;
+            AI.OnDeleteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDeleteApproval : null;
+            AI.OnCommandApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleCommandApproval : null;
+            McpGate.OnApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleMcpApproval : null;
+            if (mcpChanged)
+            {
+                await McpManager.StopAllAsync();
+                await InitializeMcpAsync();
+            }
+            await AI.RefreshSettingsAsync(Config);
+            SaveAgentHistory(false);
+        }
+        finally { Spinner.Stop(); _isProcessing = false; }
+    }
+    private async Task ApplyAgentDefaults()
+    {
+        var defaults = Services.GetRequiredService<AgentModelDefaults>().Snapshot();
+        Config.ModelName = defaults.GetEffectiveModelName();
+        Config.ModelPath = null;
+        await SaveAgentSettings(new AgentSettingsDraft(defaults));
+    }
+    private async Task SaveAgentDefaults(AgentSettingsDraft draft)
+    {
+        await SaveAgentSettings(draft);
+        var agents = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        Services.GetRequiredService<AgentModelDefaults>().Promote(Config, agents);
+    }
     private void GitDiscarded(string path)
     {
         AI.AppendUserNote($"The user DISCARDED uncommitted changes to {path}. Do not re-apply them unless asked.");
@@ -1367,6 +1445,7 @@
                     continue;
                 }
 
+                if (command == "agent-settings") { _isProcessing = false; await ToggleSettings(); continue; }
                 if (command == "agent-file-explorer")
                 {
                     _fileExplorerOpen = !_fileExplorerOpen;
@@ -1744,7 +1823,7 @@
             if (Pane.ArchiveLease is null) throw new IOException(store.Error);
             var archive = new ArchivedAgent(Pane.PersistKey, Pane.Name, ProjectRoot.ProjectRoot, Pane.Workspace.Name,
                 closed ? _archiveClosedAt ?? DateTimeOffset.Now : _archiveClosedAt,
-                new(Config.GetEffectiveModelName(), Config.Temperature, Config.MaxTokens, Config.ContextLength) { OllamaEndpoint = Config.OllamaEndpoint, ContextLengthSetByUser = Config.ContextLengthSetByUser },
+                new(Config.GetEffectiveModelName(), Config.Temperature, Config.MaxTokens, Config.ContextLength) { OllamaEndpoint = Config.OllamaEndpoint, ContextLengthSetByUser = Config.ContextLengthSetByUser, AgentOptions = AgentSettingsDraft.Capture(Config) },
                 _messages.ToList(), AgentArchiveStore.Capture(Pane.Session), AI.ExportHistoryJson(),
                 TokenTracker.TotalPromptTokens, TokenTracker.TotalCompletionTokens, TokenTracker.LastOperation) { MessageCount = _messages.Count };
             if (!store.Save(archive)) throw new IOException(store.Error);
@@ -4287,6 +4366,12 @@
                 var updatedConfig = await ConfigurationWizard.RunAsync(
                     Config,
                     prompts: prompts);
+                var configuredAgents = Pane is null ? new[] { Config } :
+                    (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                        .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+                var defaults = Services.GetRequiredService<AgentModelDefaults>();
+                defaults.UpdateSettings(updatedConfig, configuredAgents);
+                defaults.UpdateSetting("model", updatedConfig.GetEffectiveModelName(), configuredAgents);
                 await AI.ReinitializeAsync(updatedConfig);
                 TuiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");

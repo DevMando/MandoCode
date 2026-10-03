@@ -15,13 +15,17 @@
     @for (var i = 0; i < Labels.Length; i++)
     {
      var action = i;
-     <div data-focusable="false" @onclick="@(() => Activate(action))"><Markup Content="@Labels[i]" Foreground="@(_action == i ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(_action == i ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" /></div>
+     <div data-focusable="false" @onclick="@(() => Activate(action))"><Markup Content="@Labels[i]" Foreground="@(!_confirm && _action == i ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(!_confirm && _action == i ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" /></div>
     }
    </Flex>
    @if (_confirm)
    {
     <Markup Content="@Fit("Permanently delete " + Selected?.Name + " and its saved conversation?")" Foreground="Color.Gold1" />
-    <Markup Content="@(_deleteSelected ? "  Cancel   > Delete" : "> Cancel     Delete")" Foreground="Color.Black" Background="@PaneColors.For(Pane, Color.DeepSkyBlue1)" />
+    <Flex Direction="FlexDirection.Row">
+     <Markup Content="@(_deleteSelected ? "  Cancel " : "> Cancel ")" Foreground="@(!_deleteSelected ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(!_deleteSelected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+     <Markup Content=" " />
+     <Markup Content="@(_deleteSelected ? "> Delete " : "  Delete ")" Foreground="@(_deleteSelected ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(_deleteSelected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+    </Flex>
    }
    else
    {

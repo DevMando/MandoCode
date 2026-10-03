@@ -61,6 +61,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
             config.MaxTokens = restored.Settings.MaxTokens;
             config.ContextLength = restored.Settings.ContextLength ?? 0;
             config.ContextLengthSetByUser = restored.Settings.ContextLengthSetByUser;
+            AgentSettingsDraft.Restore(config, restored.Settings.AgentOptions);
             if (Uri.TryCreate(restored.Settings.OllamaEndpoint, UriKind.Absolute, out var endpoint) && endpoint.Scheme is "http" or "https") config.OllamaEndpoint = endpoint.ToString();
             config.ValidateAndClamp();
             pane.Services.GetRequiredService<ProjectRootAccessor>().ProjectRoot = Directory.Exists(restored.ProjectRoot)
@@ -170,6 +171,9 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         switch (key.Key.ToLowerInvariant())
         {
+            case "s":
+                if (!key.ShiftKey && pane.Active && pane.ToggleSettings is not null) _ = pane.ToggleSettings();
+                return true;
             case "h":
                 if (!key.ShiftKey && pane.Active)
                 {
@@ -235,6 +239,7 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     internal AgentModelSelectionGate ModelSelection { get; } = new();
     public Func<Task>? ToggleFileExplorer { get; set; }
     public Func<Task>? ToggleGitChanges { get; set; }
+    public Func<Task>? ToggleSettings { get; set; }
     public Func<bool>? IsGitChangesOpen { get; set; }
     public Func<bool>? IsGitDiffOpen { get; set; }
     public Func<bool>? IsFileExplorerOpen { get; set; }
