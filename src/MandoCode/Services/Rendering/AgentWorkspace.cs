@@ -45,6 +45,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
                 property.SetValue(targetConfig, property.GetValue(copy));
         }
         var config = pane.Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>();
+        pane.Services.GetService<AgentModelDefaults>()?.Apply(config);
         var existing = (Registry?.Workspaces.SelectMany(w => w.Panes) ?? Panes).Select(p => p.Name);
         pane.Name = config.UseAgentNames ? (Registry?.Callsigns ?? _callsigns).Next(existing) : AgentNaming.NextFreeName(existing);
         config.AgentName = pane.Name;
@@ -231,6 +232,7 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Func<bool>? IsAwaitingInput { get; set; }
     public Action? Stop { get; set; }
     public Func<string, Task>? SubmitCommand { get; set; }
+    internal AgentModelSelectionGate ModelSelection { get; } = new();
     public Func<Task>? ToggleFileExplorer { get; set; }
     public Func<Task>? ToggleGitChanges { get; set; }
     public Func<bool>? IsGitChangesOpen { get; set; }

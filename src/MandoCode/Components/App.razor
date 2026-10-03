@@ -631,6 +631,16 @@
     /// </summary>
     private async Task HandleModelCommandAsync()
     {
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (!gate.TryEnter()) return;
+        try { await SelectModelAsync(); }
+        finally { gate.Exit(); }
+    }
+
+    private readonly AgentModelSelectionGate _modelSelection = new();
+
+    private async Task SelectModelAsync()
+    {
         string[] labeled;
         Spinner.Start(message: "Loading models...");
         try
@@ -727,14 +737,25 @@
                 break;
         }
 
-        Config.Save();
         Spinner.Start($"Loading {modelTag}…");
         try { await AI.ReinitializeAsync(Config); }
         finally { Spinner.Stop(); }
 
         await ValidateCurrentModelAsync();
         if (_modelError) return;
+        var defaultChoice = await WizardPromptSelectCoreAsync(
+            $"Make {modelTag} the default model for new agents?",
+            new[] { "No — only this agent", "Yes — new agents use this model" },
+            liveTitle: true);
         AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)}.[/]");
+        if (defaultChoice.StartsWith("Yes", StringComparison.Ordinal))
+        {
+            var agents = Pane is null ? new[] { Config } :
+                (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                    .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+            Services.GetRequiredService<AgentModelDefaults>().Select(modelTag, agents);
+            AnsiConsole.MarkupLine("[dim]Default model updated for new agents.[/]");
+        }
 
         AnsiConsole.WriteLine();
     }
@@ -1882,14 +1903,14 @@
     private Task<string> WizardPromptSelectAsync(string title, params string[] options) =>
         WizardPromptSelectCoreAsync(title, options);
 
-    private async Task<string> WizardPromptSelectCoreAsync(string title, string[] options, string? silentChoice = null)
+    private async Task<string> WizardPromptSelectCoreAsync(string title, string[] options, string? silentChoice = null, bool liveTitle = false)
     {
         if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
 
         // Cancellable navigation menus show the title only in the live region.
         // Persist it together with the choice only after the user commits an action.
-        _wizardSelectTitle = silentChoice is not null ? title : null;
-        if (silentChoice is null)
+        _wizardSelectTitle = silentChoice is not null || liveTitle ? title : null;
+        if (silentChoice is null && !liveTitle)
             AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
         _wizardSelectChoices = options.Select(option => new ApprovalSelect.Option(option, Color.DeepSkyBlue1)).ToArray();
