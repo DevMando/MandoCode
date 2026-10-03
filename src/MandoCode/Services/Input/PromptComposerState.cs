@@ -18,6 +18,21 @@ public sealed class PromptComposerState(InputStateMachine machine)
         Refresh();
     }
     public void Refresh() => machine.UpdateText(Buffer.Text[..Buffer.Cursor]);
+    public void InsertFileReference(string path)
+    {
+        var prefix = Buffer.Text[..Buffer.Cursor];
+        var suffix = Buffer.Text[Buffer.Cursor..];
+        var anchor = prefix.LastIndexOf('@');
+        if (anchor >= 0 && (anchor == 0 || char.IsWhiteSpace(prefix[anchor - 1])) && !prefix[(anchor + 1)..].Any(char.IsWhiteSpace))
+            prefix = prefix[..anchor];
+        if (prefix.Length > 0 && !char.IsWhiteSpace(prefix[^1])) prefix += " ";
+        var inserted = prefix + FileReferenceToken.Format(path) + " ";
+        Buffer.SetText(inserted + suffix);
+        Buffer.Begin(inserted.Length, 1, false);
+        Buffer.End();
+        Buffer.ClearSelection();
+        Refresh();
+    }
     public bool HandleKey(string key)
     {
         if (!IsOpen) return false;

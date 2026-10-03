@@ -1,5 +1,9 @@
 # CLI agent panes (experimental)
 
+Startup keeps configuration details out of the conversation. The model is shown beside the agent name; `/config` → **View current configuration** shows model and endpoint settings. Run `mandocode --doctor` from a terminal for the .NET runtime, operating system, configured endpoint/model, and connection diagnostics.
+
+The right side of each agent's name/model header shows its current Git branch and a status dot: green means clean, gold means uncommitted changes, and red means merge conflicts. Ahead/behind counts appear when an upstream is configured; detached HEAD shows a short commit ID. Status follows the agent's project folder, refreshes locally every few seconds, and is hidden outside Git repositories or when the pane is too narrow.
+
 ## Workspaces
 
 Run `/keybindings` for keyboard shortcuts grouped by workspace, agent, conversation, menus/input, and plan-step editing. The same shortcut labels appear in command hints and `/help`.
@@ -35,11 +39,17 @@ All workspaces initially share the same project folder and saved configuration f
 
 New agents default to Desktop-style callsigns. Use `/config` → **Agent naming** or `/config set agentNaming numbers` to use numbered labels; `/config set agentNaming names` restores callsigns. This saved preference applies to new agents across workspaces; existing agents keep their names. Numbered labels reuse the lowest free number, independently of internal agent IDs.
 
-The **AGENTS** bar directly below **WORKSPACES** shows the current workspace's agents and their model names.
+The **AGENTS** bar directly below **WORKSPACES** shows only the current workspace's agent names. Each pane has a compact name/model button header: click its name to focus the pane, or its model to open the model picker when idle.
 Click an agent tab to focus its pane; **+ New** opens another agent and **× Close** closes
 the selected idle agent. The selected tab uses a dark purple (#503765) highlight with light text, distinct from workspace tabs using dark green (#325039) with a lighter hover.
 New and Close stay on the right, with compact controls and tab arrows in narrow terminals.
 Switching workspaces updates this bar to that workspace's agents while preserving the pane layout.
+
+Dimming is on by default. Autocomplete offers `/agent-dim-off` to keep background agents colorful, or `/agent-dim-on` to restore grayscale, depending on the current setting. A persistent bottom hint explains these commands alongside agent navigation in multi-agent mode. The dimming preference is saved and applies to all workspaces. `/agent-dim on|off` and `/config set dimUnfocusedAgents on|off` also work.
+
+Tips default to on. Use `/tips-off` to hide help and multi-agent tips across workspaces, or `/tips-on` to restore them. Autocomplete shows only the applicable command. This preference is saved; `/config set showTips on|off` also works.
+
+When multiple agent panes are open, a bottom tip explains that Alt+Left/Right switches agents in tab order, and that you can click an agent's tab to focus it. Navigation and dimming hints remain visible together while multiple agents are open, unless tips are turned off. Explorer instructions appear alongside them when browsing files.
 
 Use `/agent-rename <name>` to rename the selected idle agent. Names may contain spaces, retain their casing, and must be unique across open workspaces. Future replies and the system prompt use the new identity; existing conversation history is preserved.
 
@@ -49,7 +59,7 @@ Both agents can work concurrently; each has separate prompts, token statistics, 
 plans, and cancellation. They initially share the same project folder.
 
 Select an agent's header or use `/agent-focus` to switch agents. The active pane has a
-green border. `/agent-focus left` and `/agent-focus right` choose a direction.
+green border. `/agent-focus left` and `/agent-focus right` cycle through agents in AGENTS-bar order, wrapping at either end. Up/Down does not switch agents.
 Use **Close** or `/agent-close` to close an idle pane. Cancel a running request with
 Escape first. The last pane stays open; `/exit` exits the application.
 
@@ -63,7 +73,7 @@ of their original slots. A lone remaining agent expands to the full window.
 Alt+Up/Down moves within a column; Alt+Left/Right moves to the nearest pane in the other column.
 `/agent-focus` cycles through all agents, and `/agent-focus up` or `down` moves vertically.
 
-Alt+N opens an agent, Alt+Arrow Keys switches focus, and Alt+W closes the selected
+Alt+N opens an agent, Alt+Left/Right cycles agents in tab order, and Alt+W closes the selected
 pane. Windows/Command variants are also accepted when a terminal forwards them,
 but Windows+N normally opens notifications and Windows+arrows controls windows.
 Operating-system and terminal shortcuts can intercept keys; the commands and headers

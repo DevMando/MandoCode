@@ -12,6 +12,7 @@ namespace MandoCode.Services;
 public class InputStateMachine
 {
     private readonly Dictionary<string, string> _commands;
+    private readonly Func<string, bool>? _commandAvailable;
     private readonly FileAutocompleteProvider? _fileProvider;
 
     // Input state
@@ -35,9 +36,11 @@ public class InputStateMachine
 
     public InputStateMachine(
         Dictionary<string, string> commands,
-        FileAutocompleteProvider? fileProvider)
+        FileAutocompleteProvider? fileProvider,
+        Func<string, bool>? commandAvailable = null)
     {
         _commands = commands;
+        _commandAvailable = commandAvailable;
         _fileProvider = fileProvider;
         State.CommandDescriptions = commands;
     }
@@ -163,7 +166,7 @@ public class InputStateMachine
         return input.TrimStart().Substring(1).Trim().ToLowerInvariant();
     }
 
-    public IEnumerable<string> GetAllCommands() => _commands.Keys;
+    public IEnumerable<string> GetAllCommands() => _commands.Keys.Where(cmd => _commandAvailable?.Invoke(cmd) != false);
 
     // ─── VDOM Text-Level API ──────────────────────────────────
 
@@ -684,10 +687,10 @@ public class InputStateMachine
     private List<string> FilterCommands(string input)
     {
         if (string.IsNullOrWhiteSpace(input))
-            return _commands.Keys.ToList();
+            return GetAllCommands().ToList();
 
         var query = input.ToLower();
-        return _commands.Keys
+        return GetAllCommands()
             .Where(cmd => cmd.ToLower().StartsWith(query))
             .ToList();
     }

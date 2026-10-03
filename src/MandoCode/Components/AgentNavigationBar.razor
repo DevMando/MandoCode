@@ -7,7 +7,7 @@
     <Flex Direction="FlexDirection.Row" FillWidth="true">
         @if (LabelWidth > 0)
         {
-            <Box Width="@LabelWidth"><Markup Content="@(Compact ? " AG " : " AGENTS ")" Foreground="Color.Grey70" Background="@Background" Decoration="Decoration.Bold" /></Box>
+            <Box Width="@LabelWidth"><Markup Content="@(Compact ? " AG " : " AGENTS     ")" Foreground="Color.Grey70" Background="@Background" Decoration="Decoration.Bold" /></Box>
         }
         @if (ArrowWidth > 0)
         {
@@ -45,12 +45,12 @@
     private static readonly Color SelectedBackground = new(80, 55, 101);
     private static readonly Color HoverBackground = new(96, 69, 119);
     private bool Compact => Viewport.Width < 70;
-    private int LabelWidth => Viewport.Width < 24 ? 0 : Compact ? 4 : 8;
+    private int LabelWidth => Viewport.Width < 28 ? 0 : Compact ? 4 : 12;
     private int ArrowWidth => Viewport.Width < 36 ? 0 : 6;
     private int ActionsWidth => Compact ? 6 : 16;
     private int AvailableWidth => Math.Max(0, Viewport.Width - LabelWidth - ArrowWidth - ActionsWidth);
-    private int Capacity => AvailableWidth == 0 ? 0 : Math.Min(Workspace.Panes.Count, Math.Max(1, AvailableWidth / 24));
-    private int TabWidth => Capacity == 0 ? 0 : Math.Min(40, AvailableWidth / Capacity);
+    private int Capacity => AvailableWidth == 0 ? 0 : Math.Min(Workspace.Panes.Count, Math.Max(1, AvailableWidth / 10));
+    private int TabWidth => Capacity == 0 ? 0 : Math.Min(22, AvailableWidth / Capacity);
     private int Padding => Math.Max(0, AvailableWidth - Math.Min(Capacity, Workspace.Panes.Count - _start) * TabWidth);
     private int _start;
     private int _lastAgentId = -1;
@@ -70,7 +70,7 @@
     }
     private string Caption(AgentPane pane)
     {
-        var label = WorkspaceTabWindow.Fit($" {pane.Name} · {pane.Model} ", TabWidth);
+        var label = WorkspaceTabWindow.Fit($" {pane.Name} ", TabWidth);
         return Spectre.Console.Markup.Escape(label + new string(' ', Math.Max(0, TabWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(label))));
     }
     private void Scroll(int direction) => _start = Math.Clamp(_start + direction * Math.Max(1, Capacity), 0, Math.Max(0, Workspace.Panes.Count - Capacity));

@@ -17,6 +17,17 @@ public class ShellCommandHandler
         _projectRoot = projectRoot;
     }
 
+    public string ChangeDirectory(string target)
+    {
+        target = target.Trim().Trim('"');
+        if (target == "~" || target.StartsWith("~/") || target.StartsWith("~\\"))
+            target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), target.Length > 2 ? target[2..] : "");
+        var directory = Path.GetFullPath(target, _projectRoot.ProjectRoot);
+        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException($"No such directory: {target}");
+        _projectRoot.ProjectRoot = directory;
+        _fileProvider.RefreshCache();
+        return directory;
+    }
     public async Task HandleShellCommandAsync(string cmd)
     {
         if (string.IsNullOrWhiteSpace(cmd))
@@ -36,20 +47,7 @@ public class ShellCommandHandler
 
             try
             {
-                var newDir = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), target));
-                if (!Directory.Exists(newDir))
-                {
-                    AnsiConsole.MarkupLine($"[red]cd: no such directory: {Spectre.Console.Markup.Escape(target)}[/]");
-                    AnsiConsole.WriteLine();
-                    return;
-                }
-
-                Directory.SetCurrentDirectory(newDir);
-                _projectRoot.ProjectRoot = newDir;
-                _fileProvider.RefreshCache();
-
-                // OSC 9;9 — tell Windows Terminal the new CWD
-                Console.Write($"\u001b]9;9;{newDir}\u0007");
+                var newDir = ChangeDirectory(target);
 
                 AnsiConsole.MarkupLine($"[green]Changed directory to[/] {Spectre.Console.Markup.Escape(newDir)}");
             }
@@ -71,7 +69,7 @@ public class ShellCommandHandler
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
-                WorkingDirectory = Directory.GetCurrentDirectory()
+                WorkingDirectory = _projectRoot.ProjectRoot
             };
             // Use ArgumentList for proper escaping instead of manual string building
             psi.ArgumentList.Add(isWindows ? "/c" : "-c");

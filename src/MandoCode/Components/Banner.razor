@@ -1,10 +1,10 @@
 @using Spectre.Console;
-@using System.Reflection;
 
-<RenderableContent Content="_panel" />
+<AsciiArt Lines="@Artwork" />
 
 @code {
-    private Spectre.Console.Rendering.IRenderable _panel = new Spectre.Console.Text("");
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+
     // Gate the easter-egg roll so it happens at most once per process launch.
     // Razor re-instantiates components on some re-renders, which otherwise fires
     // OnInitialized multiple times and rolls the dice again — when the glitch
@@ -18,19 +18,12 @@
         if (!_glitchRolled)
         {
             _glitchRolled = true;
-            if (TuiConsole.Current is null && Random.Shared.Next(50) == 0)
+            if (Pane is null && TuiConsole.Current is null && !Console.IsOutputRedirected && Random.Shared.Next(50) == 0)
             {
                 PlayMatrixGlitch();
             }
         }
 
-        var gradientText = BuildGradientBanner(ResolveVersionLabel());
-
-        var panel = new Spectre.Console.Panel(new Spectre.Console.Markup("\n\n" + gradientText + "\n\n"));
-        panel.Border(BoxBorder.Rounded);
-        panel.BorderColor(Color.Teal);
-
-        _panel = panel;
     }
 
     private static string ResolveVersionLabel()
@@ -42,91 +35,20 @@
 
     private static readonly string[] _figletLines =
     {
+        @"",
        @" ███╗   ███╗ █████╗ ███╗   ██╗██████╗  ██████╗  ██████╗ ██████╗ ██████╗ ███████╗ ",
        @" ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝ ",
        @" ██╔████╔██║███████║██╔██╗ ██║██║  ██║██║   ██║██║     ██║   ██║██║  ██║█████╗ ",
        @" ██║╚██╔╝██║██╔══██║██║╚██╗██║██║  ██║██║   ██║██║     ██║   ██║██║  ██║██╔══╝ ",
        @" ██║ ╚═╝ ██║██║  ██║██║ ╚████║██████╔╝╚██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗ ",
-       @" ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
-       @" ░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░▒▓▒░░▒▓░░▒▓▒░░▒▓░        ",
-       @" ▓░▒▓░░░▒▓░▒░░▓▒░░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░▒▓░░▒░▓░░▒▓░         "
+       @" ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"
     };
 
-    // Gradient stops: teal -> cyan -> blue -> violet -> magenta
-    private static readonly (int R, int G, int B)[] _gradientStops =
+    private IReadOnlyList<string> Artwork => _figletLines.Concat(new[]
     {
-        (0, 210, 178),
-        (0, 200, 255),
-        (60, 120, 255),
-        (160, 80, 255),
-        (210, 50, 210),
-    };
-
-    private static (int R, int G, int B) LerpColor(double t)
-    {
-        double pos = t * (_gradientStops.Length - 1);
-        int idx = (int)pos;
-        if (idx >= _gradientStops.Length - 1)
-            return _gradientStops[^1];
-
-        double frac = pos - idx;
-        var a = _gradientStops[idx];
-        var b = _gradientStops[idx + 1];
-
-        return (
-            (int)(a.R + (b.R - a.R) * frac),
-            (int)(a.G + (b.G - a.G) * frac),
-            (int)(a.B + (b.B - a.B) * frac)
-        );
-    }
-
-    private static string BuildGradientBanner(string version)
-    {
-        int maxWidth = _figletLines.Max(l => l.Length);
-        var sb = new System.Text.StringBuilder();
-
-        for (int row = 0; row < _figletLines.Length; row++)
-        {
-            var line = _figletLines[row];
-
-            for (int col = 0; col < line.Length; col++)
-            {
-                char c = line[col];
-
-                if (c == ' ')
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    double t = maxWidth > 1 ? (double)col / (maxWidth - 1) : 0;
-                    var (r, g, b) = LerpColor(t);
-
-                    string ch = c switch
-                    {
-                        '[' => "[[",
-                        ']' => "]]",
-                        _ => c.ToString()
-                    };
-                    sb.Append($"[rgb({r},{g},{b})]{ch}[/]");
-                }
-            }
-
-            if (row < _figletLines.Length - 1)
-                sb.Append('\n');
-        }
-
-        // Version tag right-aligned under the figlet
-        if (!string.IsNullOrEmpty(version))
-        {
-            var pad = Math.Max(0, maxWidth - version.Length);
-            sb.Append('\n');
-            sb.Append(new string(' ', pad));
-            sb.Append($"[rgb(140,100,200)]{version}[/]");
-        }
-
-        return sb.ToString();
-    }
+        @" ░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░░▒▓▒░░▒▓░▒▓▒░░▒▓░░▒▓▒",
+        @" ▓░▒▓░░░▒▓░▒░░▓▒░░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░░▒░▓░░▒▓░▒▓░░▒▓" + ResolveVersionLabel()
+    }).ToArray();
 
     private static void PlayMatrixGlitch()
     {

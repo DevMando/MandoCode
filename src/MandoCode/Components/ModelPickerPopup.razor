@@ -1,23 +1,24 @@
 @using Spectre.Console
 @inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
 
-<Panel Border="BoxBorder.Rounded" BorderColor="@(new Color(86, 182, 194))" Title="Models">
+<Panel Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="Models">
     <Rows>
         @if (Picker.Matches.Count == 0)
         {
-            <Markup Content="No matching models" Foreground="Color.Grey" />
+            <Markup Content="No matching models" Foreground="@PaneColors.For(Pane, Color.Grey)" />
         }
         @foreach (var index in VisibleIndices)
         {
             <Box FillWidth="true" Height="1">
                 <Markup Content="@((index == Picker.SelectedIndex ? "› " : "  ") + Picker.Matches[index])"
-                        Foreground="@(index == Picker.SelectedIndex ? Color.Yellow : Color.Grey)" />
+                        Foreground="@(PaneColors.Muted(Pane) ? Color.Grey62 : index == Picker.SelectedIndex ? Color.Yellow : Color.Grey)" />
             </Box>
         }
     </Rows>
 </Panel>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public ModelPickerState Picker { get; set; } = default!;
     private IEnumerable<int> VisibleIndices
     {

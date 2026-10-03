@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell @ref="_chatShell">
+<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -23,10 +23,9 @@
    a single @if gate rather than wrapping a long inline block. *@
 @if (!_setupActive)
 {
-    <HomeView ProjectRoot="@ProjectRoot.ProjectRoot"
-              RuntimeVersion="@Environment.Version.ToString()"
+    <HomeView
+              SupportsVision="@AI.SupportsImageInput"
               OllamaEndpoint="@Config.OllamaEndpoint"
-              ModelName="@Config.GetEffectiveModelName()"
               ConnectionChecked="@_connectionChecked"
               IsConnected="@_isConnected"
               OnboardingStatus="@_onboardingStatus"
@@ -41,7 +40,7 @@
 {
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+@if (_showPrompt && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
@@ -55,7 +54,7 @@
             </RazorConsole.Components.Align>
         </Box>
     }
-    <PromptInput @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
+    <PromptInput @ref="_promptInput" @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
                  ModelPicker="@_modelPicker"
                  OnModelSelected="HandleModelSelected"
                  OnModelPickerCancel="CancelModelPicker"
@@ -154,6 +153,9 @@
 
 @code {
     private AIService AI { get; set; } = default!;
+    private bool _directoryBrowserOpen;
+    private bool _fileExplorerOpen;
+    private TaskCompletionSource<string?>? _directorySelection;
     private MandoCodeConfig Config { get; set; } = default!;
     private TaskPlannerService TaskPlanner { get; set; } = default!;
     private PlanRunnerSelector PlanRunners { get; set; } = default!;
@@ -390,6 +392,8 @@
             if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive;
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
+            if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
+            if (Pane is not null) { Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; }
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
@@ -630,39 +634,46 @@
     /// </summary>
     private async Task HandleModelCommandAsync()
     {
-        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
-        if (!probe.Ok)
+        string[] labeled;
+        Spinner.Start(message: "Loading models...");
+        try
         {
-            AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
-            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
-            return;
-        }
+            var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            if (!probe.Ok)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
 
-        var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
-        if (!fetched.Ok)
-        {
-            AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
-            AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
-            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
-            return;
-        }
-        if (fetched.Models.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
-            AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
-            return;
-        }
+            var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
+            if (!fetched.Ok)
+            {
+                AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
+                AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
+            if (fetched.Models.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
+                return;
+            }
 
-        // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
-        // alphabetical otherwise, badge after each tag, single-space split for
-        // the tag.
-        var labeled = fetched.Models
-            .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
-            .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
-            .Select(m => MandoCodeConfig.IsCloudModel(m)
-                ? $"{m}   (cloud)"
-                : $"{m}   (local)")
-            .ToArray();
+            // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
+            // alphabetical otherwise, badge after each tag, single-space split for
+            // the tag.
+            labeled = fetched.Models
+                .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
+                .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
+                .Select(m => MandoCodeConfig.IsCloudModel(m)
+                    ? $"{m}   (cloud)"
+                    : $"{m}   (local)")
+                .ToArray();
+
+        }
+        finally { Spinner.Stop(); }
 
         string modelTag;
         while (true)
@@ -762,6 +773,20 @@
 
         Config.Save();
 
+        if (parts[0].Equals("showTips", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } tipsRegistry)
+        {
+            foreach (var agent in tipsRegistry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().ShowTips = Config.ShowTips;
+            foreach (var workspace in tipsRegistry.Workspaces) workspace.Refresh();
+        }
+        if (parts[0].Equals("dimUnfocusedAgents", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } dimRegistry)
+        {
+            foreach (var agent in dimRegistry.Workspaces.SelectMany(w => w.Panes))
+            {
+                agent.Services.GetRequiredService<MandoCodeConfig>().DimUnfocusedAgents = Config.DimUnfocusedAgents;
+            }
+            foreach (var workspace in dimRegistry.Workspaces) workspace.Refresh();
+        }
         if (parts[0].Equals("agentNaming", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } registry)
             foreach (var agent in registry.Workspaces.SelectMany(w => w.Panes))
                 agent.Services.GetRequiredService<MandoCodeConfig>().UseAgentNames = Config.UseAgentNames;
@@ -931,7 +956,6 @@
         {
             _modelError = false;
             _modelWarning = null;
-            AnsiConsole.MarkupLine($"[dim]{AI.VisionSupport.Label()}[/]");
         }
     }
 
@@ -1123,6 +1147,30 @@
         return probe.Ok;
     }
 
+    private Task ToggleFileExplorer() => InvokeAsync(async () =>
+    {
+        if (_directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (_isProcessing && !_fileExplorerOpen) return;
+        _fileExplorerOpen = !_fileExplorerOpen;
+        StateHasChanged();
+        if (!_fileExplorerOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private async Task<string?> PickProjectDirectoryAsync()
+    {
+        _directorySelection = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fileExplorerOpen = false;
+        _directoryBrowserOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _directorySelection.Task; }
+        finally
+        {
+            _directoryBrowserOpen = false;
+            _directorySelection = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private void CompleteDirectorySelection(string? path) => _directorySelection?.TrySetResult(path);
     private async Task RunInteractiveLoopAsync()
     {
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
@@ -1243,67 +1291,16 @@
                 }
                 if (command == "help")
                 {
-                    Console.WriteLine();
-                    // Display help (we'll use direct Spectre.Console since HelpDisplay is a component)
-                    var table = new Spectre.Console.Table()
+                    // Append separate entries to the selected pane so the complete reference
+                    // remains scrollable even when it is taller than the terminal viewport.
+                    using var helpOutput = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+                    TuiConsole.MarkupLine("[deepskyblue1]Available commands[/]");
+                    foreach (var entry in SlashCommands.All.Where(entry => SlashCommands.IsAvailable(entry.Key, Config)))
                     {
-                        Border = TableBorder.Rounded
-                    };
-                    table.AddColumn("Command");
-                    table.AddColumn("Description");
-                    table.AddRow("/help", "Show this help message");
-                    table.AddRow("/keybindings", SlashCommands.All["/keybindings"]);
-                    table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
-                    table.AddRow("/model", "Quick switch — pick a different model");
-                    table.AddRow("/config", "Adjust settings — guided wizard");
-                    table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
-                    table.AddRow("/retry", "Retry Ollama connection");
-                    table.AddRow("/agent-new", SlashCommands.All["/agent-new"]);
-                    table.AddRow("/agent-focus [left/right/up/down]", SlashCommands.All["/agent-focus"]);
-                    table.AddRow("/agent-close", SlashCommands.All["/agent-close"]);
-                    table.AddRow("/agent-rename <name>", SlashCommands.All["/agent-rename"]);
-                    table.AddRow("/workspace-new [name]", SlashCommands.All["/workspace-new"]);
-                    table.AddRow("/workspace [name or number]", SlashCommands.All["/workspace"]);
-                    table.AddRow("/workspace-all", SlashCommands.All["/workspace-all"]);
-                    table.AddRow("/workspace-rename <name>", SlashCommands.All["/workspace-rename"]);
-                    table.AddRow("/workspace-close", SlashCommands.All["/workspace-close"]);
-                    table.AddRow("/learn", "Learn about LLMs and local AI models");
-                    table.AddRow("/music", "Play lofi/synthwave coding music");
-                    table.AddRow("/music-stop", "Stop music playback");
-                    table.AddRow("/music-pause", "Pause/resume music");
-                    table.AddRow("/music-next", "Skip to next track");
-                    table.AddRow("/music-vol", "Set volume (0-100)");
-                    table.AddRow("/music-lofi", "Switch to lofi genre");
-                    table.AddRow("/music-synthwave", "Switch to synthwave genre");
-                    table.AddRow("/music-list", "Show available tracks");
-                    table.AddRow("/command", "Run a shell command (also: !<cmd>)");
-                    table.AddRow("/copy", "Copy last AI response to clipboard");
-                    table.AddRow("/copy-code", "Copy code blocks from last response");
-                    table.AddRow("/skills", "List installed skills (auto-invoked when relevant)");
-                    table.AddRow("/force-skill", "Override: force a specific skill to run now");
-                    table.AddRow("/mcp", "List MCP servers with status and tool counts");
-                    table.AddRow("/mcp add", "Interactively add a new MCP server");
-                    table.AddRow("/mcp remove <name>", "Remove an MCP server from config");
-                    table.AddRow("/mcp tools <server>", "List tools exposed by connected MCP servers (server optional)");
-                    table.AddRow("/mcp-reload", "Restart MCP servers and re-register their tools");
-                    table.AddRow("/plan <goal>", "Force a step-by-step plan (no goal shows an unfinished plan)");
-                    table.AddRow("/plan-resume", "Continue an unfinished plan");
-                    table.AddRow("/plan-discard", "Forget an unfinished plan");
-                    table.AddRow("/compact", "Compress context into a recap; keeps the transcript");
-                    table.AddRow("/clear", "Wipe all conversation context and start fresh");
-                    table.AddRow("/history", "Browse this session's conversation, filtered as you type");
-                    table.AddRow("/exit", "Exit MandoCode");
-                    AnsiConsole.Write(table);
-                    AnsiConsole.WriteLine();
-                    AnsiConsole.WriteLine("Examples:");
-                    AnsiConsole.WriteLine("  • What files are in this project?");
-                    AnsiConsole.WriteLine("  • Show me the contents of Program.cs");
-                    AnsiConsole.WriteLine("  • Refactor the Main method to use async/await");
-                    AnsiConsole.WriteLine("  • What's the current git status?");
-                    AnsiConsole.WriteLine();
+                        TuiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(entry.Key)}[/]  {Spectre.Console.Markup.Escape(entry.Value)}");
+                    }
                     continue;
                 }
-
                 if (command == "config" || command.StartsWith("config "))
                 {
                     // "/config set <key> <value>" — inline setter, no wizard round-trip.
@@ -1331,6 +1328,43 @@
                     continue;
                 }
 
+                if (command == "agent-file-explorer")
+                {
+                    _fileExplorerOpen = !_fileExplorerOpen;
+                    await InvokeAsync(StateHasChanged);
+                    continue;
+                }
+                if (command == "change-directory" || command.StartsWith("change-directory "))
+                {
+                    var rawArgs = input.Trim()["/change-directory".Length..].Trim();
+                    string? target;
+                    try { target = rawArgs.Length > 0 ? rawArgs : await PickProjectDirectoryAsync(); }
+                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or InvalidOperationException or System.IO.IOException)
+                    {
+                        AnsiConsole.WriteLine($"Couldn't open the folder picker: {ex.Message}");
+                        continue;
+                    }
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        try
+                        {
+                            var directory = Shell.ChangeDirectory(target);
+                            Skills.Reload();
+                            await AI.RefreshSettingsAsync(Config);
+                            AI.AppendUserNote(
+                                $"[Project root changed to: {directory}. Earlier messages refer to the previous folder — " +
+                                "re-read any file you need rather than reusing paths or contents from before this point.]");
+                            AnsiConsole.WriteLine($"Changed directory to {directory}");
+                            AnsiConsole.WriteLine("Switching to the new project — this conversation is kept.");
+                        }
+                        catch (Exception ex) when (ex is System.IO.IOException or ArgumentException or UnauthorizedAccessException)
+                        {
+                            AnsiConsole.WriteLine($"Couldn't change directory: {ex.Message}");
+                        }
+                        await InvokeAsync(StateHasChanged);
+                    }
+                    continue;
+                }
                 if (command == "model")
                 {
                     await HandleModelCommandAsync();
@@ -1544,12 +1578,29 @@
     }
     private const string ChatComposerKey = "chat-composer";
     private ChatShell? _chatShell;
+    private PromptInput? _promptInput;
     private void ScrollConversation(string key) => _chatShell?.Scroll(key);
     private void CancelCurrentRequest() => _requestCts?.Cancel();
 
     private async Task HandleVdomSubmit(string input)
     {
         var rename = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (rename.Length > 0 && (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/tips-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleConfigSetCommandAsync("showTips " + (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase) ? "on" : "off"));
+            return;
+        }
+        if (rename.Length > 0 && (rename[0].Equals("/agent-dim", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            var value = rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase) ? "on"
+                : rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase) ? "off"
+                : rename.Length > 1 ? rename[1] : Config.DimUnfocusedAgents ? "off" : "on";
+            await HandleConfigSetCommandAsync("dimUnfocusedAgents " + value);
+            return;
+        }
         if (Pane is not null && rename.Length > 0 && rename[0].Equals("/agent-rename", StringComparison.OrdinalIgnoreCase))
         {
             if (_isProcessing || Pane.IsBusy?.Invoke() == true)
@@ -1860,10 +1911,9 @@
 
     private string ProcessFileReferences(string input)
     {
-        var pattern = @"@([\w.\-/\\]+[\w.])";
-        var matches = Regex.Matches(input, pattern);
+        var matches = FileReferenceToken.Paths(input).ToArray();
 
-        if (matches.Count == 0)
+        if (matches.Length == 0)
             return input;
 
         var contextBlocks = new System.Text.StringBuilder();
@@ -1871,9 +1921,8 @@
         int totalExpansionChars = 0;
         int skippedForBudget = 0;
 
-        foreach (Match match in matches)
+        foreach (var filePath in matches)
         {
-            var filePath = match.Groups[1].Value;
 
             // Skip duplicates
             if (!referencedFiles.Add(filePath))
@@ -3226,7 +3275,7 @@
             AnsiConsole.MarkupLine($"  • User skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedUserSkillsDirectory)}[/]");
             AnsiConsole.MarkupLine($"  • Project skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedProjectSkillsDirectory)}[/]");
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[dim]Tip: project skills are also discovered by walking up from the project root — put them at the repo root if you launch from a subdirectory.[/]");
+            if (Config.ShowTips) AnsiConsole.MarkupLine("[dim]Tip: project skills are also discovered by walking up from the project root — put them at the repo root if you launch from a subdirectory.[/]");
             AnsiConsole.WriteLine();
             return;
         }
@@ -4154,6 +4203,7 @@
 
     public void Dispose()
     {
+        _directorySelection?.TrySetResult(null);
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         StopPane();
         StopCancelKeyListener();

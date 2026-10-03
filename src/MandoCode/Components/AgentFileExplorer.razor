@@ -1,0 +1,150 @@
+@using Spectre.Console
+@using System.Diagnostics
+@inject RazorConsole.Core.Focus.FocusManager Focus
+@implements IDisposable
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="Files" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+    <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" data-focus-order="0" @onkeydown="Key">
+        <Rows>
+            <Markup Content="@DirectoryPathCaption.Fit(Root, Math.Max(1, Width - 4))" Foreground="@PaneColors.For(Pane, Color.Purple)" />
+            <div data-focusable="false" @onclick="Close"><Markup Content="× Close (Esc / Alt+E)" Foreground="@PaneColors.For(Pane, Color.Grey85)" /></div>
+            @for (var row = 0; row < VisibleRows; row++)
+            {
+                var index = _start + row;
+                var item = index < _entries.Count ? _entries[index] : null;
+                <div @key="row" data-focusable="false" @onclick="@(() => Activate(index, false))">
+                    <Markup Content="@Caption(item, index)" Foreground="@(index == _selected ? Color.Black : PaneColors.For(Pane, Color.Grey85))"
+                            Background="@(item is not null && index == _selected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+                </div>
+            }
+            <Markup Content="@WorkspaceTabWindow.Fit(_error, Math.Max(1, Width - 4))" Foreground="@PaneColors.For(Pane, Color.Yellow)" />
+        </Rows>
+    </div>
+</Box>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+    private async Task FocusExplorerAsync()
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (Pane is not null) Pane.FocusKey = _focusKey;
+        await Focus.FocusAsync(_focusKey);
+        ExplorerFocus?.SetPromptFocused(false);
+    }
+    [Parameter] public string Root { get; set; } = "";
+    [Parameter] public int Width { get; set; } = 40;
+    [Parameter] public int Height { get; set; } = 20;
+    [Parameter] public EventCallback OnClose { get; set; }
+    private AgentFileTree? _tree;
+    private IReadOnlyList<AgentFileTree.Entry> _entries = [];
+    private readonly string _focusKey = "agent-files-" + Guid.NewGuid().ToString("N");
+    private int _selected;
+    private int _start;
+    private bool _loading;
+    private string _error = "";
+    private int VisibleRows => Math.Max(1, Height - 5);
+    private sealed record Draft(AgentFileTree Tree, int Selected);
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ExplorerFocus is not null) ExplorerFocus.FocusExplorer = FocusExplorerAsync;
+        if (_tree?.Root == Root) { Reveal(); return; }
+        if (_tree is null && Pane?.PresentationState.GetValueOrDefault("file-explorer") is Draft saved && saved.Tree.Root == Root)
+        {
+            _tree = saved.Tree;
+            _entries = _tree.Entries;
+            _selected = saved.Selected;
+            Reveal();
+            return;
+        }
+        _tree = new(Root);
+        await Refresh();
+    }
+    public void Dispose()
+    {
+        if (Pane is not null && _tree is not null) Pane.PresentationState["file-explorer"] = new Draft(_tree, _selected);
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Focus.IsFocused(_focusKey)) ExplorerFocus?.SetPromptFocused(false);
+        if (Pane is not null && (firstRender || Focus.IsFocused(_focusKey))) Pane.FocusKey = _focusKey;
+        if ((Pane is null || Pane.Active) &&
+            (firstRender || (ExplorerFocus is { Active: true, PromptFocused: false } && !Focus.IsFocused(_focusKey))))
+            await FocusExplorerAsync();
+    }
+    private string Caption(AgentFileTree.Entry? item, int index)
+    {
+        if (item is null) return " ";
+        var name = Path.GetFileName(item.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(name)) name = item.Path;
+        var indent = new string(' ', Math.Min(item.Depth * 2, Math.Max(0, Width - 12)));
+        var icon = item.IsDirectory ? (_tree!.IsExpanded(item.Path) ? "▾ 📁 " : "▸ 📁 ") : "  📄 ";
+        return WorkspaceTabWindow.Fit((index == _selected ? "> " : "  ") + indent + icon + name, Math.Max(1, Width - 4));
+    }
+    private void Reveal()
+    {
+        _selected = Math.Clamp(_selected, 0, Math.Max(0, _entries.Count - 1));
+        _start = Math.Clamp(_selected - VisibleRows + 1, 0, Math.Max(0, _entries.Count - VisibleRows));
+    }
+    private async Task Refresh()
+    {
+        if (_tree is null || _loading) return;
+        _loading = true;
+        try { await _tree.RefreshAsync(); _entries = _tree.Entries; _error = ""; Reveal(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+    private async Task Activate(int index, bool external)
+    {
+        if (_loading || index < 0 || index >= _entries.Count) return;
+        await FocusExplorerAsync();
+        _selected = index;
+        var item = _entries[index];
+        _loading = true;
+        try
+        {
+            if (item.IsDirectory && !external)
+            {
+                await _tree!.ToggleAsync(item.Path);
+                _entries = _tree.Entries;
+            }
+            else if (!external)
+            {
+                if (ExplorerFocus?.InsertFileReference is not { } insert) throw new InvalidOperationException("The chat prompt is unavailable.");
+                await insert(Path.GetRelativePath(Root, item.Path).Replace(Path.DirectorySeparatorChar, '/'));
+            }
+            else
+            {
+                var start = OperatingSystem.IsWindows() ? new ProcessStartInfo(item.Path) { UseShellExecute = true }
+                    : new ProcessStartInfo(OperatingSystem.IsMacOS() ? "open" : "xdg-open") { UseShellExecute = false };
+                if (!OperatingSystem.IsWindows()) start.ArgumentList.Add(item.Path);
+                using var process = Process.Start(start);
+            }
+            _error = "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException) { _error = ex.Message; }
+        finally { _loading = false; Reveal(); }
+    }
+    private Task Close() => OnClose.InvokeAsync();
+    private async Task Key(KeyboardEventArgs key)
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (key.Key == "Tab" && ExplorerFocus?.Active == true) { await ExplorerFocus.ToggleAsync(); return; }
+        if (Pane is not null) Pane.FocusKey = _focusKey;
+        ExplorerFocus?.SetPromptFocused(false);
+        if (Pane?.Workspace.Key(Pane, key) == true) return;
+        switch (key.Key)
+        {
+            case "Escape": await Close(); break;
+            case "Enter": case "Return": await Activate(_selected, key.ShiftKey); break;
+            case "ArrowUp": case "UpArrow": _selected--; break;
+            case "ArrowDown": case "DownArrow": _selected++; break;
+            case "PageUp": _selected -= VisibleRows; break;
+            case "PageDown": _selected += VisibleRows; break;
+            case "Home": _selected = 0; break;
+            case "End": _selected = _entries.Count - 1; break;
+            case "r": case "R": await Refresh(); break;
+        }
+        Reveal();
+    }
+}

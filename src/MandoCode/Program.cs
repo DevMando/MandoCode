@@ -101,7 +101,12 @@ class Program
     internal static void RegisterAgentServices(IServiceCollection services, MandoCodeConfig config, string projectRoot)
     {
         // Register configuration per agent
-        services.AddScoped(_ => System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!);
+        services.AddScoped(_ =>
+        {
+            var copy = System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;
+            copy.AllowPersistence = config.AllowPersistence;
+            return copy;
+        });
 
         // Register ProjectRootAccessor per agent
         services.AddScoped(_ => new ProjectRootAccessor(projectRoot));
@@ -227,7 +232,8 @@ class Program
         {
             var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
             var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
-            return new InputStateMachine(commands, fileProvider);
+            var config = provider.GetRequiredService<MandoCodeConfig>();
+            return new InputStateMachine(commands, fileProvider, command => SlashCommands.IsAvailable(command, config));
         });
 
         // Retain rich markdown/tool renderables inside the widget conversation.

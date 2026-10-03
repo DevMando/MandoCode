@@ -20,6 +20,279 @@ namespace MandoCode.Tests;
 [Collection("TUI console routing")]
 public class WorkspaceRegistryTests
 {
+    [Theory]
+    [InlineData(120)]
+    [InlineData(40)]
+    [InlineData(12)]
+    public void AsciiArt_ClipsEachRowWithoutWrapping_AndPreservesLiteralText(int width)
+    {
+        var lines = new[] { " ███╗   ███╗ █████╗ ███╗   ██╗", "[literal] ░▒▓░░▒▓▒░░▒▓░░▒▓▒", " ▓░▒▓░░░▒▓░▒░░▓▒ v0.16.0" };
+        var writer = new StringWriter();
+        var console = Spectre.Console.AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors });
+        console.Profile.Width = width;
+        console.Write(new AsciiArtRenderable(lines));
+        var output = writer.ToString().Replace("\r", "").TrimEnd('\n').Split('\n');
+        Assert.Equal(lines.Length, output.Length);
+        for (var row = 0; row < lines.Length; row++)
+            Assert.Equal(lines[row][..Math.Min(lines[row].Length, width)], output[row]);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task ConfigFlow_WithMultipleAgents_EnterCompletesActualMenu(int count)
+    {
+        await using var services = Services();
+        var registry = services.GetRequiredService<WorkspaceRegistry>();
+        for (var i = 0; i < count; i++) registry.Active.Add();
+        var selected = registry.Active.SelectedPane!;
+        var rendererType = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
+        var instance = ActivatorUtilities.CreateInstance(services, rendererType, new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
+        await using var renderer = (IAsyncDisposable)instance;
+        RenderFragment<AgentPane> body = pane => builder =>
+        {
+            builder.OpenComponent<ConfigFlowApp>(0);
+            builder.AddComponentReferenceCapture(1, component => pane.PresentationState["config-app"] = component);
+            builder.CloseComponent();
+        };
+        var mount = rendererType.GetMethods().Single(method => method.Name == "MountComponentAsync" && method.IsGenericMethodDefinition);
+        await (Task)mount.MakeGenericMethod(typeof(TerminalWorkspaceView)).Invoke(instance, new object[]
+        {
+            ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None
+        })!;
+        var dispatcher = (Dispatcher)rendererType.GetProperty("Dispatcher")!.GetValue(instance)!;
+        var app = (ConfigFlowApp)selected.PresentationState["config-app"];
+        Task? pending = null;
+        await dispatcher.InvokeAsync(() => { pending = app.OpenConfig(); });
+        await Task.Delay(350);
+        var snapshot = rendererType.GetMethod("RefreshSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, null)!;
+        var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
+        var menu = Flatten(root).Single(node => (node.Attributes.GetValueOrDefault("data-focus-key") ?? "").StartsWith("approval-"));
+        Assert.Equal("true", menu.Attributes.GetValueOrDefault("data-focusable"));
+        Assert.Equal(selected.FocusKey, menu.Attributes["data-focus-key"]);
+        Assert.Equal(selected.FocusKey, menu.Key);
+        var focus = services.GetRequiredService<RazorConsole.Core.Focus.FocusManager>();
+        typeof(RazorConsole.Core.Focus.FocusManager).GetMethod("UpdateFocusTargets", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(focus, new[] { snapshot });
+        await focus.FocusAsync(selected.FocusKey!);
+        Assert.True(focus.IsFocused(menu.Key!));
+        var handler = menu.Events.Single(evt => evt.Name == "onkeydown").HandlerId;
+        // Choose "View current configuration" in the actual /config menu.
+        var dispatch = rendererType.GetMethod("DispatchEventAsync", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, new[] { typeof(ulong), typeof(EventArgs) })!;
+        await (Task)dispatch.Invoke(instance, new object[] { handler, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "ArrowDown" } })!;
+        await (Task)dispatch.Invoke(instance, new object[] { handler, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" } })!;
+        await pending!.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Same(selected, registry.Active.SelectedPane);
+        Assert.True(selected.Active);
+    }
+
+    public sealed class ConfigFlowApp : App
+    {
+        protected override void OnInitialized()
+        {
+            base.OnInitialized();
+            typeof(App).GetField("_showPrompt", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(this, true);
+        }
+        protected override Task OnAfterRenderAsync(bool firstRender) => Task.CompletedTask;
+        public Task OpenConfig() => (Task)typeof(App).GetMethod("HandleConfigCommandAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(this, null)!;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SelectorOwnsEnter_AndOnlyActivePaneIsFocusable(bool active)
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var first = workspace.Add();
+        workspace.Add();
+        if (active) workspace.Focus(first);
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            RenderFragment child = builder =>
+            {
+                builder.OpenComponent<ApprovalSelect>(0);
+                builder.AddAttribute(1, "Options", new[] { new ApprovalSelect.Option("Cancel", Color.Grey) });
+                builder.CloseComponent();
+            };
+            var rendered = await renderer.RenderComponentAsync<CascadingValue<AgentPane>>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Value"] = first, ["ChildContent"] = child
+            }));
+            var document = new HtmlDocument();
+            document.LoadHtml(rendered.ToHtmlString());
+            var menu = document.DocumentNode.SelectSingleNode("//*[@data-input-managed='true']");
+            Assert.NotNull(menu);
+            Assert.Equal(active ? "true" : "false", menu.GetAttributeValue("data-focusable", ""));
+        });
+    }
+
+    [Fact]
+    public async Task MenuEnterAndStaleInput_PreserveSelectedAgent()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var inactive = workspace.Add();
+        var selected = workspace.Add();
+        var enter = new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" };
+        var submitted = 0;
+        var menu = new ApprovalSelect { Pane = inactive };
+        typeof(ApprovalSelect).GetProperty(nameof(ApprovalSelect.Options))!.SetValue(menu, new[] { new ApprovalSelect.Option("Cancel", Color.Grey) });
+        typeof(ApprovalSelect).GetProperty(nameof(ApprovalSelect.OnSubmit))!.SetValue(menu, EventCallback.Factory.Create<string>(this, _ => submitted++));
+        var menuKey = typeof(ApprovalSelect).GetMethod("HandleKeyDown", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await (Task)menuKey.Invoke(menu, new object[] { enter })!;
+        Assert.Equal(0, submitted);
+        Assert.Same(selected, workspace.SelectedPane);
+        var prompt = new PromptInput { Pane = inactive };
+        var preview = typeof(PromptInput).GetMethod("PreviewKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.True(await (Task<bool>)preview.Invoke(prompt, new object[] { enter })!);
+        var submit = typeof(PromptInput).GetMethod("HandleSubmit", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await (Task)submit.Invoke(prompt, new object[] { "/config" })!;
+        Assert.Same(selected, workspace.SelectedPane);
+        menu.Pane = selected;
+        await (Task)menuKey.Invoke(menu, new object[] { enter })!;
+        Assert.Equal(1, submitted);
+        Assert.True(selected.Active);
+        Assert.False(inactive.Active);
+    }
+
+    [Theory]
+    [InlineData("# branch.head main\0# branch.oid abcdef123456\0", "main", false, false, 0, 0)]
+    [InlineData("# branch.head main\0# branch.ab +2 -1\0? new file.txt\0", "main", true, false, 2, 1)]
+    [InlineData("# branch.head feature/test\0u UU conflict\0", "feature/test", true, true, 0, 0)]
+    [InlineData("# branch.head (detached)\0# branch.oid abcdef123456\0", "abcdef1", false, false, 0, 0)]
+    [InlineData("# branch.head main\02 R. renamed\0u original file name\0", "main", true, false, 0, 0)]
+    public void GitStatus_ParsesDesktopStates(string output, string branch, bool dirty, bool conflict, int ahead, int behind)
+    {
+        var status = GitPaneStatus.Parse(output);
+        Assert.NotNull(status);
+        Assert.Equal(branch, status.Branch);
+        Assert.Equal(dirty, status.Dirty);
+        Assert.Equal(conflict, status.Conflicted);
+        Assert.Equal(ahead, status.Ahead);
+        Assert.Equal(behind, status.Behind);
+    }
+
+    [Fact]
+    public void GitStatus_HidesUnavailableRepository() => Assert.Null(GitPaneStatus.Parse(""));
+
+    [Fact]
+    public async Task TipsAutocomplete_FollowsSavedPreference()
+    {
+        await using var services = Services();
+        var pane = services.GetRequiredService<WorkspaceRegistry>().Active.Add();
+        var config = pane.Services.GetRequiredService<MandoCodeConfig>();
+        var input = pane.Services.GetRequiredService<InputStateMachine>();
+        Assert.True(config.ShowTips);
+        Assert.Contains("/tips-off", input.GetAllCommands());
+        Assert.DoesNotContain("/tips-on", input.GetAllCommands());
+        Assert.True(ConfigKeySetter.TrySet(config, "showTips", "off").Ok);
+        Assert.Contains("/tips-on", input.GetAllCommands());
+        Assert.DoesNotContain("/tips-off", input.GetAllCommands());
+        Assert.False(System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!.ShowTips);
+        Assert.False(ConfigKeySetter.TrySet(config, "showTips", "invalid").Ok);
+        Assert.True(ConfigKeySetter.TrySet(config, "showTips", "on").Ok);
+        Assert.Contains("/tips-off", input.GetAllCommands());
+    }
+
+    [Fact]
+    public async Task DimmingAutocomplete_FollowsCurrentSetting_AndPreferenceIsPersisted()
+    {
+        await using var services = Services();
+        var pane = services.GetRequiredService<WorkspaceRegistry>().Active.Add();
+        var config = pane.Services.GetRequiredService<MandoCodeConfig>();
+        var input = pane.Services.GetRequiredService<InputStateMachine>();
+        Assert.True(config.DimUnfocusedAgents);
+        Assert.Contains("/agent-dim-off", input.GetAllCommands());
+        Assert.DoesNotContain("/agent-dim-on", input.GetAllCommands());
+        Assert.DoesNotContain("/agent-dim", input.GetAllCommands());
+        Assert.True(ConfigKeySetter.TrySet(config, "dimUnfocusedAgents", "off").Ok);
+        Assert.Contains("/agent-dim-on", input.GetAllCommands());
+        Assert.DoesNotContain("/agent-dim-off", input.GetAllCommands());
+        var restored = System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;
+        Assert.False(restored.DimUnfocusedAgents);
+    }
+
+    [Fact]
+    public async Task NarrowPane_WrapsTranscriptToItsWidth_AndDimmingCanBeDisabled()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var pane = workspace.Add();
+        workspace.Add();
+        pane.Width = 32;
+        var config = pane.Services.GetRequiredService<MandoCodeConfig>();
+        Assert.True(ConfigKeySetter.TrySet(config, "dimUnfocusedAgents", "off").Ok);
+        Assert.False(PaneColors.Muted(pane));
+        Assert.Equal(Color.Blue, PaneColors.For(pane, Color.Blue));
+        Assert.False(System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!.DimUnfocusedAgents);
+        Assert.True(ConfigKeySetter.TrySet(config, "dimUnfocusedAgents", "on").Ok);
+        Assert.True(PaneColors.Muted(pane));
+        Assert.False(ConfigKeySetter.TrySet(config, "dimUnfocusedAgents", "invalid").Ok);
+        var words = Enumerable.Range(1, 20).Select(i => $"word{i:00}").ToArray();
+        var writer = new StringWriter();
+        var console = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors });
+        console.Profile.Width = 120;
+        console.Write(PaneColors.Render(MarkdownHtmlRenderer.BuildRenderable(string.Join(" ", words)), pane));
+        var output = writer.ToString();
+        Assert.All(words, word => Assert.Contains(word, output));
+        Assert.All(output.Split('\n'), line => Assert.True(line.TrimEnd('\r').Length <= 30, line));
+    }
+
+    [Fact]
+    public async Task UnfocusedColors_RestoreOriginalOutputAndKeepErrorsVisible()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var pane = workspace.Add();
+        var rich = PaneColors.Render(new Markup("[blue]reply[/] [red]error[/]"), pane);
+        string PaintColor(Spectre.Console.Rendering.IRenderable renderable)
+        {
+            var writer = new StringWriter();
+            var console = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.Yes, ColorSystem = ColorSystemSupport.TrueColor });
+            console.Profile.Width = 120;
+            console.Write(renderable);
+            return writer.ToString();
+        }
+        var original = PaintColor(rich);
+        workspace.Add();
+        Assert.Equal(Color.Grey62, PaneColors.For(pane, Color.Blue));
+        Assert.Equal(Color.Red, PaneColors.For(pane, Color.Red));
+        var muted = PaintColor(rich);
+        Assert.NotEqual(original, muted);
+        Assert.Contains("reply", muted);
+        Assert.Contains("error", muted);
+        workspace.Focus(pane);
+        Assert.Equal(Color.Blue, PaneColors.For(pane, Color.Blue));
+        Assert.Equal(original, PaintColor(rich));
+    }
+
+    [Fact]
+    public async Task PaneModelButton_FocusesItsAgentAndDoesNotInterruptBusyInput()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var first = workspace.Add();
+        workspace.Add();
+        string? command = null;
+        first.SubmitCommand = value => { command = value; return Task.CompletedTask; };
+        var component = new AgentPaneContent();
+        typeof(AgentPaneContent).GetProperty("Pane")!.SetValue(component, first);
+        var click = typeof(AgentPaneContent).GetMethod("PickModel", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        first.IsBusy = () => true;
+        await (Task)click.Invoke(component, null)!;
+        Assert.Null(command);
+        first.IsBusy = () => false;
+        first.IsAwaitingInput = () => true;
+        await (Task)click.Invoke(component, null)!;
+        Assert.Null(command);
+        first.IsAwaitingInput = () => false;
+        await (Task)click.Invoke(component, null)!;
+        Assert.Equal("/model", command);
+        Assert.Same(first, workspace.SelectedPane);
+    }
+
     [Fact]
     public async Task RenameAgent_PreservesHistoryAndRefreshesPromptIdentity()
     {
@@ -80,7 +353,7 @@ public class WorkspaceRegistryTests
         services.AddRazorConsoleServices();
         services.AddSingleton<ITerminalViewport>(new Viewport());
         services.AddSingleton<IHostApplicationLifetime, Lifetime>();
-        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false }, Path.GetTempPath());
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
 

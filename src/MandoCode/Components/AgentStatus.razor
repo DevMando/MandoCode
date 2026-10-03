@@ -5,11 +5,11 @@
 <Flex Direction="RazorConsole.Core.Renderables.FlexDirection.Column" FillWidth="true">
     @if (State.Running)
     {
-        <Box FillWidth="true" Height="1"><Markup Content="@Clip(State.Activity)" /></Box>
-        <Box FillWidth="true" Height="1"><Spinner SpinnerType="@State.Spinner" Message="@SpinnerMessage" Style="#c678dd" /></Box>
+        <Box FillWidth="true" Height="1"><Markup Content="@Clip(State.Activity)" Foreground="@(PaneColors.Muted(Pane) ? Color.Grey62 : Color.Default)" /></Box>
+        <Box FillWidth="true" Height="1"><Spinner SpinnerType="@State.Spinner" Message="@SpinnerMessage" Style="@(PaneColors.Muted(Pane) ? "grey62" : "#c678dd")" /></Box>
         @if (PreviewLines > 0 && !string.IsNullOrWhiteSpace(State.Preview))
         {
-            <Box FillWidth="true" Height="@PreviewLines"><Markup Content="@Preview" /></Box>
+            <Box FillWidth="true" Height="@PreviewLines"><Markup Content="@Preview" Foreground="@(PaneColors.Muted(Pane) ? Color.Grey62 : Color.Default)" /></Box>
         }
     }
 </Flex>

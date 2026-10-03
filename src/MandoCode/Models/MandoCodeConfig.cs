@@ -165,6 +165,9 @@ public class MandoCodeConfig
 
     /// <summary>Use Desktop-style callsigns for newly created CLI agents; false uses numbers.</summary>
     public bool UseAgentNames { get; set; } = true;
+    public bool DimUnfocusedAgents { get; set; } = true;
+    public bool ShowTips { get; set; } = true;
+    [JsonIgnore] public bool AllowPersistence { get; set; } = true;
 
     /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
@@ -538,6 +541,7 @@ public class MandoCodeConfig
     /// </summary>
     public void Save(string? configPath = null)
     {
+        if (!AllowPersistence) return;
         configPath ??= GetDefaultConfigPath();
 
         try

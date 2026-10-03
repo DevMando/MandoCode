@@ -30,7 +30,7 @@ public class AgentWorkspaceTests
         registrations.AddRazorConsoleServices();
         registrations.AddSingleton<ITerminalViewport>(new FixedViewport());
         registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
-        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false }, Path.GetTempPath());
         await using var services = registrations.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         var workspace = services.GetRequiredService<AgentWorkspace>();
         for (var i = 0; i < count; i++) workspace.Add();
@@ -106,7 +106,7 @@ public class AgentWorkspaceTests
         registrations.AddRazorConsoleServices();
         registrations.AddSingleton<ITerminalViewport>(new FixedViewport());
         registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
-        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false }, Path.GetTempPath());
         await using var services = registrations.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         var workspace = services.GetRequiredService<AgentWorkspace>();
         var first = workspace.Add();
@@ -122,8 +122,8 @@ public class AgentWorkspaceTests
             Assert.DoesNotContain("+ New", html);
             Assert.Equal(count > 1 ? 58 : 120, first.Width);
             Assert.Equal(count > 1 ? 58 : 120, second.Width);
-            Assert.Equal(count == 4 ? 13 : count == 1 ? 30 : 28, first.Height);
-            Assert.Equal(count > 2 ? 13 : count == 1 ? 30 : 28, second.Height);
+            Assert.Equal(count == 4 ? 12 : count == 1 ? 29 : 27, first.Height);
+            Assert.Equal(count > 2 ? 12 : count == 1 ? 29 : 27, second.Height);
             Assert.Equal(count, workspace.Panes.Count);
             foreach (var pane in workspace.Panes.Where(_ => count > 1)) Assert.Contains($"Agent {pane.Id}", html);
             var document = new HtmlDocument();
@@ -177,7 +177,7 @@ public class AgentWorkspaceTests
                     workspace.Close(removed);
                 }
                 await Task.Yield();
-                Assert.Equal(28, survivor.Height);
+                Assert.Equal(27, survivor.Height);
                 Assert.Same(survivorConfig, survivor.Services.GetRequiredService<MandoCodeConfig>());
                 Assert.Single(survivor.Session.Snapshot().Entries);
                 document.LoadHtml(root.ToHtmlString());
@@ -232,7 +232,7 @@ public class AgentWorkspaceTests
     private static ServiceProvider Services()
     {
         var services = new ServiceCollection();
-        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false }, Path.GetTempPath());
+        Program.RegisterAgentServices(services, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false }, Path.GetTempPath());
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
 
@@ -330,10 +330,19 @@ public class AgentWorkspaceTests
         Assert.True(first.Active);
         Assert.True(workspace.Key(first, new KeyboardEventArgs { Key = "ArrowRight", AltKey = true }));
         Assert.True(second.Active);
-        workspace.Key(second, new KeyboardEventArgs { Key = "ArrowDown", AltKey = true });
-        Assert.True(workspace.Panes[2].Active);
-        workspace.Key(workspace.Panes[2], new KeyboardEventArgs { Key = "ArrowUp", AltKey = true });
+        Assert.False(workspace.Key(second, new KeyboardEventArgs { Key = "ArrowDown", AltKey = true }));
+        Assert.False(workspace.Key(second, new KeyboardEventArgs { Key = "ArrowUp", AltKey = true }));
         Assert.True(second.Active);
+        workspace.Key(second, new KeyboardEventArgs { Key = "ArrowRight", AltKey = true });
+        Assert.True(workspace.Panes[2].Active);
+        workspace.Key(workspace.Panes[2], new KeyboardEventArgs { Key = "ArrowLeft", AltKey = true });
+        Assert.True(second.Active);
+        workspace.Focus(workspace.Panes[3]);
+        workspace.Key(workspace.Panes[3], new KeyboardEventArgs { Key = "ArrowRight", AltKey = true });
+        Assert.True(first.Active);
+        workspace.Key(first, new KeyboardEventArgs { Key = "ArrowLeft", AltKey = true });
+        Assert.True(workspace.Panes[3].Active);
+        workspace.Focus(second);
         second.IsBusy = () => true;
         workspace.Command(second, "/agent-close");
         Assert.Equal(4, workspace.Panes.Count);

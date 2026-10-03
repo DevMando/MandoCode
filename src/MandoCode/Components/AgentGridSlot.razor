@@ -3,9 +3,9 @@
 @if (Pane is not null)
 {
     <Box Width="@PaneWidth" Height="@PaneHeight"
-         Border="@(Pane is not null && Workspace.Panes.Count > 1 ? BoxBorder.Rounded : BoxBorder.None)"
+         Border="@(Workspace.Panes.Count > 1 ? BoxBorder.Rounded : BoxBorder.None)"
          BorderColor="@(Pane?.Active == true ? Color.Green : Color.Grey)"
-         Title="@(Pane is not null && Workspace.Panes.Count > 1 ? $"{Pane.Name}{(Pane.Active ? " · active" : "")}" : "")">
+         Title="">
         @if (Pane is { } pane)
         {
             <AgentPaneContent @key="pane.Id" Pane="pane" AgentBody="AgentBody" />
