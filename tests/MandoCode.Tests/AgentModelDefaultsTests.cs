@@ -7,6 +7,38 @@ namespace MandoCode.Tests;
 public class AgentModelDefaultsTests
 {
     [Fact]
+    public void PromoteCopiesAgentSettingsToNewAgentsWithoutChangingOtherAgents()
+    {
+        var global = new MandoCodeConfig { ModelName = "original:cloud", Temperature = 0.2, AllowPersistence = false };
+        var defaults = new AgentModelDefaults(global);
+        var selected = new MandoCodeConfig { ModelName = "selected:cloud", Temperature = 0.7, MaxTokens = 8192 };
+        var other = new MandoCodeConfig { ModelName = "other:cloud", Temperature = 0.4 };
+        defaults.Promote(selected, new[] { selected, other });
+        var next = new MandoCodeConfig();
+        defaults.Apply(next);
+        Assert.Equal("selected:cloud", next.ModelName);
+        Assert.Equal(0.7, next.Temperature);
+        Assert.Equal(8192, next.MaxTokens);
+        Assert.Equal("other:cloud", other.ModelName);
+        Assert.Equal(0.4, other.Temperature);
+        Assert.False(defaults.IsCustomized(selected));
+        Assert.True(defaults.IsCustomized(other));
+    }
+
+    [Fact]
+    public void GlobalConfigChangesUpdateOnlyTheRequestedDefaultField()
+    {
+        var global = new MandoCodeConfig { Temperature = 0.2, MaxTokens = 4096, AllowPersistence = false };
+        var defaults = new AgentModelDefaults(global);
+        var agent = new MandoCodeConfig { Temperature = 0.9, MaxTokens = 32768 };
+        defaults.UpdateSetting("maxTokens", "8192", new[] { agent });
+        Assert.Equal(0.2, defaults.Snapshot().Temperature);
+        Assert.Equal(8192, defaults.Snapshot().MaxTokens);
+        Assert.Equal(0.9, agent.Temperature);
+        Assert.Equal(32768, agent.MaxTokens);
+        Assert.Equal("8192", agent.DefaultAgentOptions!["maxTokens"]);
+    }
+    [Fact]
     public async Task ModelSelection_OnlyOneConcurrentFlowCanEnterPerAgent()
     {
         var gate = new AgentModelSelectionGate();

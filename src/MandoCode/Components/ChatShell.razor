@@ -49,6 +49,12 @@
                 <AgentHistoryBrowser Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnHistoryClose" OnRestore="OnHistoryRestore" />
             </Box>
         }
+        @if (SettingsOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentSettingsPanel Config="@(SettingsConfig!)" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSettingsClose" OnSave="OnSettingsSave" OnModel="OnSettingsModel" ModelPicker="SettingsModelPicker" OnModelSelected="OnSettingsModelSelected" OnModelCancel="OnSettingsModelCancel" OnApplyDefaults="OnApplyDefaults" OnSaveDefaults="OnSaveDefaults" />
+            </Box>
+        }
     </Flex>
     @if (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) && !DirectoryBrowserOpen)
     {
@@ -89,7 +95,7 @@
     private void FocusChanged() => _ = InvokeAsync(StateHasChanged);
     protected override void OnParametersSet()
     {
-        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen) && !DirectoryBrowserOpen;
+        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) && !DirectoryBrowserOpen;
         if (!GitChangesOpen) _gitDiffOpen = false;
         if (Pane is not null) { Pane.ExplorerFocus = _explorerFocus; Pane.IsGitDiffOpen = () => GitChangesOpen && _gitDiffOpen; }
     }
@@ -101,6 +107,16 @@
     [Parameter] public bool FileExplorerOpen { get; set; }
     [Parameter] public bool GitChangesOpen { get; set; }
     [Parameter] public bool HistoryOpen { get; set; }
+    [Parameter] public bool SettingsOpen { get; set; }
+    [Parameter] public MandoCode.Models.MandoCodeConfig? SettingsConfig { get; set; }
+    [Parameter] public EventCallback OnSettingsClose { get; set; }
+    [Parameter] public EventCallback OnSettingsModel { get; set; }
+    [Parameter] public ModelPickerState? SettingsModelPicker { get; set; }
+    [Parameter] public EventCallback<string> OnSettingsModelSelected { get; set; }
+    [Parameter] public EventCallback OnSettingsModelCancel { get; set; }
+    [Parameter] public EventCallback<AgentSettingsDraft> OnSettingsSave { get; set; }
+    [Parameter] public EventCallback OnApplyDefaults { get; set; }
+    [Parameter] public EventCallback<AgentSettingsDraft> OnSaveDefaults { get; set; }
     [Parameter] public EventCallback OnHistoryClose { get; set; }
     [Parameter] public EventCallback<ArchivedAgent> OnHistoryRestore { get; set; }
     [Parameter] public EventCallback OnGitChangesClose { get; set; }
@@ -111,8 +127,8 @@
     [Parameter] public EventCallback<string?> OnDirectoryChosen { get; set; }
     private int AvailableWidth => Math.Max(1, Pane?.Width ?? Viewport.Width);
     private int BrowserWidth => HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : Math.Min(50, AvailableWidth / 2);
-    private bool NarrowPanel => HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen) && AvailableWidth < 90);
-    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen) ? BrowserWidth : 0);
+    private bool NarrowPanel => HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen) && AvailableWidth < 90);
+    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) ? BrowserWidth : 0);
     private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) ? 6 : 0));
     private int FooterWidth => Math.Max(2, ContentWidth - 2);
     private bool ShowButtonShortcuts => FooterWidth >= 70;

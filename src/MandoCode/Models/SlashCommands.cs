@@ -25,6 +25,7 @@ public static class SlashCommands
         { "/help", "Show this help message" },
         { "/keybindings", "Show keyboard shortcuts grouped by task" },
         { "/agent-new", $"Open another independent agent pane ({Keybindings.AgentNew})" },
+        { "/agent-settings", $"Customize this agent's model settings, behavior, and integrations ({Keybindings.AgentSettings})" },
         { "/agent-file-explorer", $"Show or hide this agent's files and folders ({Keybindings.AgentFileExplorer})" },
         { "/git-changes", $"View this agent's changed files and Git diffs ({Keybindings.AgentGitChanges})" },
         { "/agent-focus", $"Switch agents (optional: left/right) ({Keybindings.AgentFocus})" },
