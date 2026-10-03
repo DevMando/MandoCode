@@ -7,6 +7,7 @@ All notable changes to MandoCode will be documented in this file.
 **RazorConsole 0.6 migration — 0.16.0-alpha.** The CLI now uses a component-based terminal layout, with a scrolling conversation above a persistent prompt. This alpha is based on v0.15.2.
 
 ### Added
+- **Review Git changes per agent.** Git Changes (Alt+G) and /git-changes open changed files for the selected project, including staged and unstaged edits. Open a file for a full-width diff with line numbers and addition/deletion colors. Discard Changes requires confirmation defaulting to Cancel; tracked files restore to HEAD and untracked files are deleted. Successful discards tell the agent not to reapply them. Renamed and newly staged files remain reviewable but must be reverted through Git.
 - **Dimming commands that follow your preference.** Autocomplete offers `/agent-dim-off` when background agents are grayscale, or `/agent-dim-on` when they are colorful. Dimming defaults to on. Navigation and dimming hints remain visible together in multi-agent mode; your choice is saved.
 - **Saved tip preference.** `/tips-off` hides CLI help and multi-agent tips; `/tips-on` restores them. Autocomplete offers only the applicable command, and tips default to on.
 - **Git branch and status in agent headers.** Each pane shows a Git status dot and branch: green for clean, gold for uncommitted changes, and red for conflicts. Ahead/behind counts and detached commit IDs match Desktop. Local background queries refresh every few seconds, share results between panes in the same folder, and hide the indicator outside repositories.
@@ -37,6 +38,8 @@ All notable changes to MandoCode will be documented in this file.
 - **Move `/` and `@` completion into components.** Restore aligned command descriptions, gold file highlights, distinct directory colors, and parent-path accents. Muted teal headings and selector accents complement lavender spinner text.
 
 ### Fixed
+- **Reliable explorer dismissal and directory navigation.** Escape closes File Explorer even when the prompt is focused. Opening a parent directory keeps Parent highlighted instead of selecting Use this folder.
+- **Git review keeps keyboard focus.** The changed-file list owns focus when opened, including in multi-agent layouts. Up/Down selects files; in a diff, Up/Down and Page Up/Page Down scroll while Left/Right or Tab/Shift+Tab selects actions. Opening a diff highlights Back.
 - **File explorer receives focus in split panes.** Opening the explorer with multiple agents immediately enables keyboard navigation; a remounted prompt no longer takes focus back in narrow panes.
 - **Restore visible slash-command help.** /help explicitly writes scrollable command entries into the selected agent's conversation and uses the autocomplete catalog, including the currently available dimming and tips commands.
 - **Keep theme colors when closing the original agent.** The terminal palette now belongs to the whole window and is restored only when the application exits, so closing Agent 1 does not replace the soft green with the terminal's default green.
@@ -55,6 +58,8 @@ All notable changes to MandoCode will be documented in this file.
 - **Preserve terminal theme colors.** Palette updates and reset commands reach the terminal without becoming transcript entries.
 
 ### UI changes
+- **Compact Git review.** Color-coded M, U, A, D, R, and ! markers match Desktop. Paths shorten in the middle to keep filenames visible, and selected rows and buttons share a cyan highlight. Horizontal Back, Refresh, and Discard Changes controls show the refresh spinner and two-second success message in the same position. The bottom tip follows the file list or diff view. The Git Changes button hides on clean projects and shows Alt+G when space allows.
+- **Consistent agent headers.** Right arrows, New, and Close align across WORKSPACES and AGENTS. A workspace with one agent hides the duplicate name button beside the model; multi-agent panes retain it.
 - **Persistent multi-agent hints.** Show agent navigation and both dimming commands together whenever multiple agents are open, alongside explorer instructions when browsing. /tips-off hides the hints.
 - **Align navigation labels.** WORKSPACES and AGENTS use matching label widths so arrows and tabs line up.
 - **Control background-agent colors.** `/agent-dim` toggles grayscale; `/agent-dim on|off` sets it explicitly. Save the preference across launches and apply it to every workspace.

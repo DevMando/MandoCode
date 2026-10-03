@@ -37,9 +37,15 @@ All workspaces initially share the same project folder and saved configuration f
 
 ## Agent panes
 
+**Git Changes (Alt+G)** beside the branch indicator, **/git-changes**, or **Alt+G** opens changes for the selected agent's project. The button hides when the project is clean; the command and shortcut remain available. /agent-git-changes remains an alias. Staged and unstaged changes are combined against HEAD; sibling projects are excluded. Desktop-style colored M/U/A/D/R/! markers identify status, green/red counts show additions and deletions, and shortened paths preserve filenames.
+
+In the file list, Up/Down selects Refresh or files, Page Up/Page Down moves through files, and Enter activates the selection. Opening a file fills the agent's conversation area with a unified diff while preserving its prompt. Up/Down and Page Up/Page Down scroll the diff; Left/Right or Tab/Shift+Tab cycles Back, Refresh, and Discard Changes. Enter activates the highlighted button. R refreshes, Escape returns to files or closes the list, and Alt+G toggles the panel. Tips change with the view. Refresh shows a spinner followed by a two-second success message beside the final button.
+
+**Discard Changes** restores an existing tracked file's index and working copy to HEAD, or deletes an untracked file. Confirmation explains the action and starts on Cancel. Discard is disabled while the agent works; renames and newly staged files must be reverted through Git. Successful discards notify the agent not to reapply them. Binary files have an explicit indicator; text previews are capped at 4000 lines, with a 1 MB limit for untracked files.
+
 New agents default to Desktop-style callsigns. Use `/config` → **Agent naming** or `/config set agentNaming numbers` to use numbered labels; `/config set agentNaming names` restores callsigns. This saved preference applies to new agents across workspaces; existing agents keep their names. Numbered labels reuse the lowest free number, independently of internal agent IDs.
 
-The **AGENTS** bar directly below **WORKSPACES** shows only the current workspace's agent names. Each pane has a compact name/model button header: click its name to focus the pane, or its model to open the model picker when idle.
+The **AGENTS** bar directly below **WORKSPACES** shows only the current workspace's agent names. Multi-agent panes have a compact name/model button header; a single agent shows only its model: click its name to focus the pane, or its model to open the model picker when idle.
 Click an agent tab to focus its pane; **+ New** opens another agent and **× Close** closes
 the selected idle agent. The selected tab uses a dark purple (#503765) highlight with light text, distinct from workspace tabs using dark green (#325039) with a lighter hover.
 New and Close stay on the right, with compact controls and tab arrows in narrow terminals.

@@ -53,6 +53,33 @@ public class DirectoryBrowserTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Fact]
+    public async Task ParentRemainsSelectedAcrossRepeatedEnterWithoutChoosingFolder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mandocode-browser-" + Guid.NewGuid());
+        var child = Path.Combine(root, "child");
+        Directory.CreateDirectory(Path.Combine(child, "grandchild"));
+        try
+        {
+            var browser = new DirectoryBrowser();
+            var callbacks = new List<string?>();
+            ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                [nameof(DirectoryBrowser.OnComplete)] = EventCallback.Factory.Create<string?>(callbacks, (string? path) => callbacks.Add(path))
+            }).SetParameterProperties(browser);
+            await Call(browser, "Navigate", Path.Combine(child, "grandchild"));
+            await Call(browser, "Key", new KeyboardEventArgs { Key = "ArrowDown" });
+            await Call(browser, "Key", new KeyboardEventArgs { Key = "Enter" });
+            Assert.Equal(child, Field<string>(browser, "_directory"));
+            Assert.Equal(1, Field<int>(browser, "_selected"));
+            await Call(browser, "Key", new KeyboardEventArgs { Key = "Enter" });
+            Assert.Equal(root, Field<string>(browser, "_directory"));
+            Assert.Equal(1, Field<int>(browser, "_selected"));
+            Assert.Empty(callbacks);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static Task Call(DirectoryBrowser browser, string name, object argument) =>
         (Task)typeof(DirectoryBrowser).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(browser, [argument])!;
     private static T Field<T>(DirectoryBrowser browser, string name) =>

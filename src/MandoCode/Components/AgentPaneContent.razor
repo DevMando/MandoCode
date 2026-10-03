@@ -8,20 +8,28 @@
             @if (Pane.Visible && Pane.Workspace.Registry?.IsWorkspacePickerOpen != true)
             {
                 <Flex Direction="FlexDirection.Row" FillWidth="true">
+                    @if (NameWidth > 0)
+                    {
                     <Box Width="@NameWidth"><WorkspaceButton Content="@Caption(Pane.Name + (Pane.IsAwaitingInput?.Invoke() == true ? " !" : ""), NameWidth)" Selected="Pane.Active"
                         Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground"
                         SelectedBackground="@(new Color(80, 55, 101))" HoverBackground="@(new Color(96, 69, 119))"
                         OnClick="@(() => Pane.Workspace.Focus(Pane))" /></Box>
+                    }
                     <Box Width="@ModelWidth"><WorkspaceButton Content="@Caption(Pane.Model, ModelWidth)"
                         Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground"
                         SelectedBackground="@(new Color(80, 55, 101))" HoverBackground="@(new Color(96, 69, 119))"
                         OnClick="PickModel" /></Box>
                     @if (GitWidth > 0 && _git is not null)
                     {
+                        @if (ChangesWidth > 0)
+                        {
+                            <Box Width="@ChangesWidth"><WorkspaceButton Content="@(ChangesWidth >= 21 ? " Git Changes (Alt+G) " : ChangesWidth >= 13 ? " Git Changes " : ChangesWidth >= 9 ? " Changes " : " ± ")" Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground" OnClick="ShowChanges" /></Box>
+                        }
                         <Box Width="@GitWidth">
                             <Flex Direction="FlexDirection.Row">
+                                <Markup Content=" ⎇ " Foreground="@PaneColors.For(Pane, Color.Grey85)" Background="@EffectiveHeaderBackground" />
                                 <Markup Content=" ● " Foreground="@PaneColors.For(Pane, _git.Conflicted ? Color.Red : _git.Dirty ? Color.Gold1 : Color.Green)" Background="@EffectiveHeaderBackground" />
-                                <Markup Content="@Caption(_git.Label, GitWidth - 3)" Foreground="@PaneColors.For(Pane, Color.Grey85)" Background="@EffectiveHeaderBackground" />
+                                <Markup Content="@Caption(_git.Label, GitWidth - 6)" Foreground="@PaneColors.For(Pane, Color.Grey85)" Background="@EffectiveHeaderBackground" />
                             </Flex>
                         </Box>
                     }
@@ -43,10 +51,11 @@
     private Color EffectiveHeaderBackground => PaneColors.Muted(Pane) ? MutedHeaderBackground : HeaderBackground;
     private GitPaneSnapshot? _git;
     private readonly CancellationTokenSource _shutdown = new();
-    private int GitWidth => _git is null || Pane.Width < 35 ? 0 : Math.Min(Math.Min(36, Pane.Width / 3), RazorConsole.Core.Input.TextSelectionState.CellWidth(_git.Label) + 5);
-    private int NameWidth => Math.Min(Math.Max(1, Pane.Width / 3), Math.Max(1, RazorConsole.Core.Input.TextSelectionState.CellWidth(Pane.Name) + 4));
-    private int ExplorerWidth => Pane.Width >= 70 ? 10 : 4;
-    private int ModelWidth => Math.Max(1, Pane.Width - NameWidth - GitWidth);
+    private int GitWidth => _git is null || Pane.Width < 35 ? 0 : Math.Min(Math.Min(39, Pane.Width / 3), RazorConsole.Core.Input.TextSelectionState.CellWidth(_git.Label) + 8);
+    private int NameWidth => Pane.Workspace.Panes.Count == 1 ? 0 : Math.Min(Math.Max(1, Pane.Width / 3), Math.Max(1, RazorConsole.Core.Input.TextSelectionState.CellWidth(Pane.Name) + 4));
+    private int ChangesWidth => GitWidth == 0 || _git?.Dirty != true ? 0 : Pane.Width >= 90 ? 21 : Pane.Width >= 70 ? 13 : Pane.Width >= 55 ? 9 : 3;
+    private int ModelWidth => Math.Max(1, Pane.Width - NameWidth - GitWidth - ChangesWidth);
+    private async Task ShowChanges() { Pane.Workspace.Focus(Pane); if (Pane.ToggleGitChanges is not null) await Pane.ToggleGitChanges(); }
     protected override void OnInitialized() => _ = RefreshGitAsync();
     private async Task RefreshGitAsync()
     {

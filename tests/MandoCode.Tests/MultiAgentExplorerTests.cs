@@ -17,10 +17,15 @@ namespace MandoCode.Tests;
 public class MultiAgentExplorerTests
 {
     [Theory]
-    [InlineData(2)]
-    [InlineData(3)]
-    [InlineData(4)]
-    public async Task ExplorerOpensAndOwnsFocusInSelectedNarrowPane(int count)
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(3, false)]
+    [InlineData(4, false)]
+    [InlineData(2, true)]
+    [InlineData(3, true)]
+    [InlineData(4, true)]
+    public async Task ExplorerOpensAndOwnsFocusInSelectedNarrowPane(int count, bool gitChanges)
     {
         var registrations = new ServiceCollection().AddLogging();
         registrations.AddRazorConsoleServices();
@@ -38,11 +43,11 @@ public class MultiAgentExplorerTests
         var mount = type.GetMethods().Single(method => method.Name == "MountComponentAsync" && method.IsGenericMethodDefinition);
         await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance, [ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None])!;
         var dispatcher = (Dispatcher)type.GetProperty("Dispatcher")!.GetValue(instance)!;
-        await dispatcher.InvokeAsync(async () => await selected.ToggleFileExplorer!());
+        await dispatcher.InvokeAsync(async () => await (gitChanges ? selected.ToggleGitChanges!() : selected.ToggleFileExplorer!()));
         await Task.Delay(200);
         var snapshot = type.GetMethod("RefreshSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, null)!;
         var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
-        var explorer = Assert.Single(Flatten(root), node => node.Key?.StartsWith("agent-files-") == true);
+        var explorer = Assert.Single(Flatten(root), node => node.Key?.StartsWith(gitChanges ? "agent-changes-" : "agent-files-") == true);
         Assert.Equal(explorer.Key, selected.FocusKey);
         var focus = services.GetRequiredService<RazorConsole.Core.Focus.FocusManager>();
         typeof(RazorConsole.Core.Focus.FocusManager).GetMethod("UpdateFocusTargets", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(focus, new[] { snapshot });
@@ -50,9 +55,17 @@ public class MultiAgentExplorerTests
         // after registering the new snapshot's targets.
         await focus.FocusAsync(selected.FocusKey!);
         Assert.True(focus.IsFocused(explorer.Key!));
-        Assert.True(selected.IsFileExplorerOpen!());
+        if (!gitChanges) Assert.True(selected.IsFileExplorerOpen!());
         Assert.All(workspace.Panes.Where(pane => pane != selected), pane => Assert.False(pane.IsFileExplorerOpen!()));
         Assert.False(selected.ExplorerFocus!.PromptFocused);
+        if (!gitChanges)
+        {
+            // Escape must close the explorer even while the prompt owns focus.
+            selected.ExplorerFocus.SetPromptFocused(true);
+            await dispatcher.InvokeAsync(() => Assert.True(workspace.Key(selected, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Escape" })));
+            await Task.Delay(100);
+            Assert.False(selected.IsFileExplorerOpen!());
+        }
     }
     private static IEnumerable<VNode> Flatten(VNode node)
     {

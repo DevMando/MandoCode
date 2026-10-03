@@ -6,6 +6,7 @@ public static class Keybindings
     public const string AgentNew = "Alt+N";
     public const string ChangeDirectory = "Alt+D";
     public const string AgentFileExplorer = "Alt+E";
+    public const string AgentGitChanges = "Alt+G";
     public const string AgentFocus = "Alt+Left/Right";
     public const string AgentClose = "Alt+W";
     public const string WorkspaceNew = "Alt+Shift+N";
@@ -23,6 +24,7 @@ public static class Keybindings
         new("Agents", AgentNew, "Create an agent (/agent-new)"),
         new("Agents", ChangeDirectory, "Change this agent's directory (/change-directory)"),
         new("Agents", AgentFileExplorer, "Toggle this agent's file explorer (/agent-file-explorer)"),
+        new("Agents", AgentGitChanges, "View this agent's Git changes (/git-changes)"),
         new("Agents", AgentFocus, "Switch agents in tab order (/agent-focus)"),
         new("Agents", AgentClose, "Close the selected idle agent (/agent-close)"),
         new("Conversation", "Page Up / Page Down", "Scroll the conversation while the chat prompt is focused"),
