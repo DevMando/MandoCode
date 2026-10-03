@@ -6,9 +6,9 @@ namespace MandoCode.Services;
 /// <summary>Keeps the current directory visible when a pane cannot fit its full path.</summary>
 public static class DirectoryPathCaption
 {
-    public static string Fit(string path, int width)
+    public static string Fit(string path, int width, bool showIcon = true)
     {
-        const string icon = "📁 ";
+        var icon = showIcon ? "📁 " : "";
         if (TextSelectionState.CellWidth(icon + path) <= width) return icon + path;
         var available = Math.Max(0, width - TextSelectionState.CellWidth(icon));
         var separator = path.Contains('\\') ? "\\" : "/";

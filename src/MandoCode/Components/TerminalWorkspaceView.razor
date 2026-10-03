@@ -79,9 +79,13 @@
     private readonly WorkspaceTabWindow _tabs = new();
     private AgentWorkspace[] _openWorkspaces = [];
     private bool _pickerWasOpen;
-    private const string ExplorerTip = "Tip: Arrows select · Enter toggles folders or tags files with @ · Shift + Enter opens natively · Tab switches prompt/explorer · R refreshes · Esc closes.";
+    private string ExplorerTip => Registry.Active.SelectedPane?.IsGitChangesOpen?.Invoke() == true
+        ? Registry.Active.SelectedPane?.IsGitDiffOpen?.Invoke() == true
+            ? "Up/Down or Page Up/Page Down scrolls · Left/Right or Tab/Shift+Tab selects Back, Refresh, Discard Changes · Enter activates · R refreshes · Esc returns to files."
+            : "Up/Down selects files or Refresh · Page Up/Page Down moves through files · Enter opens a file or refreshes · R refreshes · Esc or Alt+G closes Git Changes."
+        : "Arrows select · Enter toggles folders or tags files with @ · Shift + Enter opens natively · Tab switches prompt/explorer · R refreshes · Esc closes.";
     private bool ShowExplorerTip => !Registry.IsWorkspacePickerOpen && Registry.Active.SelectedPane is { } selected
-        && selected.IsFileExplorerOpen?.Invoke() == true
+        && (selected.IsFileExplorerOpen?.Invoke() == true || selected.IsGitChangesOpen?.Invoke() == true)
         && selected.Services.GetRequiredService<MandoCodeConfig>().ShowTips;
     private static readonly string AgentTip = $"{Keybindings.AgentFocus} switches agents · Click an agent tab to focus · /agent-dim-off keeps background colors · /agent-dim-on restores grayscale.";
     private bool ShowAgentTips => Registry.Active.Panes.Count > 1

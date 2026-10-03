@@ -113,10 +113,10 @@
     {
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
-        // Narrow panes move the prompt below the explorer and remount it. The
-        // explorer owns initial focus; mounting its companion prompt must not
-        // overwrite that request. Tab and clicks still focus the prompt explicitly.
-        if (firstRender && ExplorerFocus?.Active == true) return;
+        // A panel's focus request may precede registration of the new snapshot.
+        // Do not treat the prompt's stale focus as ownership during that redraw
+        // or when narrow panes remount it. Tab/clicks explicitly restore ownership.
+        if (ExplorerFocus?.Active == true && (firstRender || !ExplorerFocus.PromptFocused)) return;
         if (Focus.IsFocused(_hook)) ExplorerFocus?.SetPromptFocused(true);
         // The conversation can already own focus when connection startup reveals
         // this prompt. Request its stable TextArea key once, without stealing focus
@@ -133,7 +133,7 @@
     {
         if (key.Key == "Tab" && ExplorerFocus?.Active == true && (Pane is null || Pane.Active))
         {
-            await ExplorerFocus.ToggleAsync();
+            await ExplorerFocus.ToggleAsync(key.ShiftKey);
             return true;
         }
         if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;

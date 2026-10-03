@@ -124,9 +124,14 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     }
     public bool Key(AgentPane pane, KeyboardEventArgs key)
     {
+        if (key.Key == "Escape" && pane.Active && pane.IsFileExplorerOpen?.Invoke() == true && pane.ToggleFileExplorer is not null)
+        {
+            _ = pane.ToggleFileExplorer();
+            return true;
+        }
         if (key.Key == "Tab" && pane.Active && pane.ExplorerFocus is { Active: true } scope)
         {
-            _ = scope.ToggleAsync();
+            _ = scope.ToggleAsync(key.ShiftKey);
             return true;
         }
         // Alt is the default; Meta variants also work when forwarded by a terminal.
@@ -141,6 +146,9 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         switch (key.Key.ToLowerInvariant())
         {
+            case "g":
+                if (!key.ShiftKey && pane.Active && pane.ToggleGitChanges is not null) _ = pane.ToggleGitChanges();
+                return true;
             case "e":
                 if (!key.ShiftKey && pane.Active && pane.ToggleFileExplorer is not null) _ = pane.ToggleFileExplorer();
                 return true;
@@ -189,6 +197,9 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Action? Stop { get; set; }
     public Func<string, Task>? SubmitCommand { get; set; }
     public Func<Task>? ToggleFileExplorer { get; set; }
+    public Func<Task>? ToggleGitChanges { get; set; }
+    public Func<bool>? IsGitChangesOpen { get; set; }
+    public Func<bool>? IsGitDiffOpen { get; set; }
     public Func<bool>? IsFileExplorerOpen { get; set; }
     public ExplorerFocusScope? ExplorerFocus { get; set; }
     private bool _disposed;

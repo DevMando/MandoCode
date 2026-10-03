@@ -1,0 +1,295 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@inject RazorConsole.Core.Focus.FocusManager Focus
+@implements IDisposable
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="@(_file is null ? "Git Changes" : "Diff")" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+ <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+  <Rows>
+   <Markup Content="@(_file is null ? Fit(_loading ? "Loading changes…" : $"{_files.Count} changed files") : Spectre.Console.Markup.Escape(DirectoryPathCaption.Fit(_file.Path, Math.Max(1, Width - 4), showIcon: false)))" Foreground="@PaneColors.For(Pane, Color.Purple)" />
+   <Flex Direction="FlexDirection.Row">
+    @for (var button = 0; button < Toolbar.Count; button++)
+    {
+     var index = button; var action = Toolbar[button];
+     @ActionChip(action.Label, () => ClickToolbar(index), !_confirm && _toolbarIndex == index)
+    }
+    @if (_refreshing)
+    {
+     <Spinner SpinnerType="@(Spectre.Console.Spinner.Known.Dots)" Message="Refreshing" Style="@(PaneColors.Muted(Pane) ? "grey62" : "#c678dd")" />
+    }
+    else if (_refreshMessage.Length > 0)
+    {
+     <Markup Content="@_refreshMessage" Foreground="@PaneColors.For(Pane, Color.Green)" />
+    }
+   </Flex>
+   @if (_confirm)
+   {
+    <Markup Content="@Fit((_file!.Untracked ? "Delete " : "Restore to last commit: ") + _file.Path + "? This cannot be undone.")" Foreground="Color.Gold1" />
+    <Rows>
+     @ActionChip(" Cancel ", () => { CancelDiscard(); return Task.CompletedTask; }, !_discardSelected)
+     @ActionChip(" Discard changes ", Discard, _discardSelected)
+    </Rows>
+   }
+   else if (_file is null)
+   {
+    @if (!_loading && _files.Count == 0 && _error.Length == 0) { <Markup Content="Working tree is clean." Foreground="@PaneColors.For(Pane, Color.Grey70)" /> }
+    @for (var row = _start; row < Math.Min(_files.Count, _start + VisibleRows); row++)
+    {
+     var index = row; var item = _files[row];
+     <div @key="item.Path" data-focusable="false" @onclick="@(() => Open(index))">
+      <RenderableContent Content="@RowRenderable(item, row)" />
+     </div>
+    }
+   }
+   else
+   {
+    <Markup Content="@Fit(_file.Stage + (_preview?.Binary == true ? " · Binary file" : _preview?.Truncated == true ? " · Preview limited to 4000 lines / 1 MB" : ""))" Foreground="@PaneColors.For(Pane, Color.Grey70)" />
+    @foreach (var row in DiffRows().Skip(_start).Take(VisibleRows))
+    {
+     <Markup Content="@Fit(row.Text.Length > _horizontal ? row.Text[_horizontal..] : "")" Foreground="@PaneColors.For(Pane, row.Color)" />
+    }
+   }
+   <Markup Content="@Fit(_error)" Foreground="Color.Gold1" />
+  </Rows>
+ </div>
+</Box>
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+ [Parameter] public string Root { get; set; } = "";
+ [Parameter] public int Width { get; set; }
+ [Parameter] public int Height { get; set; }
+ [Parameter] public EventCallback OnClose { get; set; }
+ [Parameter] public EventCallback<bool> OnDiffChanged { get; set; }
+ [Parameter] public EventCallback<string> OnDiscarded { get; set; }
+ private readonly string _focusKey = "agent-changes-" + Guid.NewGuid().ToString("N");
+ private readonly CancellationTokenSource _shutdown = new();
+ private IReadOnlyList<GitChangedFile> _files = [];
+ private GitChangedFile? _file;
+ private GitFilePreview? _preview;
+ private int _selected, _start, _horizontal;
+ private int _toolbarIndex;
+ private bool _loading, _confirm, _discardSelected;
+ private string _error = "", _root = "";
+ private bool _refreshing;
+ private string _refreshMessage = "";
+ private int _refreshVersion;
+ private int VisibleRows => Math.Max(1, Height - 7);
+ private bool CanDiscard => _file is not null && _file.OriginalPath is null && _file.Label != "Added" && Pane?.IsBusy?.Invoke() != true;
+ private List<(string Label, Func<Task> Run)> Toolbar
+ {
+  get
+  {
+   var actions = new List<(string, Func<Task>)>();
+   if (_file is not null) actions.Add((" ‹ Back ", Back));
+   actions.Add((" Refresh ", Refresh));
+   if (CanDiscard) actions.Add((" Discard Changes ", AskDiscard));
+   return actions;
+  }
+ }
+ private bool RowSelected(int row) => row == _selected && _toolbarIndex < 0;
+ private Color RowBackground(int row) => RowSelected(row) ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default;
+ private Spectre.Console.Rendering.IRenderable RowRenderable(GitChangedFile item, int row)
+  => new Spectre.Console.Markup(RowCaption(item, row), new Style(RowSelected(row) ? Color.Black : PaneColors.For(Pane, Color.Grey85), RowBackground(row)));
+ private RenderFragment ActionChip(string label, Func<Task> action, bool selected) => @<div data-focusable="false" @onclick="@(async () => { await FocusPanel(); await action(); })">
+     <Markup Content="@label" Foreground="@(selected && ExplorerFocus?.PromptFocused != true ? Color.Black : PaneColors.For(Pane, Color.Grey93))" Background="@(selected && ExplorerFocus?.PromptFocused != true ? PaneColors.For(Pane, Color.DeepSkyBlue1) : new Color(22, 26, 30))" />
+ </div>;
+ private async Task ClickToolbar(int index) { _toolbarIndex = index; await Toolbar[index].Run(); }
+ private string Fit(string text) => Spectre.Console.Markup.Escape(WorkspaceTabWindow.Fit(text, Math.Max(1, Width - 4)));
+ private string RowCaption(GitChangedFile item, int row)
+ {
+  var width = Math.Max(1, Width - 4);
+  var added = item.Binary ? "binary" : item.Added < 0 ? "…" : $"+{item.Added}";
+  var deleted = item.Binary ? "" : item.Deleted < 0 ? "…" : $"−{item.Deleted}";
+  var counts = $" {added} {deleted} ";
+  var labelWidth = Math.Max(1, width - RazorConsole.Core.Input.TextSelectionState.CellWidth(counts));
+  var (marker, color) = item.Label switch
+  {
+   "Conflict" => ("!", Color.Red),
+   "Untracked" => ("U", Color.Green),
+   "Added" => ("A", Color.Green),
+   "Deleted" => ("D", Color.Red),
+   "Renamed" => ("R", Color.DeepSkyBlue1),
+   _ => ("M", Color.Gold1)
+  };
+  var prefix = $"{(RowSelected(row) ? ">" : " ")} {marker} ";
+  var pathWidth = Math.Max(1, labelWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(prefix));
+  var label = WorkspaceTabWindow.Fit(prefix + DirectoryPathCaption.Fit(item.Path, pathWidth, showIcon: false), labelWidth);
+  label += new string(' ', Math.Max(0, labelWidth - RazorConsole.Core.Input.TextSelectionState.CellWidth(label)));
+  // Keep the row background intact while coloring only the status badge.
+  var badgeColor = RowSelected(row) && marker == "R" ? Color.Black : PaneColors.For(Pane, color);
+  var badgeStyle = new Style(badgeColor).ToMarkup();
+  var caption = label.Length >= 3 && label[2].ToString() == marker
+   ? Spectre.Console.Markup.Escape(label[..2]) + $"[{badgeStyle}]{marker}[/]" + Spectre.Console.Markup.Escape(label[3..])
+   : Spectre.Console.Markup.Escape(label);
+  if (RowSelected(row)) return caption + Spectre.Console.Markup.Escape(counts);
+  return caption + $" [green]{Spectre.Console.Markup.Escape(added)}[/] [red]{Spectre.Console.Markup.Escape(deleted)}[/] ";
+ }
+ private IEnumerable<(string Text, Color Color)> DiffRows()
+ {
+  int oldLine = 0, newLine = _file?.Untracked == true ? 1 : 0;
+  foreach (var line in _preview?.Lines ?? [])
+  {
+   var color = line.StartsWith('+') ? Color.Green : line.StartsWith('-') ? Color.Red : line.StartsWith("@@") ? Color.Purple : Color.Grey85;
+   if (line.StartsWith("@@"))
+   {
+    var match = System.Text.RegularExpressions.Regex.Match(line, @"^@@ -(\d+)(?:,\d+)? \+(\d+)");
+    if (match.Success) { oldLine = int.Parse(match.Groups[1].Value); newLine = int.Parse(match.Groups[2].Value); }
+    yield return (line, color); continue;
+   }
+   if (line.StartsWith("+++") || line.StartsWith("---") || line.StartsWith("diff ") || line.StartsWith("index ") || line.StartsWith('\\')) { yield return (line, color); continue; }
+   if (line.StartsWith('+')) yield return ($"      {++newLine - 1,5} {line}", color);
+   else if (line.StartsWith('-')) yield return ($"{++oldLine - 1,5}       {line}", color);
+   else if (line.StartsWith(' ')) yield return ($"{++oldLine - 1,5} {++newLine - 1,5} {line}", color);
+   else yield return (line, color);
+  }
+ }
+ protected override async Task OnParametersSetAsync()
+ {
+  if (ExplorerFocus is not null) { ExplorerFocus.FocusExplorer = FocusPanel; ExplorerFocus.NavigateTab = IgnoreTab; }
+  if (_root == Root) return;
+  _root = Root; _file = null; _confirm = false;
+  _toolbarIndex = 0;
+  await RefreshCore(false);
+ }
+ protected override async Task OnAfterRenderAsync(bool firstRender)
+ {
+  if ((Pane is null || Pane.Active) && (firstRender || (ExplorerFocus is { Active: true, PromptFocused: false } && !Focus.IsFocused(_focusKey)))) await FocusPanel();
+ }
+ private async Task FocusPanel()
+ {
+  if (Pane is not null && !Pane.Active) return;
+  if (Pane is not null) Pane.FocusKey = _focusKey;
+  await Focus.FocusAsync(_focusKey); ExplorerFocus?.SetPromptFocused(false);
+ }
+ private async Task IgnoreTab(bool reverse)
+ {
+  if (_file is null || _confirm) return;
+  await FocusPanel();
+  var count = Toolbar.Count;
+  _toolbarIndex = (Math.Max(0, _toolbarIndex) + (reverse ? count - 1 : 1)) % count;
+  StateHasChanged();
+ }
+ private Task Refresh() => RefreshCore(true);
+ private async Task RefreshCore(bool showFeedback)
+ {
+  if (_loading) return;
+  var version = ++_refreshVersion;
+  var refreshingFile = _file is not null;
+  _loading = true; _refreshing = showFeedback; _refreshMessage = ""; _error = "";
+  StateHasChanged();
+  try
+  {
+   _files = await GitChangesService.ReadAsync(Root, _shutdown.Token);
+   if (_file is not null) { _file = _files.FirstOrDefault(x => x.Path == _file.Path); if (_file is not null) _preview = await GitChangesService.PreviewAsync(Root, _file, _shutdown.Token); else await Back(); }
+   if (showFeedback) { _refreshMessage = refreshingFile ? "File refreshed" : "Changes refreshed"; _ = ClearRefreshMessage(version); }
+  }
+  catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or OperationCanceledException) { _error = ex is OperationCanceledException ? "Git query timed out." : ex.Message; }
+  finally { _loading = false; _refreshing = false; Reveal(); }
+ }
+ private async Task ClearRefreshMessage(int version)
+ {
+  try
+  {
+   await Task.Delay(TimeSpan.FromSeconds(2), _shutdown.Token);
+   await InvokeAsync(() => { if (version == _refreshVersion) { _refreshMessage = ""; StateHasChanged(); } });
+  }
+  catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+ }
+ private async Task Open(int index)
+ {
+  if (_loading || index < 0 || index >= _files.Count) return;
+  await FocusPanel(); _toolbarIndex = 0; _selected = index; _file = _files[index]; _start = 0; _horizontal = 0; _loading = true;
+  try { _preview = await GitChangesService.PreviewAsync(Root, _file, _shutdown.Token); await OnDiffChanged.InvokeAsync(true); }
+  catch (Exception ex) when (ex is IOException or OperationCanceledException) { _error = ex.Message; _file = null; }
+  finally { _loading = false; }
+ }
+ private async Task Back() { _file = null; _preview = null; _confirm = false; _toolbarIndex = -1; _start = 0; await OnDiffChanged.InvokeAsync(false); }
+ private Task Close() => OnClose.InvokeAsync();
+ private async Task AskDiscard() { if (CanDiscard) { await FocusPanel(); _confirm = true; _discardSelected = false; } }
+ private void CancelDiscard() => _confirm = false;
+ private async Task Discard()
+ {
+  if (!_confirm || !CanDiscard || _loading) return;
+  _loading = true;
+  var success = false;
+  try { var path = _file!.Path; await GitChangesService.DiscardAsync(Root, _file, _shutdown.Token); await OnDiscarded.InvokeAsync(path); await Back(); success = true; }
+  catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { _error = ex.Message; }
+  finally { _loading = false; _confirm = false; }
+  if (success) await Refresh();
+ }
+ private void Reveal()
+ {
+  _selected = Math.Clamp(_selected, 0, Math.Max(0, _files.Count - 1));
+  _start = _file is null ? Math.Max(0, _selected - VisibleRows + 1) : Math.Clamp(_start, 0, Math.Max(0, (_preview?.Lines.Count ?? 0) - VisibleRows));
+ }
+ private async Task Key(KeyboardEventArgs key)
+ {
+  if (Pane is not null && !Pane.Active) return;
+  if (_confirm)
+  {
+   if (key.Key == "Escape") CancelDiscard();
+   else if (key.Key == "ArrowUp") _discardSelected = false;
+   else if (key.Key == "ArrowDown") _discardSelected = true;
+   else if (key.Key == "Enter") { if (_discardSelected) await Discard(); else CancelDiscard(); }
+   return;
+  }
+  if (key.Key == "Tab") { await IgnoreTab(key.ShiftKey); return; }
+  await FocusPanel();
+  if (Pane?.Workspace.Key(Pane, key) == true) return;
+  if (_file is not null)
+  {
+   _toolbarIndex = Math.Clamp(_toolbarIndex, 0, Toolbar.Count - 1);
+   switch (key.Key)
+   {
+    case "ArrowLeft": _toolbarIndex = Math.Max(0, _toolbarIndex - 1); break;
+    case "ArrowRight": _toolbarIndex = Math.Min(Toolbar.Count - 1, _toolbarIndex + 1); break;
+    case "ArrowUp": _start--; break;
+    case "ArrowDown": _start++; break;
+    case "PageUp": _start -= VisibleRows; break;
+    case "PageDown": _start += VisibleRows; break;
+    case "Home": _start = 0; break;
+    case "End": _start = _preview?.Lines.Count ?? 0; break;
+    case "Enter": case "Return": case " ": await Toolbar[_toolbarIndex].Run(); break;
+    case "Escape": await Back(); break;
+    case "r": case "R": await Refresh(); break;
+   }
+   Reveal();
+   return;
+  }
+  if (_toolbarIndex >= 0)
+  {
+   _toolbarIndex = Math.Min(_toolbarIndex, Toolbar.Count - 1);
+   switch (key.Key)
+   {
+    case "ArrowUp": _toolbarIndex = Math.Max(0, _toolbarIndex - 1); break;
+    case "ArrowDown": if (_toolbarIndex + 1 < Toolbar.Count) _toolbarIndex++; else if (_file is not null || _files.Count > 0) { _toolbarIndex = -1; _selected = 0; _start = 0; } break;
+    case "Enter": case "Return": case " ": await Toolbar[_toolbarIndex].Run(); break;
+    case "Escape": if (_file is not null) await Back(); else await Close(); break;
+    case "r": case "R": await Refresh(); break;
+    case "PageUp": case "PageDown":
+     if (_files.Count > 0) { _toolbarIndex = -1; _selected += key.Key == "PageDown" ? VisibleRows : -VisibleRows; Reveal(); }
+     break;
+   }
+   return;
+  }
+  switch (key.Key)
+  {
+   case "Escape": if (_file is not null) await Back(); else await Close(); break;
+   case "Enter": if (_file is null) await Open(_selected); break;
+   case "ArrowUp": if ((_file is null && _selected == 0) || (_file is not null && _start == 0)) _toolbarIndex = Toolbar.Count - 1; else if (_file is null) _selected--; else _start--; break;
+   case "ArrowDown": if (_file is null) _selected++; else _start++; break;
+   case "PageUp": if (_file is null) _selected -= VisibleRows; else _start -= VisibleRows; break;
+   case "PageDown": if (_file is null) _selected += VisibleRows; else _start += VisibleRows; break;
+   case "Home": if (_file is null) _selected = 0; else _start = 0; break;
+   case "End": if (_file is null) _selected = _files.Count - 1; else _start = _preview?.Lines.Count ?? 0; break;
+   case "r": case "R": await Refresh(); break;
+  }
+ Reveal();
+ }
+ public void Dispose()
+ {
+  if (ExplorerFocus?.NavigateTab == IgnoreTab) ExplorerFocus.NavigateTab = null;
+  _shutdown.Cancel(); _shutdown.Dispose();
+ }
+}

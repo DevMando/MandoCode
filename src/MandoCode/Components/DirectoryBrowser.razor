@@ -74,6 +74,12 @@
         if (_directory.Length == 0) return;
         var parent = Directory.GetParent(_directory)?.FullName;
         await Navigate(parent ?? (OperatingSystem.IsWindows() ? "" : _directory));
+        var parentIndex = Array.FindIndex(_items, item => item.Action == 2);
+        if (parentIndex >= 0)
+        {
+            _selected = parentIndex;
+            _start = Math.Max(0, _selected - VisibleRows + 1);
+        }
     }
     private async Task Activate(int index)
     {

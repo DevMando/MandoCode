@@ -26,6 +26,7 @@ public static class SlashCommands
         { "/keybindings", "Show keyboard shortcuts grouped by task" },
         { "/agent-new", $"Open another independent agent pane ({Keybindings.AgentNew})" },
         { "/agent-file-explorer", $"Show or hide this agent's files and folders ({Keybindings.AgentFileExplorer})" },
+        { "/git-changes", $"View this agent's changed files and Git diffs ({Keybindings.AgentGitChanges})" },
         { "/agent-focus", $"Switch agents (optional: left/right) ({Keybindings.AgentFocus})" },
         { "/agent-close", $"Close the current idle agent pane ({Keybindings.AgentClose})" },
         { "/agent-rename", "Rename this agent: /agent-rename <name>" },

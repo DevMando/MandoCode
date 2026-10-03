@@ -32,6 +32,7 @@
         }
         <Box Width="@ActionsWidth">
             <Flex Direction="FlexDirection.Row">
+                <Markup Content="@(new string(' ', Compact ? 3 : 5))" Background="@Background" />
                 <WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content="@(Compact ? " + " : " + New ")" OnClick="NewAgent" />
                 <WorkspaceButton SelectedBackground="@SelectedBackground" HoverBackground="@HoverBackground" Content="@(Compact ? " × " : " × Close ")" OnClick="CloseAgent" />
             </Flex>
@@ -47,7 +48,7 @@
     private bool Compact => Viewport.Width < 70;
     private int LabelWidth => Viewport.Width < 28 ? 0 : Compact ? 4 : 12;
     private int ArrowWidth => Viewport.Width < 36 ? 0 : 6;
-    private int ActionsWidth => Compact ? 6 : 16;
+    private int ActionsWidth => Compact ? 9 : 21;
     private int AvailableWidth => Math.Max(0, Viewport.Width - LabelWidth - ArrowWidth - ActionsWidth);
     private int Capacity => AvailableWidth == 0 ? 0 : Math.Min(Workspace.Panes.Count, Math.Max(1, AvailableWidth / 10));
     private int TabWidth => Capacity == 0 ? 0 : Math.Min(22, AvailableWidth / Capacity);

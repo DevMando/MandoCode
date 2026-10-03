@@ -37,8 +37,14 @@
                 <AgentFileExplorer Root="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnFileExplorerClose" />
             </Box>
         }
+        @if (GitChangesOpen && !DirectoryBrowserOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentGitChanges Root="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnGitChangesClose" OnDiffChanged="DiffChanged" OnDiscarded="OnGitDiscarded" />
+            </Box>
+        }
     </Flex>
-    @if (NarrowPanel && FileExplorerOpen && !DirectoryBrowserOpen)
+    @if (NarrowPanel && (FileExplorerOpen || GitChangesOpen) && !DirectoryBrowserOpen)
     {
         <CascadingValue Name="AgentContentWidth" Value="@AvailableWidth">@Bottom</CascadingValue>
     }
@@ -77,8 +83,9 @@
     private void FocusChanged() => _ = InvokeAsync(StateHasChanged);
     protected override void OnParametersSet()
     {
-        _explorerFocus.Active = FileExplorerOpen && !DirectoryBrowserOpen;
-        if (Pane is not null) Pane.ExplorerFocus = _explorerFocus;
+        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen) && !DirectoryBrowserOpen;
+        if (!GitChangesOpen) _gitDiffOpen = false;
+        if (Pane is not null) { Pane.ExplorerFocus = _explorerFocus; Pane.IsGitDiffOpen = () => GitChangesOpen && _gitDiffOpen; }
     }
     private TuiSession Session { get; set; } = default!;
     [Parameter] public RenderFragment? Header { get; set; }
@@ -86,13 +93,18 @@
     [Parameter] public string ProjectDirectory { get; set; } = "";
     [Parameter] public bool DirectoryBrowserOpen { get; set; }
     [Parameter] public bool FileExplorerOpen { get; set; }
+    [Parameter] public bool GitChangesOpen { get; set; }
+    [Parameter] public EventCallback OnGitChangesClose { get; set; }
+    [Parameter] public EventCallback<string> OnGitDiscarded { get; set; }
+    private bool _gitDiffOpen;
+    private void DiffChanged(bool open) { _gitDiffOpen = open; Pane?.Workspace.Refresh(); StateHasChanged(); }
     [Parameter] public EventCallback OnFileExplorerClose { get; set; }
     [Parameter] public EventCallback<string?> OnDirectoryChosen { get; set; }
     private int AvailableWidth => Math.Max(1, Pane?.Width ?? Viewport.Width);
-    private int BrowserWidth => AvailableWidth < 90 ? AvailableWidth : Math.Min(50, AvailableWidth / 2);
-    private bool NarrowPanel => (DirectoryBrowserOpen || FileExplorerOpen) && AvailableWidth < 90;
-    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen) ? BrowserWidth : 0);
-    private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && FileExplorerOpen ? 6 : 0));
+    private int BrowserWidth => _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : Math.Min(50, AvailableWidth / 2);
+    private bool NarrowPanel => _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen) && AvailableWidth < 90);
+    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen) ? BrowserWidth : 0);
+    private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && (FileExplorerOpen || GitChangesOpen) ? 6 : 0));
     private int FooterWidth => Math.Max(2, ContentWidth - 2);
     private bool ShowButtonShortcuts => FooterWidth >= 70;
     private int ChangeDirectoryButtonWidth => ShowButtonShortcuts ? 26 : FooterWidth >= 48 ? 18 : FooterWidth >= 30 ? 12 : Math.Min(3, Math.Max(1, FooterWidth / 3));

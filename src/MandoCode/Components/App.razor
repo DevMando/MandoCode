@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -155,6 +155,7 @@
     private AIService AI { get; set; } = default!;
     private bool _directoryBrowserOpen;
     private bool _fileExplorerOpen;
+    private bool _gitChangesOpen;
     private TaskCompletionSource<string?>? _directorySelection;
     private MandoCodeConfig Config { get; set; } = default!;
     private TaskPlannerService TaskPlanner { get; set; } = default!;
@@ -393,7 +394,7 @@
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
             if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
-            if (Pane is not null) { Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; }
+            if (Pane is not null) { Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
@@ -1152,14 +1153,31 @@
         if (_directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         if (_isProcessing && !_fileExplorerOpen) return;
         _fileExplorerOpen = !_fileExplorerOpen;
+        _gitChangesOpen = false;
         StateHasChanged();
         if (!_fileExplorerOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
     });
     private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleGitChanges() => InvokeAsync(async () =>
+    {
+        if (_directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        _gitChangesOpen = !_gitChangesOpen;
+        _fileExplorerOpen = false;
+        StateHasChanged();
+        if (!_gitChangesOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private void GitDiscarded(string path)
+    {
+        AI.AppendUserNote($"The user DISCARDED uncommitted changes to {path}. Do not re-apply them unless asked.");
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        TuiConsole.MarkupLine($"[green]Discarded changes to {Spectre.Console.Markup.Escape(path)}[/]");
+    }
     private async Task<string?> PickProjectDirectoryAsync()
     {
         _directorySelection = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _fileExplorerOpen = false;
+        _gitChangesOpen = false;
         _directoryBrowserOpen = true;
         await InvokeAsync(StateHasChanged);
         try { return await _directorySelection.Task; }
@@ -1331,7 +1349,13 @@
                 if (command == "agent-file-explorer")
                 {
                     _fileExplorerOpen = !_fileExplorerOpen;
+                    _gitChangesOpen = false;
                     await InvokeAsync(StateHasChanged);
+                    continue;
+                }
+                if (command is "git-changes" or "agent-git-changes")
+                {
+                    await ToggleGitChanges();
                     continue;
                 }
                 if (command == "change-directory" || command.StartsWith("change-directory "))
