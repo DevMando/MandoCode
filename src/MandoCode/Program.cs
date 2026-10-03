@@ -241,6 +241,8 @@ class Program
         services.AddScoped<AgentIdentity>();
         services.AddSingleton<AgentWorkspace>();
         services.AddSingleton<WorkspaceRegistry>();
+        services.AddSingleton<AgentArchiveStore>();
+        services.AddSingleton<OllamaConnectionRecovery>();
         services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, WorkspaceVisibilityTranslator>());
         services.Insert(1, ServiceDescriptor.Singleton<ITranslationMiddleware>(provider => new TranscriptEntryTranslator(new TuiSession(), provider.GetRequiredService<AgentWorkspace>(), provider.GetRequiredService<WorkspaceRegistry>())));
 

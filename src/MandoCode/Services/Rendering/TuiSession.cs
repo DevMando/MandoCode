@@ -48,6 +48,14 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
             Interlocked.Increment(ref _revision);
         }
     }
+    public void AppendRestored(IRenderable content, string? userPrompt, bool spaceAfter)
+    {
+        lock (_sync)
+        {
+            _entries.Add(new(Interlocked.Increment(ref _nextId), content) { UserPrompt = userPrompt, SpaceAfter = spaceAfter });
+            Interlocked.Increment(ref _revision);
+        }
+    }
     public IRenderable? Find(long id)
     {
         lock (_sync) return _registered.GetValueOrDefault(id) ?? _entries.FirstOrDefault(entry => entry.Id == id)?.Content;

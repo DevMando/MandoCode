@@ -67,6 +67,50 @@ public class MultiAgentExplorerTests
             Assert.False(selected.IsFileExplorerOpen!());
         }
     }
+    [Fact]
+    public async Task AltWArchivesOriginalAndSpawnedAgentsIndependently()
+    {
+        using var folder = new AgentArchiveTests.ArchiveFolder();
+        var registrations = new ServiceCollection().AddLogging();
+        registrations.AddRazorConsoleServices();
+        registrations.AddSingleton<ITerminalViewport>(new Viewport());
+        registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, AllowPersistence = true }, Path.GetTempPath());
+        registrations.AddSingleton(folder.Store);
+        await using var services = registrations.BuildServiceProvider();
+        var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
+        var original = workspace.Add();
+        var type = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
+        var instance = ActivatorUtilities.CreateInstance(services, type, new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
+        await using var renderer = (IAsyncDisposable)instance;
+        RenderFragment<AgentPane> body = _ => builder => { builder.OpenComponent<ArchiveApp>(0); builder.CloseComponent(); };
+        var mount = type.GetMethods().Single(method => method.Name == "MountComponentAsync" && method.IsGenericMethodDefinition);
+        await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance, [ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None])!;
+        var dispatcher = (Dispatcher)type.GetProperty("Dispatcher")!.GetValue(instance)!;
+        AgentPane spawned = null!;
+        await dispatcher.InvokeAsync(() => { spawned = workspace.Add(); workspace.Add(); });
+        await Task.Delay(200);
+        await dispatcher.InvokeAsync(() => { workspace.Focus(original); workspace.Key(original, new() { Key = "w", AltKey = true }); });
+        await Task.Delay(100);
+        await dispatcher.InvokeAsync(() => { workspace.Focus(spawned); workspace.Key(spawned, new() { Key = "w", AltKey = true }); });
+        await Task.Delay(100);
+        Assert.Single(workspace.Panes);
+        Assert.Contains(folder.Store.Closed(), a => a.Key == original.PersistKey);
+        Assert.Contains(folder.Store.Closed(), a => a.Key == spawned.PersistKey);
+    }
+    public sealed class ArchiveApp : App
+    {
+        protected override void OnInitialized()
+        {
+            base.OnInitialized();
+            typeof(App).GetField("_hasRendered", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(this, true);
+            typeof(App).GetField("_isProcessing", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(this, false);
+            var messages = (List<ChatMsg>)typeof(App).GetField("_messages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+            messages.Add(new() { Role = "user", Text = "hello" });
+            messages.Add(new() { Role = "assistant", Text = "hello back" });
+        }
+        protected override Task OnAfterRenderAsync(bool firstRender) => Task.CompletedTask;
+    }
     private static IEnumerable<VNode> Flatten(VNode node)
     {
         yield return node;

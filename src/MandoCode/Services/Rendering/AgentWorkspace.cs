@@ -26,7 +26,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     // Stable column membership keeps live agent components mounted as the layout changes.
     public static int Column(int slot) => slot is 0 or 3 ? 0 : 1;
     public void Refresh() { Revision++; Changed?.Invoke(); Registry?.Notify(); }
-    public AgentPane Add()
+    public AgentPane Add(ArchivedAgent? restored = null)
     {
         if (_panes.Count >= 4)
         {
@@ -48,6 +48,23 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         var existing = (Registry?.Workspaces.SelectMany(w => w.Panes) ?? Panes).Select(p => p.Name);
         pane.Name = config.UseAgentNames ? (Registry?.Callsigns ?? _callsigns).Next(existing) : AgentNaming.NextFreeName(existing);
         config.AgentName = pane.Name;
+        if (restored is not null)
+        {
+            pane.PersistKey = restored.Key;
+            pane.RestoreFrom = restored;
+            if (identity is not null) identity.CheckpointId = restored.Key;
+            pane.Name = restored.Name;
+            config.AgentName = pane.Name;
+            config.ModelName = restored.Settings.Model ?? config.ModelName;
+            config.Temperature = restored.Settings.Temperature;
+            config.MaxTokens = restored.Settings.MaxTokens;
+            config.ContextLength = restored.Settings.ContextLength ?? 0;
+            config.ContextLengthSetByUser = restored.Settings.ContextLengthSetByUser;
+            if (Uri.TryCreate(restored.Settings.OllamaEndpoint, UriKind.Absolute, out var endpoint) && endpoint.Scheme is "http" or "https") config.OllamaEndpoint = endpoint.ToString();
+            config.ValidateAndClamp();
+            pane.Services.GetRequiredService<ProjectRootAccessor>().ProjectRoot = Directory.Exists(restored.ProjectRoot)
+                ? restored.ProjectRoot : pane.Services.GetRequiredService<ProjectRootAccessor>().ProjectRoot;
+        }
         _panes.Add(pane);
         Volatile.Write(ref _snapshot, _panes.ToArray());
         Focus(pane);
@@ -81,6 +98,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
             pane.Session.Append(new Text("Wait for startup or cancel the running request with Escape, then use /agent-close."));
             return;
         }
+        if (!pane.ArchiveForClose()) return;
         _panes.Remove(pane);
         pane.Selected = false;
         Volatile.Write(ref _snapshot, _panes.ToArray());
@@ -124,6 +142,11 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     }
     public bool Key(AgentPane pane, KeyboardEventArgs key)
     {
+        if (key.Key == "Escape" && pane.Active && pane.IsHistoryOpen?.Invoke() == true)
+        {
+            pane.CloseHistory?.Invoke();
+            return true;
+        }
         if (key.Key == "Escape" && pane.Active && pane.IsFileExplorerOpen?.Invoke() == true && pane.ToggleFileExplorer is not null)
         {
             _ = pane.ToggleFileExplorer();
@@ -146,6 +169,14 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         switch (key.Key.ToLowerInvariant())
         {
+            case "h":
+                if (!key.ShiftKey && pane.Active)
+                {
+                    if (pane.IsHistoryOpen?.Invoke() == true) pane.CloseHistory?.Invoke();
+                    else if (pane.IsBusy?.Invoke() != true && pane.IsAwaitingInput?.Invoke() != true && pane.SubmitCommand is not null)
+                        _ = pane.SubmitCommand("/history");
+                }
+                return true;
             case "g":
                 if (!key.ShiftKey && pane.Active && pane.ToggleGitChanges is not null) _ = pane.ToggleGitChanges();
                 return true;
@@ -170,7 +201,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         => DisposeAsync().AsTask().GetAwaiter().GetResult();
     public async ValueTask DisposeAsync()
     {
-        foreach (var pane in _panes.ToArray()) { pane.Stop?.Invoke(); await pane.DisposeAsync().ConfigureAwait(false); }
+        foreach (var pane in _panes.ToArray()) { pane.SaveHistory?.Invoke(true); pane.Stop?.Invoke(); await pane.DisposeAsync().ConfigureAwait(false); }
         _panes.Clear();
         Volatile.Write(ref _snapshot, []);
     }
@@ -179,6 +210,10 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
 public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace workspace) : IDisposable, IAsyncDisposable
 {
     public int Id { get; } = id;
+    public string PersistKey { get; internal set; } = Guid.NewGuid().ToString("N");
+    public ArchivedAgent? RestoreFrom { get; internal set; }
+    public Func<bool, bool>? SaveHistory { get; set; }
+    internal IDisposable? ArchiveLease { get; set; }
     public string Name { get; internal set; } = $"Agent {id}";
     public int Slot { get; internal set; }
     public IServiceProvider Services => scope.ServiceProvider;
@@ -201,10 +236,25 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Func<bool>? IsGitChangesOpen { get; set; }
     public Func<bool>? IsGitDiffOpen { get; set; }
     public Func<bool>? IsFileExplorerOpen { get; set; }
+    public Func<bool>? IsHistoryOpen { get; set; }
+    public Action? CloseHistory { get; set; }
     public ExplorerFocusScope? ExplorerFocus { get; set; }
     private bool _disposed;
+    internal bool ArchiveForClose()
+    {
+        if (_disposed) return true;
+        if (SaveHistory?.Invoke(true) == false) return false;
+        // A component can be remounted while the pane remains alive. Do not treat a
+        // missing callback as proof that the last completed-turn snapshot was closed.
+        var store = Services.GetRequiredService<AgentArchiveStore>();
+        var snapshot = store.Load(PersistKey);
+        if (snapshot is null || snapshot.ClosedAt is not null) return true;
+        if (store.Save(snapshot with { ClosedAt = DateTimeOffset.Now })) return true;
+        Session.Append(new Text(store.Error ?? "Agent history could not be saved.", new Style(Color.Yellow)));
+        return false;
+    }
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
-    public async ValueTask DisposeAsync() { if (_disposed) return; _disposed = true; await scope.DisposeAsync().ConfigureAwait(false); }
+    public async ValueTask DisposeAsync() { if (_disposed) return; _disposed = true; try { await scope.DisposeAsync().ConfigureAwait(false); } finally { ArchiveLease?.Dispose(); } }
 }
 
 public sealed class AgentIdentity
