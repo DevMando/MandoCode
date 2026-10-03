@@ -158,7 +158,6 @@
     private bool _gitChangesOpen;
     private TaskCompletionSource<string?>? _directorySelection;
     private MandoCodeConfig Config { get; set; } = default!;
-    private TaskPlannerService TaskPlanner { get; set; } = default!;
     private PlanRunnerSelector PlanRunners { get; set; } = default!;
     private PlanHandoff PlanHandoff { get; set; } = default!;
     private FileAutocompleteProvider FileProvider { get; set; } = default!;
@@ -368,8 +367,8 @@
         {
             var agentServices = Pane?.Services ?? Services;
             AI = agentServices.GetRequiredService<AIService>();
+            AI.UseExplicitPlanningOnly();
             Config = agentServices.GetRequiredService<MandoCodeConfig>();
-            TaskPlanner = agentServices.GetRequiredService<TaskPlannerService>();
             PlanRunners = agentServices.GetRequiredService<PlanRunnerSelector>();
             PlanHandoff = agentServices.GetRequiredService<PlanHandoff>();
             FileProvider = agentServices.GetRequiredService<FileAutocompleteProvider>();
@@ -1554,23 +1553,13 @@
                 PlayMatrixMoment(input);
             }
 
-            // Check if this request needs task planning BEFORE injecting file content,
-            // so that attached file size doesn't inflate the complexity heuristics
-            var planning = TaskPlanner.GetPlanningDecision(input);
-
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
 
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
 
-            if (planning.Required)
-            {
-                AnsiConsole.MarkupLine($"[dim]Planning automatically: {Spectre.Console.Markup.Escape(planning.Reason ?? "multi-step request")}.[/]");
-                await ForcePlanAsync(processedInput, input);
-            }
-            else
-                await ProcessDirectRequestAsync(processedInput);
+            await ProcessDirectRequestAsync(processedInput);
         }
     }
 

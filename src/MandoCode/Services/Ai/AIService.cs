@@ -332,6 +332,15 @@ public class AIService
     {
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
         _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch, _config.AgentName) + "\n\n" + ShellEnvironment.SystemPromptRules;
+        if (_explicitPlanningOnly)
+        {
+            var start = _systemPrompt.IndexOf("MULTI-STEP PLANNING:", StringComparison.Ordinal);
+            var end = _systemPrompt.IndexOf("FILE PATH RULES", start, StringComparison.Ordinal);
+            _systemPrompt = _systemPrompt.Remove(start, end - start).Insert(start,
+                "PLAN MODE:\nOnly the user's /plan command activates structured plan mode. For normal requests, carry out the work directly using available tools. You may explain an approach in prose, but do not call propose_plan or wait for plan approval.\n\n");
+            _systemPrompt = _systemPrompt.Replace("If the work spans several files or systems, use propose_plan (see MULTI-STEP PLANNING below) rather than narrating a plan in prose — a proposed plan is reviewable and gets executed for you; a described one is neither.",
+                "Carry out multi-step requests directly; structured plan mode is entered only through /plan.", StringComparison.Ordinal);
+        }
         _systemPrompt += "\n\n" + VisionSupport.AgentInstruction();
         if (!string.IsNullOrEmpty(skillIndex))
         {
@@ -456,6 +465,16 @@ public class AIService
     /// Replaces the optional tools supplied by the host application and rebuilds the agent so
     /// they participate in normal MAF function calling and fallback execution.
     /// </summary>
+    private bool _explicitPlanningOnly;
+
+    /// <summary>CLI hosts reserve structured planning for /plan; explicit generation remains available.</summary>
+    public void UseExplicitPlanningOnly()
+    {
+        _explicitPlanningOnly = true;
+        RebuildSystemPrompt();
+        BuildAgent();
+    }
+
     public void SetHostTools(IEnumerable<AIFunction>? tools)
     {
         _hostTools = tools?.ToArray() ?? Array.Empty<AIFunction>();
@@ -525,7 +544,7 @@ public class AIService
             tools.Add(NamedTool(webSearchPlugin.FetchWebpage, "fetch_webpage"));
         }
 
-        if (_config.EnableTaskPlanning)
+        if (_config.EnableTaskPlanning && !_explicitPlanningOnly)
         {
             var planningPlugin = new PlanningPlugin();
             tools.Add(NamedTool(planningPlugin.ProposePlan, "propose_plan"));
