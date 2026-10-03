@@ -54,7 +54,7 @@ public class ConfigMenuHistoryTests
         private T Field<T>(string name) => (T)typeof(App).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
         public Task Config() => (Task)typeof(App).GetMethod("HandleConfigCommandAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(this, null)!;
         public Task<string> Choose(bool temporary) => (Task<string>)typeof(App).GetMethod("WizardPromptSelectCoreAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(this, new object?[] { "Configuration Options:", new[] { "View current configuration", "Cancel" }, temporary ? "Cancel" : null })!;
+            .Invoke(this, new object?[] { "Configuration Options:", new[] { "View current configuration", "Cancel" }, temporary ? "Cancel" : null, false })!;
         public void Submit(string choice) => typeof(App).GetMethod("HandleWizardSelectSubmit", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(this, new object[] { choice });
         protected override void OnInitialized() => typeof(App).GetField("_showPrompt", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(this, true);
         protected override Task OnAfterRenderAsync(bool firstRender) => Task.CompletedTask;

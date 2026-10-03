@@ -237,14 +237,14 @@ public class AgentWorkspaceTests
     }
 
     [Fact]
-    public void AgentServicesAndSettings_AreIndependent_AndInheritCurrentModel()
+    public void AgentServicesAndSettings_AreIndependent_AndUseDefaultModel()
     {
         using var services = Services();
         var workspace = services.GetRequiredService<AgentWorkspace>();
         var first = workspace.Add();
         first.Services.GetRequiredService<MandoCodeConfig>().ModelName = "first-model";
         var second = workspace.Add();
-        Assert.Equal("first-model", second.Model);
+        Assert.Equal(services.GetRequiredService<AgentModelDefaults>().Model, second.Model);
         second.Services.GetRequiredService<MandoCodeConfig>().ModelName = "second-model";
         Assert.Equal("first-model", first.Model);
         foreach (var type in new[] { typeof(AIService), typeof(TokenTrackingService), typeof(PlanHandoff), typeof(ApprovalSelectCoordinator), typeof(InstructionPromptCoordinator), typeof(InputStateMachine), typeof(SpinnerService), typeof(McpApprovalGate) })

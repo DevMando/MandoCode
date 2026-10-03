@@ -100,11 +100,15 @@ class Program
 
     internal static void RegisterAgentServices(IServiceCollection services, MandoCodeConfig config, string projectRoot)
     {
+        config.DefaultAgentModel ??= config.GetEffectiveModelName();
+        services.AddSingleton(new AgentModelDefaults(config));
         // Register configuration per agent
         services.AddScoped(_ =>
         {
             var copy = System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;
             copy.AllowPersistence = config.AllowPersistence;
+            copy.ModelName = config.DefaultAgentModel;
+            copy.ModelPath = null;
             return copy;
         });
 
