@@ -9,7 +9,7 @@
         {
             @if (entry.ToolActivity is { Finished: true } activity)
             {
-                <WorkspaceButton @key="entry.Id" Content="@((activity.Expanded ? "▾ " : "▸ ") + activity.Summary)" OnClick="@(() => ToggleTools(activity))" />
+                <WorkspaceButton @key="entry.Id" Content="@((activity.Expanded ? "▾ ⚡ " : "▸ ⚡ ") + activity.Summary)" OnClick="@(() => ToggleTools(activity))" />
             }
             else if (entry.ToolActivity is null && (entry.ToolOutput is null || !entry.ToolOutput.Finished || entry.ToolOutput.Expanded))
             {

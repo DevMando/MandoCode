@@ -1000,12 +1000,7 @@
         // Track operation type for contextual spinner messages
         _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
-        // Suppress display for known FileSystem operations — they will be shown
-        // as rich operation displays when OnFunctionCompleted fires
-        if (!IsFileSystemOperation(call.FunctionName))
-        {
-            AnsiConsole.MarkupLine($"[dim][[Function]][/] [#56b6c2]{Spectre.Console.Markup.Escape(call.Description)}[/]");
-        }
+        AnsiConsole.MarkupLine($"[#56b6c2]{ToolActivityIcons.For(call.FunctionName, call.McpServerName is not null)} {Spectre.Console.Markup.Escape(call.Description)}[/]");
 
         // Show what the model is doing above the spinner in grey
         Spinner.Start(call.Description);
@@ -1122,13 +1117,13 @@
                 _recentReadFiles.Clear();
             }
         }
-        else if (result.Success)
+        if (result.Success)
         {
-            AnsiConsole.MarkupLine($"[dim][[Done]][/] [green]✓[/]");
+            AnsiConsole.MarkupLine("[green]✅ Completed[/]");
         }
         else
         {
-            AnsiConsole.MarkupLine($"[dim][[Error]][/] [red]{Spectre.Console.Markup.Escape(result.Result)}[/]");
+            AnsiConsole.MarkupLine($"[red]✗ Failed · {Spectre.Console.Markup.Escape(result.Result)}[/]");
         }
 
         // Refresh file cache after any operation that modifies the file system
