@@ -282,6 +282,7 @@ public class AgentFunctionMiddleware
 
         OnFunctionInvoked?.Invoke(new FunctionCall
         {
+            McpServerName = mcpServerName,
             FunctionName = functionName,
             Description = description,
             Arguments = ToArgDictionary(context.Arguments)
