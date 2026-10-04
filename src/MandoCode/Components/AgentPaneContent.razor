@@ -19,7 +19,8 @@
                         Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground"
                         SelectedBackground="@(new Color(80, 55, 101))" HoverBackground="@(new Color(96, 69, 119))"
                         OnClick="PickModel" /></Box>
-                    <Box Width="@SettingsWidth"><WorkspaceButton Content="@(SettingsWidth >= 20 ? " ⚙ Settings (Alt+S) " : SettingsWidth >= 12 ? " ⚙ Settings " : " ⚙ ")" Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground" OnClick="ShowSettings" /></Box>
+                    <Box Width="@SettingsWidth"><WorkspaceButton Content="@Caption(SettingsWidth >= 24 ? "Agent Settings (Alt+S)" : SettingsWidth >= 16 ? "Agent Settings" : "Settings", SettingsWidth)" Background="@HeaderBackground" MutedBackground="@MutedHeaderBackground" OnClick="ShowSettings" /></Box>
+                    @if (HeaderGap > 0) { <Box Width="@HeaderGap"><Markup Content="@(new string(' ', HeaderGap))" Background="@EffectiveHeaderBackground" /></Box> }
                     @if (GitWidth > 0 && _git is not null)
                     {
                         @if (ChangesWidth > 0)
@@ -55,8 +56,9 @@
     private int GitWidth => _git is null || Pane.Width < 35 ? 0 : Math.Min(Math.Min(39, Pane.Width / 3), RazorConsole.Core.Input.TextSelectionState.CellWidth(_git.Label) + 8);
     private int NameWidth => Pane.Workspace.Panes.Count == 1 ? 0 : Math.Min(Math.Max(1, Pane.Width / 3), Math.Max(1, RazorConsole.Core.Input.TextSelectionState.CellWidth(Pane.Name) + 4));
     private int ChangesWidth => GitWidth == 0 || _git?.Dirty != true ? 0 : Pane.Width >= 90 ? 21 : Pane.Width >= 70 ? 13 : Pane.Width >= 55 ? 9 : 3;
-    private int SettingsWidth => Pane.Width >= 100 ? 20 : Pane.Width >= 65 ? 12 : 3;
-    private int ModelWidth => Math.Max(1, Pane.Width - NameWidth - GitWidth - ChangesWidth - SettingsWidth);
+    private int SettingsWidth => Pane.Width >= 110 ? 24 : Pane.Width >= 65 ? 16 : Math.Min(10, Math.Max(1, Pane.Width / 3));
+    private int ModelWidth => Math.Min(48, Math.Max(1, Pane.Width - NameWidth - GitWidth - ChangesWidth - SettingsWidth));
+    private int HeaderGap => Math.Max(0, Pane.Width - NameWidth - ModelWidth - SettingsWidth - GitWidth - ChangesWidth);
     private async Task ShowSettings() { Pane.Workspace.Focus(Pane); if (Pane.ToggleSettings is not null) await Pane.ToggleSettings(); }
     private async Task ShowChanges() { Pane.Workspace.Focus(Pane); if (Pane.ToggleGitChanges is not null) await Pane.ToggleGitChanges(); }
     protected override void OnInitialized() => _ = RefreshGitAsync();
