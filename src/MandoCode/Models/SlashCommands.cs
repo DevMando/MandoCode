@@ -58,6 +58,7 @@ public static class SlashCommands
         { "/ollama-serve", "Start local Ollama and retry the connection twice" },
         { "/learn", "Learn about LLMs and local AI models" },
         { "/retry", "Retry Ollama connection" },
+        { "/update", "Check for a stable release and update MandoCode after closing the CLI" },
         { "/music", "Play music" },
         { "/music-stop", "Stop music playback" },
         { "/music-pause", "Pause/resume music" },

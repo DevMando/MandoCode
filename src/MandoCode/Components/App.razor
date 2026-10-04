@@ -575,8 +575,8 @@
 
             // Split so the banner can render the message in gold and the command in green
             // (Markup escapes inline color tags, so two-color text = two Markup elements).
-            _updateNotice = $"✨ MandoCode {update.LatestVersion} is available (you have {update.CurrentVersion}) — update:";
-            _updateCommand = update.UpdateCommand;
+            _updateNotice = $"✨ MandoCode {update.LatestVersion} is available!";
+            _updateCommand = $"Run /update to upgrade, or run manually: {update.UpdateCommand}";
             await InvokeAsync(StateHasChanged);
         }
         catch
@@ -1330,6 +1330,12 @@
                 var command = InputStateMachine.GetCommandName(input);
 
                 // Handle special commands
+                if (command == "update")
+                {
+                    await HandleUpdateCommandAsync();
+                    if (Services.GetRequiredService<ToolUpdateService>().Pending) return;
+                    continue;
+                }
                 if (command == "exit")
                 {
                     StopMusicVisualizer();
@@ -1819,6 +1825,66 @@
         if (Pane?.Workspace.Registry is not { } registry) return;
         if (registry.Restore(archive) is not null) CloseHistory();
     }
+    private async Task HandleUpdateCommandAsync()
+    {
+        var updater = Services.GetRequiredService<ToolUpdateService>();
+        if (!updater.TryBegin())
+        {
+            AnsiConsole.MarkupLine("[yellow]An update is already being checked or prepared.[/]");
+            return;
+        }
+        AgentPane[] GetAgents() => (Pane?.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes)
+            ?? Pane?.Workspace.Panes ?? Array.Empty<AgentPane>()).ToArray();
+        var agents = GetAgents();
+        bool OtherAgentBusy() => agents.Any(agent => agent != Pane && agent.IsBusy?.Invoke() == true);
+        _isProcessing = true;
+        try
+        {
+            if (OtherAgentBusy())
+            {
+                AnsiConsole.MarkupLine("[yellow]Finish work and close menus in other agents before updating. /update closes all workspaces.[/]");
+                return;
+            }
+            Spinner.Start("Checking for updates");
+            UpdateInfo? update;
+            try
+            {
+                var problem = await updater.CheckInstallationAsync();
+                if (problem is not null) { AnsiConsole.WriteLine(problem); return; }
+                update = await UpdateCheck.CheckForUpdateAsync(force: true);
+            }
+            finally { Spinner.Stop(); }
+            if (update is null)
+            {
+                AnsiConsole.MarkupLine("[green]MandoCode is already on the latest stable release.[/]");
+                return;
+            }
+            var persistenceNote = agents.Any(agent => !agent.Services.GetRequiredService<MandoCodeConfig>().AllowPersistence)
+                ? " History saving is disabled for some agents; their conversations will not be saved."
+                : " Agent histories will be saved.";
+            if (!await WizardConfirmAsync($"Update to {update.LatestVersion}? MandoCode will close all workspaces.{persistenceNote}", false)) return;
+            agents = GetAgents();
+            if (OtherAgentBusy())
+            {
+                AnsiConsole.MarkupLine("[yellow]Another agent started working. Finish its work before updating.[/]");
+                return;
+            }
+            if (agents.Any(agent => agent.SaveHistory?.Invoke(false) == false))
+            {
+                AnsiConsole.MarkupLine("[yellow]Update cancelled because an agent history could not be saved.[/]");
+                return;
+            }
+            updater.Prepare(update.LatestVersion);
+            Lifetime.StopApplication();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.WriteLine("Could not prepare the update: " + ex.Message);
+            AnsiConsole.WriteLine("Run manually: dotnet tool update -g MandoCode");
+        }
+        finally { Spinner.Stop(); updater.End(); _isProcessing = false; }
+    }
+
     private DateTimeOffset? _archiveClosedAt;
     private bool SaveAgentHistory(bool closed)
     {

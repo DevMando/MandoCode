@@ -39,12 +39,10 @@
         <HelpDisplay />
         @if (!string.IsNullOrEmpty(UpdateNotice))
         {
-            <Columns>
-                @* Gold message + green command — the app's existing palette (gold values, green hints).
-                   Markup escapes inline color tags, so two colors = two Markup elements side by side. *@
+            <Rows>
                 <Markup Content="@UpdateNotice" Foreground="@(new Color(255, 200, 80))" />
                 <Markup Content="@UpdateCommand" Foreground="@PaneColors.For(Pane, Color.Green)" />
-            </Columns>
+            </Rows>
         }
     }
 </Rows>

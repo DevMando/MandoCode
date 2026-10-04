@@ -50,6 +50,24 @@ mandocode
 
 First run launches a guided wizard: it detects Ollama, offers to start it, walks you through cloud sign-in if you'd like more powerful models, and auto-pulls a sensible default. You can re-run it any time with `/setup`.
 
+### Update
+
+Run `/update` inside MandoCode to check for the latest stable release. For global .NET tool installations, it asks before closing all workspaces, saves agent histories when persistence is enabled, and updates after the CLI exits. Finish work in other agents first. The terminal prints a log path with update progress, success, or failure; launch `mandocode` again after completion. The .NET SDK is required. Local tools and source builds should use their original installation method.
+
+You can also close MandoCode and update manually:
+
+```bash
+dotnet tool update -g MandoCode
+```
+
+Developers can exercise the real updater helper without installing or updating any tool:
+
+```bash
+dotnet run --project tests/UpdateSimulation/UpdateSimulation.csproj
+```
+
+This simulation replaces the package update command, verifies the helper waits for its parent to exit, and runs success and failure cases. Logs remain under `bin/update-simulation`. It does not test an actual NuGet installation or the interactive confirmation/history workflow.
+
 ## Troubleshooting
 
 ```bash
