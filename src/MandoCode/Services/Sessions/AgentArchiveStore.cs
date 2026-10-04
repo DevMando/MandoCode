@@ -6,7 +6,11 @@ using Spectre.Console.Rendering;
 namespace MandoCode.Services;
 
 public sealed record ArchivedSpan(string Text, string Style);
-public sealed record ArchivedBlock(List<ArchivedSpan> Spans, string? UserPrompt, bool SpaceAfter);
+public sealed record ArchivedBlock(List<ArchivedSpan> Spans, string? UserPrompt, bool SpaceAfter)
+{
+    public long? ToolGroup { get; init; }
+    public ToolActivity? ToolActivity { get; init; }
+}
 public sealed record ArchivedSettings(string? Model, double Temperature, int MaxTokens, int? ContextLength)
 {
     public string? OllamaEndpoint { get; init; }
@@ -175,17 +179,23 @@ public sealed class AgentArchiveStore
         if (start < 0) return [];
         var options = new RenderOptions(Spectre.Console.AnsiConsole.Profile.Capabilities, new Size(120, 10000));
         var blocks = new List<ArchivedBlock>();
+        var groups = entries.Where(e => e.ToolActivity is not null).ToDictionary(e => e.ToolActivity!, e => e.Id);
         foreach (var entry in entries.Skip(start))
         {
             var spans = entry.Content.Render(options, 120).Where(s => !s.IsControlCode)
                 .Select(s => new ArchivedSpan(s.Text, s.Style?.ToMarkup() ?? "")).ToList();
-            blocks.Add(new(spans, entry.UserPrompt, entry.SpaceAfter));
+            blocks.Add(new(spans, entry.UserPrompt, entry.SpaceAfter)
+            {
+                ToolGroup = entry.ToolActivity is not null ? entry.Id : entry.ToolOutput is { } output ? groups.GetValueOrDefault(output) : null,
+                ToolActivity = entry.ToolActivity
+            });
         }
         return blocks;
     }
     public static void Replay(ArchivedAgent archive, TuiSession session)
     {
         session.Clear();
+        var groups = archive.Transcript.Where(b => b.ToolActivity is not null && b.ToolGroup is not null).ToDictionary(b => b.ToolGroup!.Value, b => b.ToolActivity!);
         foreach (var block in archive.Transcript)
         {
             var text = new Paragraph();
@@ -196,7 +206,9 @@ public sealed class AgentArchiveStore
                 catch { style = Style.Plain; }
                 text.Append(span.Text, style);
             }
-            session.AppendRestored(text, block.UserPrompt, block.SpaceAfter);
+            if (block.ToolActivity is { } activity) { activity.Finished = true; activity.Expanded = false; }
+            session.AppendRestored(text, block.UserPrompt, block.SpaceAfter, block.ToolActivity,
+                block.ToolActivity is null && block.ToolGroup is { } group ? groups.GetValueOrDefault(group) : null);
         }
     }
 }

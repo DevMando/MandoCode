@@ -204,7 +204,7 @@ public static class SyntaxHighlighter
             // 1. Comments (highest priority)
             if (TryMatchComment(code, pos, commentStyle, out match))
             {
-                sb.Append("[dim]");
+                sb.Append("[grey62]");
                 sb.Append(Markup.Escape(match.Value));
                 sb.Append("[/]");
                 pos += match.Length;
@@ -225,7 +225,7 @@ public static class SyntaxHighlighter
             match = NumberLiteral.Match(code, pos);
             if (match.Success && match.Index == pos)
             {
-                sb.Append("[magenta]");
+                sb.Append("[mediumpurple1]");
                 sb.Append(Markup.Escape(match.Value));
                 sb.Append("[/]");
                 pos += match.Length;

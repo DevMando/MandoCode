@@ -264,6 +264,7 @@
     private readonly System.Text.StringBuilder _replyUnprinted = new();
     private readonly List<string> _replyPrinted = new();
     private bool _replyOpen;
+    private bool _replyBlockPrinted;
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
@@ -994,6 +995,8 @@
         // What the model wrote before this call prints now, above the call's line.
         PrintReplySoFar();
 
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: true);
+
         // Track operation type for contextual spinner messages
         _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
@@ -1013,6 +1016,7 @@
         lock (_replyLock)
         {
             _replyOpen = true;
+            _replyBlockPrinted = false;
             _replyUnprinted.Clear();
             _replyPrinted.Clear();
         }
@@ -1066,8 +1070,15 @@
             _replyPrinted.Add(text);
         }
         Spinner.UpdatePreview(null);
-        AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
+        PrintReplyHeading();
         RenderMarkdownGuarded(text);
+    }
+
+    private void PrintReplyHeading()
+    {
+        if (_replyBlockPrinted) AnsiConsole.WriteLine(" ");
+        _replyBlockPrinted = true;
+        AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
     }
 
     /// <summary>A turn finished with <paramref name="turnText"/>: returns what of it still needs
@@ -1087,6 +1098,7 @@
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
     {
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: false, success: result.Success);
         // Pause the spinner so the message renders on a clean line
         Spinner.Stop();
 
@@ -2231,6 +2243,7 @@
 
     private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null)
     {
+        (Pane?.Session ?? TuiConsole.Current)?.BeginToolTurn();
         // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
         // turn the user then cancelled would sit in the single slot and execute at the end of some
         // later, unrelated turn.
@@ -2289,7 +2302,7 @@
                         var unprinted = SettleReply(chunk);
                         if (unprinted.Length > 0)
                         {
-                            AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
+                            PrintReplyHeading();
                             RenderMarkdownGuarded(unprinted);
                         }
 
@@ -2376,7 +2389,7 @@
                                     ? $" · {lastOp.TokensPerSecond.Value:0.#} tok/s"
                                     : "";
                                 var tokenSummary = $"{inLabel} · {outLabel}{tpsLabel}";
-                                AnsiConsole.WriteSpaced(new Text(tokenSummary, new Style(Color.Grey, decoration: Decoration.Dim)));
+                                AnsiConsole.WriteSpaced(new Text(tokenSummary, new Style(Color.Grey62)));
                             }
                         }
 
@@ -2436,6 +2449,7 @@
         finally
         {
             CloseReply();
+            (Pane?.Session ?? TuiConsole.Current)?.CompleteToolTurn();
             StopCancelKeyListener();
             var oldCts = Interlocked.Exchange(ref _requestCts, null);
             oldCts?.Dispose();

@@ -15,16 +15,16 @@
 <FlexBox Direction="FlexDirection.Row" Gap="1" Width="@RowWidth">
     @if (TotalSessionTokens > 0)
     {
-        <Markup Content="@(TotalLabel + (ShowContext ? " ·" : ""))" Foreground="@PaneColors.For(Pane, Color.Grey)" Decoration="Decoration.Dim" />
+        <Markup Content="@(TotalLabel + (ShowContext ? " ·" : ""))" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
     }
     @if (ShowContext)
     {
-    <Markup Content="Context" Foreground="@PaneColors.For(Pane, Color.Grey)" Decoration="Decoration.Dim" />
+    <Markup Content="Context" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
     <FlexBox Direction="FlexDirection.Row" Gap="0" Width="@Math.Max(1, Reading.Bar.Length)">
         <Markup Content="@Reading.Filled" Foreground="@PaneColors.For(Pane, BarColor)" />
         <Markup Content="@Reading.Empty" Foreground="@PaneColors.For(Pane, Color.Grey42)" />
     </FlexBox>
-    <Markup Content="@Reading.Label" Foreground="@PaneColors.For(Pane, Color.Grey)" Decoration="Decoration.Dim" />
+    <Markup Content="@Reading.Label" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
     }
 </FlexBox>
 
