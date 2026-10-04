@@ -69,6 +69,18 @@ public class AgentSettingsKeyboardTests
             T Value<T>(string name) => (T)typeof(AgentSettingsPanel).GetField(name, flags)!.GetValue(panel)!;
             async Task Key(string key) => await (Task)typeof(AgentSettingsPanel).GetMethod("Key", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = key } })!;
             Assert.NotNull(scope.NavigateTab);
+            var dirty = typeof(AgentSettingsPanel).GetProperty("HasChanges", flags)!;
+            Assert.False((bool)dirty.GetValue(panel)!);
+            var draft = Value<AgentSettingsDraft>("_draft");
+            var original = draft.Config.EnableDiffApprovals;
+            draft.Config.EnableDiffApprovals = !original;
+            Assert.True((bool)dirty.GetValue(panel)!);
+            await (Task)typeof(AgentSettingsPanel).GetMethod("RequestClose", flags)!.Invoke(panel, null)!;
+            Assert.True(Value<bool>("_confirmDiscard"));
+            await Key("Escape");
+            Assert.False(Value<bool>("_confirmDiscard"));
+            draft.Config.EnableDiffApprovals = original;
+            Assert.False((bool)dirty.GetValue(panel)!);
             Assert.Contains("Apply Global Defaults", rendered.ToHtmlString());
             Assert.Contains("Save to Global Defaults", rendered.ToHtmlString());
             await scope.ToggleAsync(); Assert.Equal(1, Value<int>("_selected"));

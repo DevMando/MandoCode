@@ -9,10 +9,10 @@
    @for (var i = 0; i < Groups.Length; i++)
    {
     var tab = i;
-    <div data-focusable="false" @onclick="@(() => ChangeTab(tab))"><Markup Content="@($" {Groups[i]} ")" Foreground="@(_tab == i ? Color.Black : Color.Grey85)" Background="@(_tab == i ? Color.DeepSkyBlue1 : Color.Default)" /></div>
+    <div data-focusable="false" @onclick="@(() => ChangeTab(tab))"><Markup Content="@($" {Groups[i]} ")" Foreground="@(_tab == i ? Color.Black : Color.Grey85)" Background="@(_tab == i ? new Color(80, 55, 101) : new Color(22, 26, 30))" /></div>
    }
   </Flex></Box>
-  <Box FillWidth="true" FillHeight="true">
+  <Box FillWidth="true" Height="@(ModelPicker is not null ? Math.Max(3, Height - 4) : Math.Min(PageSize, VisibleOptions.Sum(i => AgentSettingsDraft.Wrap(Items[i], TextWidth - 2).Length)))">
   @if (_custom && _editing is { } field)
   {
    <Rows><Markup Content="@Spectre.Console.Markup.Escape(field.Label)" Foreground="Color.Purple" />
@@ -48,21 +48,38 @@
   <Box Height="@DescriptionLines.Length" FillWidth="true"><Rows>
    @foreach (var line in DescriptionLines) { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="Color.Grey70" /> }
   </Rows></Box>
-  @for (var action = 0; action < Actions.Length; action++)
+  <Box FillHeight="true" FillWidth="true"><Markup Content=" " /></Box>
+  <Box Height="1"><Markup Content="@(HasChanges ? "Unsaved changes" : "")" Foreground="Color.Green" /></Box>
+  @if (_confirmDiscard)
+  {
+   <Box Height="1" FillWidth="true"><Rows>
+    <Markup Content="Discard unsaved changes?" Foreground="Color.Green" />
+   </Rows></Box>
+   <Box Height="3" FillWidth="true"><Flex Direction="FlexDirection.Row">
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="KeepEditing"><Markup Content="@(_discardSelected ? "  Keep editing" : "> Keep editing")" Foreground="@(!_discardSelected ? Color.Black : Color.Grey85)" Background="@(!_discardSelected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Green"><div data-focusable="false" @onclick="Discard"><Markup Content="@(_discardSelected ? "> Discard changes" : "  Discard changes")" Foreground="@(_discardSelected ? Color.Black : Color.Grey85)" Background="@(_discardSelected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+   </Flex></Box>
+  }
+  else
+  {
+  <Box Height="3" FillWidth="true"><Flex Direction="FlexDirection.Row">
+   @for (var action = 0; action < 2; action++)
+   {
+    var index = OptionCount + action;
+    var label = Actions[action];
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="@(label == "Save" ? HasChanges ? Color.Green : Color.Grey42 : Color.Grey62)"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(label == "Save" && !HasChanges ? Color.Grey42 : index == _selected ? Color.Black : Color.Grey85)" Background="@(index == _selected && (label != "Save" || HasChanges) ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+   }
+  </Flex></Box>
+  <Box Height="@GlobalDescriptionLines.Length"><Rows>@foreach (var line in GlobalDescriptionLines) { <Markup Content="@line" Foreground="Color.Grey70" /> }</Rows></Box>
+  @for (var action = 2; action < Actions.Length; action++)
   {
    var index = OptionCount + action;
-   var actionLabel = Actions[action];
-   @if (action >= 2) { <Box Height="1"><Markup Content=" " /></Box> }
-   <Box Height="@AgentSettingsDraft.Wrap(actionLabel, TextWidth - 2).Length" FillWidth="true"><div data-focusable="false" @onclick="@(() => Activate(index))"><Rows>
-    @foreach (var line in AgentSettingsDraft.Wrap(actionLabel, TextWidth - 2).Select((text, row) => (text, row)))
-    {
-     <Markup Content="@((index == _selected && line.row == 0 ? "> " : "  ") + line.text)" Foreground="@(index == _selected && !_custom ? Color.Black : Color.Grey85)" Background="@(index == _selected && !_custom ? Color.DeepSkyBlue1 : Color.Default)" />
-    }
-   </Rows>
-   </div></Box>
+   var label = Actions[action];
+   <Box Height="@(AgentSettingsDraft.Wrap(label, TextWidth - 4).Length + 2)" FillWidth="true" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(index == _selected ? Color.Black : Color.Grey85)" Background="@(index == _selected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+  }
   }
   @if (Config.ShowTips) { <Box Height="@TipLines.Length" FillWidth="true"><Rows>@foreach (var line in TipLines) { <Markup Content="@line" Foreground="Color.Grey50" /> }</Rows></Box> }
-  @if (_status.Length > 0) { <Box Height="@StatusLines.Length" FillWidth="true"><Rows>@foreach (var line in StatusLines) { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="Color.Gold1" /> }</Rows></Box> }
+  @if (_status.Length > 0) { <Box Height="@StatusLines.Length" FillWidth="true"><Rows>@foreach (var line in StatusLines) { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="Color.Green" /> }</Rows></Box> }
   }
  </Flex>
 </Box>
@@ -88,6 +105,16 @@
  private string _status = "";
  private int _tab, _selected, _returnSelection;
  private bool _saving, _custom, _focusCustom;
+ private bool _confirmDiscard, _discardSelected;
+ private bool HasChanges => AgentSettingsDraft.Fields.Any(f => f.Read(_draft.Config) != f.Read(Config));
+ private string[] GlobalDescriptionLines => AgentSettingsDraft.Wrap("Apply saved defaults here, or save this agent's settings as defaults for new agents.", TextWidth);
+ private void KeepEditing() { _confirmDiscard = false; _discardSelected = false; }
+ private async Task Discard() { _confirmDiscard = false; await OnClose.InvokeAsync(); }
+ private async Task RequestClose()
+ {
+  if (HasChanges) { _confirmDiscard = true; _discardSelected = false; }
+  else await OnClose.InvokeAsync();
+ }
  private PromptInput? _customInput;
  private readonly string _focusKey = "agent-settings-" + Guid.NewGuid().ToString("N");
  private AgentSettingsDraft.Field[] Fields => AgentSettingsDraft.Fields.Where(f => f.Group == Groups[_tab] && (f.Key != "contextLength" || !MandoCodeConfig.IsCloudModel(Config.GetEffectiveModelName()))).ToArray();
@@ -104,7 +131,7 @@
  private string[] DescriptionLines => AgentSettingsDraft.Wrap(Description, TextWidth);
  private string[] StatusLines => AgentSettingsDraft.Wrap(_status, TextWidth);
  private string[] TipLines => AgentSettingsDraft.Wrap("Tab/↑/↓ select · ←/→ tabs · Enter choose · Esc back", TextWidth);
- private int PageSize => Math.Max(1, Height - 3 - DescriptionLines.Length - (Config.ShowTips ? TipLines.Length : 0) - (_status.Length > 0 ? StatusLines.Length : 0) - 2 - Actions.Sum(action => AgentSettingsDraft.Wrap(action, TextWidth - 2).Length));
+ private int PageSize => Math.Max(1, Height - 7 - DescriptionLines.Length - GlobalDescriptionLines.Length - (Config.ShowTips ? TipLines.Length : 0) - (_status.Length > 0 ? StatusLines.Length : 0) - (_confirmDiscard ? 3 : 0) - Actions.Skip(2).Sum(action => AgentSettingsDraft.Wrap(action, TextWidth - 4).Length + 2));
  private int[] VisibleOptions
  {
   get
@@ -175,6 +202,7 @@
  }
  private Task Cycle(bool reverse)
  {
+  if (_confirmDiscard) { _discardSelected = !_discardSelected; StateHasChanged(); return Task.CompletedTask; }
   if (_saving || ModelPicker is not null) return Task.CompletedTask;
   _custom = false;
   _selected = (_selected + (reverse ? Items.Length - 1 : 1)) % Items.Length;
@@ -219,7 +247,8 @@
  }
  private async Task PerformAction(string action)
  {
-  if (action == "Cancel") { await OnClose.InvokeAsync(); return; }
+  if (action == "Cancel") { await RequestClose(); return; }
+  if (action == "Save" && !HasChanges) return;
   {
    _saving = true; _status = "Saving";
    try
@@ -239,6 +268,13 @@
  private async Task Key(KeyboardEventArgs key)
  {
   if (Pane is not null && !Pane.Active || _saving) return;
+  if (_confirmDiscard)
+  {
+   if (key.Key == "Escape") KeepEditing();
+   else if (key.Key is "Tab" or "ArrowUp" or "ArrowDown" or "ArrowLeft" or "ArrowRight") _discardSelected = !_discardSelected;
+   else if (key.Key is "Enter" or "Return") { if (_discardSelected) await Discard(); else KeepEditing(); }
+   return;
+  }
   if (ModelPicker is not null)
   {
    if (key.Key == "Escape") await OnModelCancel.InvokeAsync();
@@ -249,7 +285,7 @@
   }
   if (key.Key == "Tab") { await Cycle(key.ShiftKey); return; }
   if (Pane?.Workspace.Key(Pane, key) == true) return;
-  if (key.Key == "Escape") { if (_editing is not null) Back(); else await OnClose.InvokeAsync(); }
+  if (key.Key == "Escape") { if (_editing is not null) Back(); else await RequestClose(); }
   else if (key.Key is "ArrowLeft" or "ArrowRight") ChangeTab((_tab + (key.Key == "ArrowLeft" ? 2 : 1)) % 3);
   else if (key.Key == "ArrowUp") _selected = Math.Max(0, _selected - 1);
   else if (key.Key == "ArrowDown") await Cycle(false);
