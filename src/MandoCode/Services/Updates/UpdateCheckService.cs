@@ -42,20 +42,26 @@ public sealed class UpdateCheckService
 
     /// <summary>
     /// Returns an <see cref="UpdateInfo"/> if a newer stable version is available, otherwise
-    /// null (up to date, opted out, throttled-and-up-to-date, or any failure). Never throws.
+    /// null (up to date, opted out, throttled-and-up-to-date, or any failure).
+    /// Explicit checks with force=true bypass caching/opt-out and surface network errors.
     /// </summary>
-    public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken cancellationToken = default)
+    public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken cancellationToken = default, bool force = false)
     {
         try
         {
-            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(OptOutEnvVar)))
+            if (!force && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(OptOutEnvVar)))
                 return null;
 
             var current = GetCurrentVersion();
             if (current is null)
+            {
+                if (force) throw new IOException("Could not determine the running MandoCode version.");
                 return null;
+            }
 
-            var latest = await GetLatestVersionAsync(cancellationToken);
+            var latest = force
+                ? await FetchLatestFromNuGetAsync(cancellationToken) ?? throw new IOException("NuGet did not return a stable MandoCode version.")
+                : await GetLatestVersionAsync(cancellationToken);
             if (latest is null)
                 return null;
 
@@ -63,7 +69,7 @@ public sealed class UpdateCheckService
                 ? new UpdateInfo(VersionToString(current), VersionToString(latest))
                 : null;
         }
-        catch
+        catch when (!force)
         {
             // Fail silent — an update nag is never worth surfacing an error for.
             return null;

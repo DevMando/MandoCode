@@ -50,6 +50,16 @@ mandocode
 
 First run launches a guided wizard: it detects Ollama, offers to start it, walks you through cloud sign-in if you'd like more powerful models, and auto-pulls a sensible default. You can re-run it any time with `/setup`.
 
+### Update
+
+Run `/update` inside MandoCode to check for the latest stable release. For global .NET tool installations, it asks before closing all workspaces, saves agent histories when persistence is enabled, and updates after the CLI exits. Finish work in other agents first. The terminal prints a log path with update progress, success, or failure; launch `mandocode` again after completion. The .NET SDK is required. Local tools and source builds should use their original installation method.
+
+You can also close MandoCode and update manually:
+
+```bash
+dotnet tool update -g MandoCode
+```
+
 ## Troubleshooting
 
 ```bash

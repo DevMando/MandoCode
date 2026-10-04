@@ -53,11 +53,13 @@ class Program
         var positional = args.Where(a => !a.StartsWith('-')).ToArray();
         var projectRoot = positional.Length > 0 ? positional[0] : Environment.CurrentDirectory;
 
+        var toolUpdate = new ToolUpdateService();
         var hostBuilder = Host.CreateDefaultBuilder(args)
             .UseRazorConsole<TerminalWorkspaceView>();
 
         hostBuilder.ConfigureServices(services =>
         {
+            services.AddSingleton(toolUpdate);
             // The widget canvas owns visible output; legacy output joins the transcript.
             services.Configure<ConsoleAppOptions>(options =>
             {
@@ -92,10 +94,17 @@ class Program
             });
         });
 
-        using var host = hostBuilder.Build();
-        using var outputScope = host.Services.CreateScope();
-        using var tuiOutput = TuiConsole.Begin(outputScope.ServiceProvider.GetRequiredService<TuiSession>());
-        await host.RunAsync();
+        using (var host = hostBuilder.Build())
+        using (var outputScope = host.Services.CreateScope())
+        using (var tuiOutput = TuiConsole.Begin(outputScope.ServiceProvider.GetRequiredService<TuiSession>()))
+            await host.RunAsync();
+        try { toolUpdate.Launch(); }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not start the update: " + ex.Message);
+            Console.WriteLine("Run manually: dotnet tool update -g MandoCode");
+            Environment.ExitCode = 1;
+        }
     }
 
     internal static void RegisterAgentServices(IServiceCollection services, MandoCodeConfig config, string projectRoot)
