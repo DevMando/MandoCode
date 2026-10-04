@@ -9,6 +9,26 @@ public class MarkdownHtmlRendererTests
 {
     private const string Osc8Prefix = "]8;;";
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("text")]
+    [InlineData("output")]
+    public void Output_blocks_do_not_highlight_numbers(string language)
+    {
+        var rendered = RenderToString(MarkdownHtmlRenderer.BuildRenderable($"```{language}\nIteration 0\nIteration 1\n```"));
+        Assert.Contains("Iteration 0", rendered);
+        Assert.DoesNotContain("\u001b[38;2;255;0;255", rendered);
+    }
+
+    [Fact]
+    public void Csharp_label_is_readable_and_comments_have_explicit_grey()
+    {
+        var rendered = RenderPlain(MarkdownHtmlRenderer.BuildRenderable("```csharp\n// explanation\nint count = 5;\n```"));
+        Assert.Contains("C#", rendered);
+        Assert.DoesNotContain("csharp", rendered);
+        Assert.Contains("[grey62]// explanation[/]", SyntaxHighlighter.Highlight("// explanation", "csharp"));
+    }
+
     [Fact]
     public void Linkified_absolute_windows_path_renders_without_raw_brackets()
     {
@@ -84,16 +104,47 @@ public class MarkdownHtmlRendererTests
     }
 
     [Fact]
-    public void Headings_render_with_hash_prefix()
+    public void Headings_render_without_markdown_markers()
     {
-        // Hash prefix is kept so bold-prose pseudo-headings (which the LLM often
-        // emits instead of real `###` headings) are visually distinguishable from
-        // actual headings — they show up plain bold, headings show up with hashes.
         var markdown = "### Sources\n\nText below.";
         var renderable = MarkdownHtmlRenderer.BuildRenderable(markdown);
         var rendered = RenderToString(renderable);
 
-        Assert.Contains("### Sources", rendered);
+        Assert.Contains("Sources", rendered);
+        Assert.DoesNotContain("###", rendered);
+    }
+
+    [Theory]
+    [InlineData(20)]
+    [InlineData(35)]
+    public void Wrapped_list_text_stays_beside_marker_and_indents_continuations(int width)
+    {
+        var lines = RenderPlain(MarkdownHtmlRenderer.BuildRenderable("- Alpha beta gamma delta epsilon zeta eta theta."), width)
+            .Split('\n').Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        Assert.StartsWith("• Alpha", lines[0]);
+        Assert.True(lines.Length > 1);
+        Assert.All(lines.Skip(1), line => Assert.StartsWith("  ", line));
+    }
+
+    [Fact]
+    public void Paragraphs_have_spacing_but_heading_stays_with_its_text()
+    {
+        var lines = RenderPlain(MarkdownHtmlRenderer.BuildRenderable("First paragraph.\n\n## Details\n\nSecond paragraph.\n\nThird paragraph."))
+            .Split('\n').Select(line => line.TrimEnd()).ToArray();
+        var heading = Array.IndexOf(lines, "Details");
+        Assert.True(heading > 0);
+        Assert.Equal("", lines[heading - 1]);
+        Assert.Equal("Second paragraph.", lines[heading + 1]);
+        Assert.Equal("", lines[heading + 2]);
+    }
+
+    [Fact]
+    public void Empty_list_items_do_not_render_orphaned_bullets()
+    {
+        var lines = RenderPlain(MarkdownHtmlRenderer.BuildRenderable("-\n- Useful text\n-"))
+            .Split('\n').Select(line => line.Trim()).ToArray();
+        Assert.Contains("• Useful text", lines);
+        Assert.DoesNotContain("•", lines);
     }
 
     [Fact]
@@ -125,7 +176,7 @@ public class MarkdownHtmlRendererTests
         Assert.Contains("Second paragraph.", lines[first + 2]);
     }
 
-    private static string RenderPlain(IRenderable renderable)
+    private static string RenderPlain(IRenderable renderable, int width = 100)
     {
         var writer = new StringWriter();
         var console = AnsiConsole.Create(new AnsiConsoleSettings
@@ -134,7 +185,7 @@ public class MarkdownHtmlRendererTests
             ColorSystem = ColorSystemSupport.NoColors,
             Out = new AnsiConsoleOutput(writer),
         });
-        console.Profile.Width = 100;
+        console.Profile.Width = width;
         console.Write(renderable);
         return writer.ToString().Replace("\r\n", "\n");
     }

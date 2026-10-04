@@ -22,6 +22,39 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     private bool _running;
     private string _activity = "";
     private string _preview = "";
+    private ToolActivity? _toolActivity;
+    private readonly AsyncLocal<ToolActivity?> _capturedTools = new();
+    public void BeginToolTurn() { lock (_sync) _toolActivity = null; }
+    public IDisposable CaptureToolOutput(bool invoked, bool success = true)
+    {
+        lock (_sync)
+        {
+            if (_toolActivity is null)
+            {
+                _toolActivity = new();
+                _entries.Add(new(Interlocked.Increment(ref _nextId), new Text("")) { ToolActivity = _toolActivity });
+            }
+            if (invoked) _toolActivity.Calls++;
+            else if (success) _toolActivity.Completed++;
+            else _toolActivity.Failed++;
+            var previous = _capturedTools.Value;
+            _capturedTools.Value = _toolActivity;
+            Interlocked.Increment(ref _revision);
+            return new OutputScope(() => _capturedTools.Value = previous);
+        }
+    }
+    public void CompleteToolTurn()
+    {
+        lock (_sync)
+        {
+            if (_toolActivity is null) return;
+            _toolActivity.Finished = true;
+            _toolActivity.Expanded = false;
+            _toolActivity = null;
+            Interlocked.Increment(ref _revision);
+        }
+    }
+    private sealed class OutputScope(Action close) : IDisposable { public void Dispose() => close(); }
     public long Revision => Interlocked.Read(ref _revision);
     public TuiSnapshot Snapshot()
     {
@@ -30,7 +63,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     public void Append(IRenderable content)
     {
         if (content is MandoCode.Translators.AnsiPassthroughRenderable ansi) content = AnsiTranscriptText.Parse(ansi.Content);
-        lock (_sync) { _entries.Add(new(Interlocked.Increment(ref _nextId), content)); Interlocked.Increment(ref _revision); }
+        lock (_sync) { _entries.Add(new(Interlocked.Increment(ref _nextId), content) { ToolOutput = _capturedTools.Value }); Interlocked.Increment(ref _revision); }
     }
     public void AppendUserPrompt(string prompt)
     {
@@ -48,11 +81,11 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
             Interlocked.Increment(ref _revision);
         }
     }
-    public void AppendRestored(IRenderable content, string? userPrompt, bool spaceAfter)
+    public void AppendRestored(IRenderable content, string? userPrompt, bool spaceAfter, ToolActivity? activity = null, ToolActivity? toolOutput = null)
     {
         lock (_sync)
         {
-            _entries.Add(new(Interlocked.Increment(ref _nextId), content) { UserPrompt = userPrompt, SpaceAfter = spaceAfter });
+            _entries.Add(new(Interlocked.Increment(ref _nextId), content) { UserPrompt = userPrompt, SpaceAfter = spaceAfter, ToolActivity = activity, ToolOutput = toolOutput });
             Interlocked.Increment(ref _revision);
         }
     }
@@ -122,8 +155,21 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
 }
 public sealed record TuiEntry(long Id, IRenderable Content)
 {
+    public ToolActivity? ToolActivity { get; init; }
+    public ToolActivity? ToolOutput { get; init; }
     public string? UserPrompt { get; init; }
     public bool SpaceAfter { get; init; }
+}
+public sealed class ToolActivity
+{
+    public int Calls { get; set; }
+    public int Completed { get; set; }
+    public int Failed { get; set; }
+    public bool Finished { get; set; }
+    public bool Expanded { get; set; }
+    public string Summary => $"{Calls} tool call{(Calls == 1 ? "" : "s")} · {Completed} completed"
+        + (Failed > 0 ? $" · {Failed} failed" : "")
+        + (Calls > Completed + Failed ? $" · {Calls - Completed - Failed} unfinished" : "");
 }
 public sealed record TuiSnapshot(IReadOnlyList<TuiEntry> Entries, bool Running, string Activity, string Preview)
 {

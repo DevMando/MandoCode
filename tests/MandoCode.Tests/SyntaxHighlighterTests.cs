@@ -14,6 +14,14 @@ namespace MandoCode.Tests;
 public class SyntaxHighlighterTests
 {
     [Fact]
+    public void NumericLiterals_UseMandoCodeLavender()
+    {
+        var result = SyntaxHighlighter.Highlight("int count = 0; double ratio = 1.5;", "csharp");
+        Assert.Contains("[mediumpurple1]0[/]", result);
+        Assert.Contains("[mediumpurple1]1.5[/]", result);
+        Assert.DoesNotContain("[magenta]", result);
+    }
+    [Fact]
     public void NormalCode_StillHighlightsKeywords()
     {
         var result = SyntaxHighlighter.Highlight("public class Foo", "csharp");

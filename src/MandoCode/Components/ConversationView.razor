@@ -7,7 +7,14 @@
         @Header
         @foreach (var entry in Entries)
         {
+            @if (entry.ToolActivity is { Finished: true } activity)
+            {
+                <WorkspaceButton @key="entry.Id" Content="@((activity.Expanded ? "▾ " : "▸ ") + activity.Summary)" OnClick="@(() => ToggleTools(activity))" />
+            }
+            else if (entry.ToolActivity is null && (entry.ToolOutput is null || !entry.ToolOutput.Finished || entry.ToolOutput.Expanded))
+            {
             <ConversationEntry @key="entry.Id" Entry="entry" />
+            }
         }
     </div>
 </view-height-scrollable>
@@ -19,6 +26,11 @@
     private readonly string _scrollId = Guid.NewGuid().ToString("N");
     private int _offset;
     private bool _following = true;
+    private void ToggleTools(ToolActivity activity)
+    {
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        activity.Expanded = !activity.Expanded;
+    }
     protected override void OnInitialized()
     {
         if (Pane?.PresentationState.GetValueOrDefault("scroll") is ValueTuple<int, bool> saved)
