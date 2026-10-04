@@ -4,7 +4,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**RazorConsole 0.6 migration — 0.16.0-alpha.** The CLI now uses a component-based terminal layout, with a scrolling conversation above a persistent prompt. This alpha is based on v0.15.2.
+**RazorConsole 0.6 migration — 0.16.0.** The CLI now uses a component-based terminal layout, with a scrolling conversation above a persistent prompt. This upcoming release is based on v0.15.2.
 
 ### Added
 - **Friendly tool-call labels.** Expanded activity uses action-specific icons for web search, webpage fetches, file reads/searches, edits, deletions, and MCP tools. Commands and unknown tools use lightning. Green ✅ Completed and red ✗ Failed labels replace Done and Error markers. Collapsed summaries keep lightning and descriptive tool-call counts; approval prompts remain separate.
