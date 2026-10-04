@@ -1,33 +1,19 @@
+@inject IServiceProvider Services
+@using Microsoft.Extensions.DependencyInjection
 @using MandoCode.Models
 @using MandoCode.Services
 @using System.Collections.Generic
 @using System.Text.RegularExpressions
 @using Spectre.Console
-@inject AIService AI
-@inject MandoCodeConfig Config
-@inject TaskPlannerService TaskPlanner
-@inject PlanRunnerSelector PlanRunners
-@inject PlanHandoff PlanHandoff
-@inject FileAutocompleteProvider FileProvider
-@inject TokenTrackingService TokenTracker
-@inject MusicPlayerService MusicPlayer
-@inject ProjectRootAccessor ProjectRoot
-@inject SpinnerService Spinner
-@inject OperationDisplayRenderer OperationRenderer
-@inject DiffApprovalHandler DiffApproval
-@inject CancelKeyCoordinator KeyCoordinator
-@inject InstructionPromptCoordinator InstructionCoordinator
-@inject ApprovalSelectCoordinator ApprovalMenu
-@inject ShellCommandHandler Shell
-@inject TerminalThemeService ThemeService
-@inject InputStateMachine StateMachine
-@inject SkillLoader Skills
-@inject McpClientManager McpManager
-@inject McpApprovalGate McpGate
-@inject ApprovalPromptGate PromptGate
-@inject UpdateCheckService UpdateCheck
-@implements IDisposable
 
+@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime Lifetime
+@implements IDisposable
+@implements IAsyncDisposable
+
+@if (Pane is null || Pane.Visible)
+{
+<ChatShell SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<Header>
 <Banner />
 
 @* Banner stays always-on (it's static, no overlap risk). The dynamic section
@@ -37,10 +23,9 @@
    a single @if gate rather than wrapping a long inline block. *@
 @if (!_setupActive)
 {
-    <HomeView ProjectRoot="@ProjectRoot.ProjectRoot"
-              RuntimeVersion="@Environment.Version.ToString()"
+    <HomeView
+              SupportsVision="@AI.SupportsImageInput"
               OllamaEndpoint="@Config.OllamaEndpoint"
-              ModelName="@Config.GetEffectiveModelName()"
               ConnectionChecked="@_connectionChecked"
               IsConnected="@_isConnected"
               OnboardingStatus="@_onboardingStatus"
@@ -49,31 +34,54 @@
               UpdateCommand="@_updateCommand" />
 }
 
+</Header>
+<Footer>
+@if (Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)
+{
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !InstructionCoordinator.IsActive)
+@if (_showPrompt && !_settingsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
-    @if (Config.EnableTokenTracking && TokenTracker.LastOperation is { } lastOp)
+    @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
-        <ContextMeterLine UsedTokens="@lastOp.PromptTokens"
-                          WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+        <Box FillWidth="true" Height="1"><Markup Content=" " /></Box>
+        <Box FillWidth="true" Height="1">
+            <RazorConsole.Components.Align Horizontal="HorizontalAlignment.Right">
+                <ContextMeterLine TotalSessionTokens="@TokenTracker.TotalSessionTokens"
+                                  ShowContext="@(!MandoCodeConfig.IsCloudModel(Config.GetEffectiveModelName()) && TokenTracker.LastOperation is not null)"
+                                  UsedTokens="@(TokenTracker.LastOperation?.PromptTokens ?? 0)"
+                                  WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+            </RazorConsole.Components.Align>
+        </Box>
     }
-    <PromptInput OnSubmit="HandleVdomSubmit"
-                 OnAutocompleteRequested="HandleAutocompleteRequested"
+    <PromptInput @ref="_promptInput" @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
+                 ModelPicker="@_modelPicker"
+                 OnModelSelected="HandleModelSelected"
+                 OnModelPickerCancel="CancelModelPicker"
+                 OnCancel="CancelCurrentRequest"
+                 OnScroll="ScrollConversation"
                  InitialValue="@_promptInitialValue"
-                 Disabled="@_isProcessing" />
+                 Disabled="@(_isProcessing || _historyActive)" />
 }
 
 @* Instruction input — surfaced by DiffApprovalHandler's "Provide new instructions" branch.
    Bridged via InstructionPromptCoordinator (TCS) so the imperative handler can await VDOM input. *@
 @if (InstructionCoordinator.IsActive)
 {
-    <PromptInput OnSubmit="HandleInstructionSubmit"
+    @if (InstructionCoordinator.Multiline)
+    {
+        <PlanStepEditor @key="@InstructionCoordinator.RequestId" PersistenceKey="@InstructionCoordinator.RequestId.ToString()" Title="@InstructionCoordinator.Prompt" InitialValue="@InstructionCoordinator.InitialValue"
+                        OnSubmit="HandleInstructionSubmit" OnCancel="InstructionCoordinator.Cancel" />
+    }
+    else
+    {
+    <PromptInput OnSubmit="HandleInstructionSubmit" PersistenceKey="@($"instruction-{InstructionCoordinator.RequestId}")"
                  InitialValue="@InstructionCoordinator.InitialValue"
                  Label="@InstructionCoordinator.Prompt"
                  Placeholder=""
                  ChatFeaturesEnabled="false"
                  AllowEmpty="true" />
+    }
 }
 
 @* Approval menu — surfaced by DiffApprovalHandler for write / command / delete / MCP
@@ -97,20 +105,15 @@
                     OnScroll="HandleApprovalPreviewScroll" />
 }
 
-@* /history — this session's conversation in a scrollable, filterable window. Idle-only, like the
-   prompt it replaces while open. *@
-@if (_historyActive)
-{
-    <HistoryView Messages="@_historyMessages" OnClose="CloseHistory" />
-}
 
-@* Wizard primitives — bare RazorConsole TextInput / Select that bypass PromptInput's slash/at
+@* Wizard primitives — RazorConsole TextInput / ApprovalSelect that bypass PromptInput's slash/at
    autocomplete machinery. Used by /mcp add and any future wizards that need free-form input. *@
 @if (_showWizardInput)
 {
     <TextInput @bind-Value="_wizardInputValue"
                OnSubmit="HandleWizardInputSubmit"
                Placeholder="@_wizardInputPlaceholder"
+               MaskInput="@_wizardInputSecret"
                ValueColor="@(new Color(255, 200, 80))"
                PlaceholderColor="Color.Grey"
                BorderColor="Color.Purple"
@@ -121,11 +124,11 @@
 }
 @if (_showWizardSelect)
 {
-    <Select TItem="string"
-            Options="_wizardSelectOptions"
-            Value="_wizardSelectValue"
-            ValueChanged="HandleWizardSelectSubmit"
-            Expand="true" />
+    @if (_wizardSelectTitle is not null)
+    {
+        <Markup Content="@Spectre.Console.Markup.Escape(_wizardSelectTitle)" Foreground="Color.DeepSkyBlue1" />
+    }
+    <ApprovalSelect Options="@_wizardSelectChoices" OnSubmit="HandleWizardSelectSubmit" />
 }
 
 @* Plan-approval select — VDOM replacement for the Spectre SelectionPrompt so arrow keys
@@ -137,7 +140,43 @@
                     OnSubmit="HandlePlanSelectSubmit" />
 }
 
+}
+</Footer>
+</ChatShell>
+}
+
 @code {
+    private AIService AI { get; set; } = default!;
+    private bool _directoryBrowserOpen;
+    private bool _fileExplorerOpen;
+    private bool _gitChangesOpen;
+    private bool _settingsOpen;
+    private TaskCompletionSource<string?>? _directorySelection;
+    private MandoCodeConfig Config { get; set; } = default!;
+    private PlanRunnerSelector PlanRunners { get; set; } = default!;
+    private PlanHandoff PlanHandoff { get; set; } = default!;
+    private FileAutocompleteProvider FileProvider { get; set; } = default!;
+    private TokenTrackingService TokenTracker { get; set; } = default!;
+    private MusicPlayerService MusicPlayer { get; set; } = default!;
+    private ProjectRootAccessor ProjectRoot { get; set; } = default!;
+    private SpinnerService Spinner { get; set; } = default!;
+    private OperationDisplayRenderer OperationRenderer { get; set; } = default!;
+    private DiffApprovalHandler DiffApproval { get; set; } = default!;
+    private CancelKeyCoordinator KeyCoordinator { get; set; } = default!;
+    private InstructionPromptCoordinator InstructionCoordinator { get; set; } = default!;
+    private ApprovalSelectCoordinator ApprovalMenu { get; set; } = default!;
+    private ShellCommandHandler Shell { get; set; } = default!;
+    private TerminalThemeService ThemeService { get; set; } = default!;
+    private InputStateMachine StateMachine { get; set; } = default!;
+    private SkillLoader Skills { get; set; } = default!;
+    private McpClientManager McpManager { get; set; } = default!;
+    private McpApprovalGate McpGate { get; set; } = default!;
+    private ApprovalPromptGate PromptGate { get; set; } = default!;
+    private UpdateCheckService UpdateCheck { get; set; } = default!;
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private bool _paneStopped;
+    private string? _headerModel;
+    private void StopPane() { _historyTcs?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -147,6 +186,7 @@
     private bool _continueRequested = false;
     private string? _modelWarning = null;
     private bool _modelError = false;
+    private bool _offerStartupModelPicker;
 
     // "A newer MandoCode is on NuGet" line, set by the background update check after the
     // connection is established. Null/empty until then (or when up to date / opted out).
@@ -191,13 +231,14 @@
     // components for /mcp add and future wizards without inheriting PromptInput's
     // slash/at autocomplete state machine.
     private bool _showWizardInput = false;
+    private bool _wizardInputSecret;
+    private IReadOnlyList<ApprovalSelect.Option> _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+    private string? _wizardSelectTitle;
     private string _wizardInputValue = "";
     private string _wizardInputPlaceholder = "";
     private TaskCompletionSource<string>? _wizardInputTcs;
 
     private bool _showWizardSelect = false;
-    private string[] _wizardSelectOptions = Array.Empty<string>();
-    private string _wizardSelectValue = "";
     private TaskCompletionSource<string>? _wizardSelectTcs;
 
     // Approval menu options — projected from ApprovalSelectCoordinator.Options into the
@@ -206,7 +247,6 @@
     private IReadOnlyList<ApprovalSelect.Option> _approvalMenuOptions = Array.Empty<ApprovalSelect.Option>();
 
     private bool _isProcessing = false;
-    private bool _autocompleteActive = false;
     private string _promptInitialValue = "";
 
 
@@ -224,16 +264,16 @@
     private readonly System.Text.StringBuilder _replyUnprinted = new();
     private readonly List<string> _replyPrinted = new();
     private bool _replyOpen;
+    private bool _replyBlockPrinted;
 
     // Music visualizer — animated equalizer while music plays
     private CancellationTokenSource? _musicVisCts;
     private Task? _musicVisTask;
     private readonly object _musicVisLock = new();
 
-
-
     private void StartMusicVisualizer()
     {
+        if (TuiConsole.Current is not null) return;
         // Early-exit if a visualizer CTS is already active
         lock (_musicVisLock)
         {
@@ -320,13 +360,46 @@
 
     protected override void OnInitialized()
     {
+        {
+            var agentServices = Pane?.Services ?? Services;
+            AI = agentServices.GetRequiredService<AIService>();
+            AI.UseExplicitPlanningOnly();
+            if (Pane is not null) { Pane.SaveHistory = SaveAgentHistory; Pane.IsHistoryOpen = () => _historyActive; Pane.CloseHistory = CloseHistory; }
+            Config = agentServices.GetRequiredService<MandoCodeConfig>();
+            PlanRunners = agentServices.GetRequiredService<PlanRunnerSelector>();
+            PlanHandoff = agentServices.GetRequiredService<PlanHandoff>();
+            FileProvider = agentServices.GetRequiredService<FileAutocompleteProvider>();
+            TokenTracker = agentServices.GetRequiredService<TokenTrackingService>();
+            MusicPlayer = agentServices.GetRequiredService<MusicPlayerService>();
+            ProjectRoot = agentServices.GetRequiredService<ProjectRootAccessor>();
+            Spinner = agentServices.GetRequiredService<SpinnerService>();
+            OperationRenderer = agentServices.GetRequiredService<OperationDisplayRenderer>();
+            DiffApproval = agentServices.GetRequiredService<DiffApprovalHandler>();
+            KeyCoordinator = agentServices.GetRequiredService<CancelKeyCoordinator>();
+            InstructionCoordinator = agentServices.GetRequiredService<InstructionPromptCoordinator>();
+            ApprovalMenu = agentServices.GetRequiredService<ApprovalSelectCoordinator>();
+            Shell = agentServices.GetRequiredService<ShellCommandHandler>();
+            ThemeService = agentServices.GetRequiredService<TerminalThemeService>();
+            StateMachine = agentServices.GetRequiredService<InputStateMachine>();
+            Skills = agentServices.GetRequiredService<SkillLoader>();
+            McpManager = agentServices.GetRequiredService<McpClientManager>();
+            McpGate = agentServices.GetRequiredService<McpApprovalGate>();
+            PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
+            UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
+            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _settingsOpen;
+            if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
+            if (Pane is not null) Pane.Stop = StopPane;
+            if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
+            if (Pane is not null) { Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
+        }
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
         // anything future starting with '-') are not folder names — same filtering as
         // Program.cs, or `mandocode --continue` would set the project root to "--continue".
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-        _continueRequested = args.Any(a => a is "--continue" or "-c");
+        _continueRequested = (Pane is null || Pane.Id == 1) && args.Any(a => a is "--continue" or "-c");
         var positional = args.Where(a => !a.StartsWith('-')).ToArray();
-        if (positional.Length > 0 && !positional[0].StartsWith("config"))
+        if (Pane?.RestoreFrom is null && positional.Length > 0 && !positional[0].StartsWith("config"))
         {
             ProjectRoot.ProjectRoot = positional[0];
         }
@@ -362,7 +435,7 @@
         }
 
         // Detect terminal theme and apply curated palette
-        if (Config.EnableThemeCustomization)
+        if (Config.EnableThemeCustomization && (Pane is null || Pane.Id == 1))
         {
             ThemeService.DetectTheme();
             ThemeService.ApplyPalette();
@@ -373,6 +446,7 @@
         // which would otherwise keep being dereferenced after teardown.
         _cancelKeyHandler = (_, e) =>
         {
+            if (Pane is not null && !Pane.Active) return;
             var cts = _requestCts;
             if (cts != null && !cts.IsCancellationRequested)
             {
@@ -390,6 +464,12 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (Pane is not null && _headerModel != Config.GetEffectiveModelName())
+        {
+            _headerModel = Config.GetEffectiveModelName();
+            Pane.Workspace.Refresh();
+        }
         if (firstRender && !_connectionChecked)
         {
             await InitializeConnectionAsync();
@@ -398,6 +478,7 @@
         if (_connectionChecked && !_hasRendered)
         {
             _hasRendered = true;
+            RestoreAgentHistory();
 
             // --continue: reload the most recent conversation for this project folder,
             // full fidelity (tool calls included). Failure degrades to a fresh start with
@@ -461,6 +542,7 @@
             }
         }
 
+        if (!probe.Ok) probe = await RecoverOllamaConnectionAsync();
         _isConnected = probe.Ok;
         _connectionChecked = true;
 
@@ -504,16 +586,15 @@
     }
 
     /// <summary>
-    /// Runs the OnboardingFlow. Uses Spectre's imperative prompts for selects/confirms
-    /// (the VDOM Select had a `>` cursor redraw glitch on the second loop iteration),
-    /// but routes URL text entry through the VDOM TextInput because Spectre's
-    /// TextPrompt was dropping keystrokes alongside the live render loop.
+    /// Runs onboarding with component-based URL entry and the same model picker as
+    /// /model. Other installation and sign-in choices retain their existing prompts.
     /// </summary>
     private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
     {
         var flow = new OnboardingFlow(
             setStatus: SetOnboardingStatus,
-            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue),
+            pickModelVdom: PickModelFromPromptAsync);
 
         try
         {
@@ -552,48 +633,94 @@
     /// </summary>
     private async Task HandleModelCommandAsync()
     {
-        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
-        if (!probe.Ok)
-        {
-            AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
-            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
-            return;
-        }
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (!gate.TryEnter()) return;
+        try { await SelectModelAsync(); }
+        finally { gate.Exit(); }
+    }
 
-        var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
-        if (!fetched.Ok)
-        {
-            AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
-            AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
-            AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
-            return;
-        }
-        if (fetched.Models.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
-            AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
-            return;
-        }
+    private readonly AgentModelSelectionGate _modelSelection = new();
 
-        // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
-        // alphabetical otherwise, badge after each tag, single-space split for
-        // the tag.
-        AnsiConsole.Write(new Rule("[yellow]Pick a model[/]").LeftJustified());
-        AnsiConsole.WriteLine();
-        var labeled = fetched.Models
-            .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
-            .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
-            .Select(m => MandoCodeConfig.IsCloudModel(m)
-                ? $"{m}   (cloud)"
-                : $"{m}   (local)")
-            .ToArray();
+    private async Task SelectModelAsync(bool fromSettings = false)
+    {
+        string[] labeled;
+        Spinner.Start(message: "Loading models...");
+        try
+        {
+            var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            if (!probe.Ok)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
 
-        var picked = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Select a model:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(labeled));
-        var modelTag = picked.Split(' ')[0];
+            var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
+            if (!fetched.Ok)
+            {
+                AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
+                AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
+            if (fetched.Models.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
+                return;
+            }
+
+            // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
+            // alphabetical otherwise, badge after each tag, single-space split for
+            // the tag.
+            labeled = fetched.Models
+                .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
+                .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
+                .Select(m => MandoCodeConfig.IsCloudModel(m)
+                    ? $"{m}   (cloud)"
+                    : $"{m}   (local)")
+                .ToArray();
+
+        }
+        finally { Spinner.Stop(); }
+
+        string modelTag;
+        while (true)
+        {
+            var picked = await PickModelFromPromptAsync(labeled);
+            if (picked is null) return;
+            modelTag = picked.Split(' ')[0];
+            string? error;
+            Spinner.Start($"Checking {modelTag}…");
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                error = await OllamaModelAvailability.CheckCandidateAsync(client, Config.OllamaEndpoint, modelTag);
+            }
+            catch (Exception ex)
+            {
+                _modelWarning = $"Could not check {modelTag}: {ex.Message}. Try /model again.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            finally { Spinner.Stop(); }
+            if (error is null) break;
+            System.Diagnostics.Debug.WriteLine($"[Model selection] {error}");
+            if (!OllamaModelAvailability.OfferStartupPicker(modelTag, error))
+            {
+                _modelWarning = error;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            _modelWarning = $"{modelTag} is no longer available. Choose another model below.";
+            labeled = labeled.Where(option => option != picked).ToArray();
+            if (labeled.Length == 0)
+            {
+                _modelWarning = "None of the listed cloud models are available. Use /setup to configure another model.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
 
         var previousModel = Config.GetEffectiveModelName();
         Config.ModelName = modelTag;
@@ -612,11 +739,30 @@
                 break;
         }
 
-        Config.Save();
-        await AI.ReinitializeAsync(Config);
+        Spinner.Start($"Loading {modelTag}…");
+        try
+        {
+            if (fromSettings) await AI.RefreshSettingsAsync(Config);
+            else await AI.ReinitializeAsync(Config);
+        }
+        finally { Spinner.Stop(); }
 
+        await ValidateCurrentModelAsync();
+        if (_modelError || fromSettings) return;
+        var defaultChoice = await WizardPromptSelectCoreAsync(
+            $"Make {modelTag} the default model for new agents?",
+            new[] { "No — only this agent", "Yes — new agents use this model" },
+            liveTitle: true);
         AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)}.[/]");
-        AnsiConsole.MarkupLine("[dim]Tip: run /config to tweak response length, temperature, timeout, or other settings.[/]");
+        if (defaultChoice.StartsWith("Yes", StringComparison.Ordinal))
+        {
+            var agents = Pane is null ? new[] { Config } :
+                (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                    .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+            Services.GetRequiredService<AgentModelDefaults>().Select(modelTag, agents);
+            AnsiConsole.MarkupLine("[dim]Default model updated for new agents.[/]");
+        }
+
         AnsiConsole.WriteLine();
     }
 
@@ -649,8 +795,29 @@
             return;
         }
 
+        var agentsForDefaults = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        Services.GetRequiredService<AgentModelDefaults>().UpdateSetting(parts[0], parts[1], agentsForDefaults);
         Config.Save();
 
+        if (parts[0].Equals("showTips", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } tipsRegistry)
+        {
+            foreach (var agent in tipsRegistry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().ShowTips = Config.ShowTips;
+            foreach (var workspace in tipsRegistry.Workspaces) workspace.Refresh();
+        }
+        if (parts[0].Equals("dimUnfocusedAgents", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } dimRegistry)
+        {
+            foreach (var agent in dimRegistry.Workspaces.SelectMany(w => w.Panes))
+            {
+                agent.Services.GetRequiredService<MandoCodeConfig>().DimUnfocusedAgents = Config.DimUnfocusedAgents;
+            }
+            foreach (var workspace in dimRegistry.Workspaces) workspace.Refresh();
+        }
+        if (parts[0].Equals("agentNaming", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } registry)
+            foreach (var agent in registry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().UseAgentNames = Config.UseAgentNames;
         // Some keys (tavilyKey) carry a live verification probe — instant "your key
         // works" feedback at set time instead of a silent failure on first real use.
         if (result.PostSetValidation != null)
@@ -780,14 +947,11 @@
         var (isValid, errorMessage) = await AI.ValidateModelAsync();
         if (!isValid && errorMessage != null)
         {
-            // Show warning but allow user to continue
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Warning:[/]");
-            AnsiConsole.WriteLine(errorMessage);
-            AnsiConsole.WriteLine();
-
+            System.Diagnostics.Debug.WriteLine($"[Model validation] {errorMessage}");
             if (errorMessage.Contains("Continue anyway?"))
             {
+                AnsiConsole.MarkupLine("[yellow]Warning:[/]");
+                AnsiConsole.WriteLine(errorMessage);
                 var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
                 if (!continueAnyway)
                 {
@@ -796,7 +960,8 @@
                     AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
                     ThemeService.ResetPalette();
                     ThemeService.Dispose();
-                    Environment.Exit(1);
+                    Environment.ExitCode = 1;
+                    Lifetime.StopApplication();
                     return;
                 }
             }
@@ -804,20 +969,21 @@
             {
                 // Hard error (model not found) — enter limited mode
                 _modelError = true;
-                _modelWarning = errorMessage;
-                AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[yellow]You can fix this by:[/]");
-                AnsiConsole.MarkupLine("[dim]  1. Pull the model:[/] ollama pull <model-name>");
-                AnsiConsole.MarkupLine("[dim]  2. Run[/] /config [dim]to select a different model[/]");
-                AnsiConsole.MarkupLine("[dim]  3. Make sure Ollama is running:[/] ollama serve");
-                AnsiConsole.WriteLine();
+                if (OllamaModelAvailability.OfferStartupPicker(Config.GetEffectiveModelName(), errorMessage))
+                {
+                    _modelWarning = $"{Config.GetEffectiveModelName()} is no longer available. Choose another model below.";
+                    _offerStartupModelPicker = !_hasRendered;
+                }
+                else
+                {
+                    _modelWarning = errorMessage;
+                }
             }
         }
         else
         {
             _modelError = false;
             _modelWarning = null;
-            AnsiConsole.MarkupLine($"[dim]{AI.VisionSupport.Label()}[/]");
         }
     }
 
@@ -829,15 +995,12 @@
         // What the model wrote before this call prints now, above the call's line.
         PrintReplySoFar();
 
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: true);
+
         // Track operation type for contextual spinner messages
         _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
-        // Suppress display for known FileSystem operations — they will be shown
-        // as rich operation displays when OnFunctionCompleted fires
-        if (!IsFileSystemOperation(call.FunctionName))
-        {
-            AnsiConsole.MarkupLine($"[dim][[Function]][/] [deepskyblue1]{Spectre.Console.Markup.Escape(call.Description)}[/]");
-        }
+        AnsiConsole.MarkupLine($"[#56b6c2]{ToolActivityIcons.For(call.FunctionName, call.McpServerName is not null)} {Spectre.Console.Markup.Escape(call.Description)}[/]");
 
         // Show what the model is doing above the spinner in grey
         Spinner.Start(call.Description);
@@ -848,6 +1011,7 @@
         lock (_replyLock)
         {
             _replyOpen = true;
+            _replyBlockPrinted = false;
             _replyUnprinted.Clear();
             _replyPrinted.Clear();
         }
@@ -901,8 +1065,15 @@
             _replyPrinted.Add(text);
         }
         Spinner.UpdatePreview(null);
-        AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+        PrintReplyHeading();
         RenderMarkdownGuarded(text);
+    }
+
+    private void PrintReplyHeading()
+    {
+        if (_replyBlockPrinted) AnsiConsole.WriteLine(" ");
+        _replyBlockPrinted = true;
+        AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
     }
 
     /// <summary>A turn finished with <paramref name="turnText"/>: returns what of it still needs
@@ -922,6 +1093,7 @@
 
     private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
     {
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: false, success: result.Success);
         // Pause the spinner so the message renders on a clean line
         Spinner.Stop();
 
@@ -945,13 +1117,13 @@
                 _recentReadFiles.Clear();
             }
         }
-        else if (result.Success)
+        if (result.Success)
         {
-            AnsiConsole.MarkupLine($"[dim][[Done]][/] [green]✓[/]");
+            AnsiConsole.MarkupLine("[green]✅ Completed[/]");
         }
         else
         {
-            AnsiConsole.MarkupLine($"[dim][[Error]][/] [red]{Spectre.Console.Markup.Escape(result.Result)}[/]");
+            AnsiConsole.MarkupLine($"[red]✗ Failed · {Spectre.Console.Markup.Escape(result.Result)}[/]");
         }
 
         // Refresh file cache after any operation that modifies the file system
@@ -1009,33 +1181,141 @@
         return probe.Ok;
     }
 
+    private Task ToggleFileExplorer() => InvokeAsync(async () =>
+    {
+        if (_settingsOpen) return;
+        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (_isProcessing && !_fileExplorerOpen) return;
+        _fileExplorerOpen = !_fileExplorerOpen;
+        _gitChangesOpen = false;
+        StateHasChanged();
+        if (!_fileExplorerOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleGitChanges() => InvokeAsync(async () =>
+    {
+        if (_settingsOpen) return;
+        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        _gitChangesOpen = !_gitChangesOpen;
+        _fileExplorerOpen = false;
+        StateHasChanged();
+        if (!_gitChangesOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleSettings() => InvokeAsync(() =>
+    {
+        if (!_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
+        _settingsOpen = !_settingsOpen;
+        _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
+        StateHasChanged();
+    });
+    private Task CloseSettings() => InvokeAsync(async () =>
+    {
+        _settingsOpen = false;
+        StateHasChanged();
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task SettingsModel()
+    {
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (_isProcessing || !gate.TryEnter()) return Task.CompletedTask;
+        _isProcessing = true;
+        _ = RunSettingsModelAsync(gate);
+        return Task.CompletedTask;
+    }
+    private async Task RunSettingsModelAsync(AgentModelSelectionGate gate)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        try { await SelectModelAsync(fromSettings: true); }
+        catch (Exception ex) { _modelWarning = $"Couldn't change the model: {ex.Message}"; }
+        finally { _isProcessing = false; gate.Exit(); await InvokeAsync(StateHasChanged); }
+    }
+    private async Task SaveAgentSettings(AgentSettingsDraft draft)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (_isProcessing) throw new InvalidOperationException("Wait for the current request to finish.");
+        _isProcessing = true;
+        Spinner.Start("Applying settings");
+        try
+        {
+            var mcpChanged = Config.EnableMcp != draft.Config.EnableMcp;
+            draft.ApplyTo(Config);
+            AI.OnWriteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDiffApproval : null;
+            AI.OnDeleteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDeleteApproval : null;
+            AI.OnCommandApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleCommandApproval : null;
+            McpGate.OnApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleMcpApproval : null;
+            if (mcpChanged)
+            {
+                await McpManager.StopAllAsync();
+                await InitializeMcpAsync();
+            }
+            await AI.RefreshSettingsAsync(Config);
+            SaveAgentHistory(false);
+        }
+        finally { Spinner.Stop(); _isProcessing = false; }
+    }
+    private async Task ApplyAgentDefaults()
+    {
+        var defaults = Services.GetRequiredService<AgentModelDefaults>().Snapshot();
+        Config.ModelName = defaults.GetEffectiveModelName();
+        Config.ModelPath = null;
+        await SaveAgentSettings(new AgentSettingsDraft(defaults));
+    }
+    private async Task SaveAgentDefaults(AgentSettingsDraft draft)
+    {
+        await SaveAgentSettings(draft);
+        var agents = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        Services.GetRequiredService<AgentModelDefaults>().Promote(Config, agents);
+    }
+    private void GitDiscarded(string path)
+    {
+        AI.AppendUserNote($"The user DISCARDED uncommitted changes to {path}. Do not re-apply them unless asked.");
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        TuiConsole.MarkupLine($"[green]Discarded changes to {Spectre.Console.Markup.Escape(path)}[/]");
+    }
+    private async Task<string?> PickProjectDirectoryAsync()
+    {
+        _directorySelection = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fileExplorerOpen = false;
+        _gitChangesOpen = false;
+        _directoryBrowserOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _directorySelection.Task; }
+        finally
+        {
+            _directoryBrowserOpen = false;
+            _directorySelection = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private void CompleteDirectorySelection(string? path) => _directorySelection?.TrySetResult(path);
     private async Task RunInteractiveLoopAsync()
     {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (_offerStartupModelPicker)
+        {
+            _offerStartupModelPicker = false;
+            _isProcessing = true;
+            try { await HandleModelCommandAsync(); }
+            catch (Exception ex)
+            {
+                AnsiConsole.WriteLine($"Could not select a replacement model: {ex.Message}");
+            }
+        }
         while (true)
         {
-            // Show session token count right-aligned above prompt
-            if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
-            {
-                var tokenDisplay = $"Total [{TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens)} tokens]";
-                var padding = Math.Max(0, Console.WindowWidth - tokenDisplay.Length - 1);
-                Console.WriteLine($"\u001b[2m{new string(' ', padding)}{tokenDisplay}\u001b[0m");
-            }
-
             // Ensure music visualizer is running if music is active
             // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
             StartMusicVisualizer();
 
             // Await user input via VDOM PromptInput component.
             var input = await WaitForVdomInputAsync();
+            if (_paneStopped) return;
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
-
-            // Echo the submitted input in gold so it persists in terminal scrollback.
-            // The 100ms delay in WaitForVdomInputAsync ensures the VDOM repaint
-            // (which removes PromptInput) has completed before this write.
-            Console.Write($"\u001b[38;2;255;200;80m> {input}\u001b[0m");
-            Console.WriteLine();
 
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
@@ -1056,7 +1336,7 @@
                     MusicPlayer.Dispose();
                     ThemeService.Dispose();
                     AnsiConsole.WriteLine("Goodbye!");
-                    Environment.Exit(0);
+                    Lifetime.StopApplication();
                     return;
                 }
 
@@ -1064,8 +1344,9 @@
                 {
                     if (await AI.CompactHistoryAsync())
                     {
-                        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+                        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
                         catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
                         AnsiConsole.MarkupLine("[green]Conversation context compacted into a recap. The visible transcript is unchanged.[/]");
                     }
                     else
@@ -1080,7 +1361,9 @@
                     await AI.ClearHistoryAsync();
                     StateMachine.ClearHistory();
                     SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
-                    Console.Clear();
+                    TuiConsole.Clear();
+                    _messages.Clear();
+                    if (Pane is not null) Pane.Services.GetRequiredService<AgentArchiveStore>().Delete(Pane.PersistKey);
                     AnsiConsole.MarkupLine("[yellow]Conversation context wiped completely. Start a new conversation.[/]");
                     continue;
                 }
@@ -1099,6 +1382,7 @@
 
                 if (command == "plan" || command.StartsWith("plan "))
                 {
+                    _messages.Add(new ChatMsg { Role = "user", Text = input });
                     // GetCommandName lower-cases for dispatch. Recover arguments from the original
                     // input so paths, identifiers, and quoted goal text keep their casing.
                     var planCommand = input.TrimStart()[1..];
@@ -1107,65 +1391,40 @@
                     continue;
                 }
 
-                if (command == "history")
+                if (command is "history" or "agent-history")
                 {
                     await ShowHistoryAsync();
                     continue;
                 }
 
-                if (command == "help")
+                if (command == "keybindings")
                 {
-                    Console.WriteLine();
-                    // Display help (we'll use direct Spectre.Console since HelpDisplay is a component)
-                    var table = new Spectre.Console.Table()
+                    foreach (var group in Keybindings.All.GroupBy(binding => binding.Group))
                     {
-                        Border = TableBorder.Rounded
-                    };
-                    table.AddColumn("Command");
-                    table.AddColumn("Description");
-                    table.AddRow("/help", "Show this help message");
-                    table.AddRow("/setup", "Reconnect to Ollama or pick a different model (guided wizard)");
-                    table.AddRow("/model", "Quick switch — pick a different model");
-                    table.AddRow("/config", "Adjust settings — guided wizard");
-                    table.AddRow("/config set <key> <value>", "Set one setting inline (no args lists keys + current values)");
-                    table.AddRow("/retry", "Retry Ollama connection");
-                    table.AddRow("/learn", "Learn about LLMs and local AI models");
-                    table.AddRow("/music", "Play lofi/synthwave coding music");
-                    table.AddRow("/music-stop", "Stop music playback");
-                    table.AddRow("/music-pause", "Pause/resume music");
-                    table.AddRow("/music-next", "Skip to next track");
-                    table.AddRow("/music-vol", "Set volume (0-100)");
-                    table.AddRow("/music-lofi", "Switch to lofi genre");
-                    table.AddRow("/music-synthwave", "Switch to synthwave genre");
-                    table.AddRow("/music-list", "Show available tracks");
-                    table.AddRow("/command", "Run a shell command (also: !<cmd>)");
-                    table.AddRow("/copy", "Copy last AI response to clipboard");
-                    table.AddRow("/copy-code", "Copy code blocks from last response");
-                    table.AddRow("/skills", "List installed skills (auto-invoked when relevant)");
-                    table.AddRow("/force-skill", "Override: force a specific skill to run now");
-                    table.AddRow("/mcp", "List MCP servers with status and tool counts");
-                    table.AddRow("/mcp add", "Interactively add a new MCP server");
-                    table.AddRow("/mcp remove <name>", "Remove an MCP server from config");
-                    table.AddRow("/mcp tools <server>", "List tools exposed by connected MCP servers (server optional)");
-                    table.AddRow("/mcp-reload", "Restart MCP servers and re-register their tools");
-                    table.AddRow("/plan <goal>", "Force a step-by-step plan (no goal shows an unfinished plan)");
-                    table.AddRow("/plan-resume", "Continue an unfinished plan");
-                    table.AddRow("/plan-discard", "Forget an unfinished plan");
-                    table.AddRow("/compact", "Compress context into a recap; keeps the transcript");
-                    table.AddRow("/clear", "Wipe all conversation context and start fresh");
-                    table.AddRow("/history", "Browse this session's conversation, filtered as you type");
-                    table.AddRow("/exit", "Exit MandoCode");
-                    AnsiConsole.Write(table);
-                    AnsiConsole.WriteLine();
-                    AnsiConsole.WriteLine("Examples:");
-                    AnsiConsole.WriteLine("  • What files are in this project?");
-                    AnsiConsole.WriteLine("  • Show me the contents of Program.cs");
-                    AnsiConsole.WriteLine("  • Refactor the Main method to use async/await");
-                    AnsiConsole.WriteLine("  • What's the current git status?");
-                    AnsiConsole.WriteLine();
+                        var bindings = new Spectre.Console.Table { Border = TableBorder.Rounded };
+                        bindings.Title = new TableTitle(group.Key);
+                        bindings.AddColumn("Keys");
+                        bindings.AddColumn("Action");
+                        foreach (var binding in group)
+                            bindings.AddRow(Spectre.Console.Markup.Escape(binding.Keys), Spectre.Console.Markup.Escape(binding.Action));
+                        AnsiConsole.Write(bindings);
+                        AnsiConsole.WriteLine();
+                    }
+                    AnsiConsole.WriteLine("Alt is the default modifier. Windows/Command variants work only when the terminal forwards them.");
                     continue;
                 }
-
+                if (command == "help")
+                {
+                    // Append separate entries to the selected pane so the complete reference
+                    // remains scrollable even when it is taller than the terminal viewport.
+                    using var helpOutput = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+                    TuiConsole.MarkupLine("[deepskyblue1]Available commands[/]");
+                    foreach (var entry in SlashCommands.All.Where(entry => SlashCommands.IsAvailable(entry.Key, Config)))
+                    {
+                        TuiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(entry.Key)}[/]  {Spectre.Console.Markup.Escape(entry.Value)}");
+                    }
+                    continue;
+                }
                 if (command == "config" || command.StartsWith("config "))
                 {
                     // "/config set <key> <value>" — inline setter, no wizard round-trip.
@@ -1193,6 +1452,50 @@
                     continue;
                 }
 
+                if (command == "agent-settings") { _isProcessing = false; await ToggleSettings(); continue; }
+                if (command == "agent-file-explorer")
+                {
+                    _fileExplorerOpen = !_fileExplorerOpen;
+                    _gitChangesOpen = false;
+                    await InvokeAsync(StateHasChanged);
+                    continue;
+                }
+                if (command is "git-changes" or "agent-git-changes")
+                {
+                    await ToggleGitChanges();
+                    continue;
+                }
+                if (command == "change-directory" || command.StartsWith("change-directory "))
+                {
+                    var rawArgs = input.Trim()["/change-directory".Length..].Trim();
+                    string? target;
+                    try { target = rawArgs.Length > 0 ? rawArgs : await PickProjectDirectoryAsync(); }
+                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or InvalidOperationException or System.IO.IOException)
+                    {
+                        AnsiConsole.WriteLine($"Couldn't open the folder picker: {ex.Message}");
+                        continue;
+                    }
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        try
+                        {
+                            var directory = Shell.ChangeDirectory(target);
+                            Skills.Reload();
+                            await AI.RefreshSettingsAsync(Config);
+                            AI.AppendUserNote(
+                                $"[Project root changed to: {directory}. Earlier messages refer to the previous folder — " +
+                                "re-read any file you need rather than reusing paths or contents from before this point.]");
+                            AnsiConsole.WriteLine($"Changed directory to {directory}");
+                            AnsiConsole.WriteLine("Switching to the new project — this conversation is kept.");
+                        }
+                        catch (Exception ex) when (ex is System.IO.IOException or ArgumentException or UnauthorizedAccessException)
+                        {
+                            AnsiConsole.WriteLine($"Couldn't change directory: {ex.Message}");
+                        }
+                        await InvokeAsync(StateHasChanged);
+                    }
+                    continue;
+                }
                 if (command == "model")
                 {
                     await HandleModelCommandAsync();
@@ -1237,6 +1540,11 @@
                 }
 
                 if (command == "retry")
+                {
+                    await HandleRetryCommandAsync();
+                    continue;
+                }
+                if (command == "ollama-serve")
                 {
                     await HandleRetryCommandAsync();
                     continue;
@@ -1340,8 +1648,8 @@
 
             if (!_isConnected)
             {
-                ShowOfflineGuidance();
-                continue;
+                await HandleRetryCommandAsync();
+                if (!_isConnected) continue;
             }
 
             // Block AI requests when model is not available
@@ -1358,23 +1666,13 @@
                 PlayMatrixMoment(input);
             }
 
-            // Check if this request needs task planning BEFORE injecting file content,
-            // so that attached file size doesn't inflate the complexity heuristics
-            var planning = TaskPlanner.GetPlanningDecision(input);
-
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
 
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
 
-            if (planning.Required)
-            {
-                AnsiConsole.MarkupLine($"[dim]Planning automatically: {Spectre.Console.Markup.Escape(planning.Reason ?? "multi-step request")}.[/]");
-                await ForcePlanAsync(processedInput, input);
-            }
-            else
-                await ProcessDirectRequestAsync(processedInput);
+            await ProcessDirectRequestAsync(processedInput);
         }
     }
 
@@ -1382,9 +1680,77 @@
     /// Called by PromptInput when the user submits text via the VDOM TextInput.
     /// Completes the TaskCompletionSource so the interactive loop can continue.
     /// </summary>
-    private void HandleVdomSubmit(string input)
+    private ModelPickerState? _modelPicker;
+    private TaskCompletionSource<string?>? _modelPickerTcs;
+    private void HandleModelSelected(string model) => _modelPickerTcs?.TrySetResult(model);
+    private void CancelModelPicker()
     {
-        _inputTcs?.TrySetResult(input);
+        _modelWarning = _modelWarning?.Replace("Choose another model below.", "Choose another model with /model.");
+        _modelPickerTcs?.TrySetResult(null);
+    }
+    private async Task<string?> PickModelFromPromptAsync(string[] models)
+    {
+        _modelPickerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _modelPicker = new(models);
+        _showPrompt = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _modelPickerTcs.Task; }
+        finally
+        {
+            _modelPicker = null;
+            _modelPickerTcs = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private const string ChatComposerKey = "chat-composer";
+    private ChatShell? _chatShell;
+    private PromptInput? _promptInput;
+    private void ScrollConversation(string key) => _chatShell?.Scroll(key);
+    private void CancelCurrentRequest() => _requestCts?.Cancel();
+
+    private async Task HandleVdomSubmit(string input)
+    {
+        var rename = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (rename.Length > 0 && (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/tips-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleConfigSetCommandAsync("showTips " + (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase) ? "on" : "off"));
+            return;
+        }
+        if (rename.Length > 0 && (rename[0].Equals("/agent-dim", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            var value = rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase) ? "on"
+                : rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase) ? "off"
+                : rename.Length > 1 ? rename[1] : Config.DimUnfocusedAgents ? "off" : "on";
+            await HandleConfigSetCommandAsync("dimUnfocusedAgents " + value);
+            return;
+        }
+        if (Pane is not null && rename.Length > 0 && rename[0].Equals("/agent-rename", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_isProcessing || Pane.IsBusy?.Invoke() == true)
+            {
+                Pane.Session.Append(new Spectre.Console.Text("Finish or cancel the current request before renaming this agent."));
+                return;
+            }
+            if (Pane.Workspace.Rename(Pane, rename.Length > 1 ? rename[1] : ""))
+            {
+                _isProcessing = true;
+                try
+                {
+                    await AI.RefreshSettingsAsync(Config);
+                    Pane.Session.Append(new Spectre.Console.Text($"Agent renamed to {Pane.Name}."));
+                }
+                finally { _isProcessing = false; }
+            }
+            return;
+        }
+        if (Pane is not null && Pane.Workspace.Command(Pane, input)) return;
+        if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
+        if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input);
+        _isProcessing = true;
+        _inputTcs.TrySetResult(input);
     }
 
     /// <summary>
@@ -1424,39 +1790,84 @@
     /// list isn't rebuilt on every unrelated render pass.
     /// </summary>
     private bool _historyActive;
-    private IReadOnlyList<ChatMsg> _historyMessages = Array.Empty<ChatMsg>();
     private TaskCompletionSource? _historyTcs;
 
     /// <summary>Opens /history and waits for it to close. The loop is idle while it's open, so the
     /// view owns the screen's live region the way the prompt normally does.</summary>
     private async Task ShowHistoryAsync()
     {
-        if (_messages.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[dim]Nothing in this session's history yet.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        // A snapshot: the view builds its lines once, and the list mustn't change under it.
-        _historyMessages = _messages.ToList();
+        (Pane?.Services ?? Services).GetRequiredService<AgentArchiveStore>().RecoverAbandoned();
         // Async continuations, so closing from a Blazor event resumes the loop off the dispatcher
         // thread (see WaitForVdomInputAsync).
         _historyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _historyActive = true;
-        _showPrompt = false;
+        _fileExplorerOpen = _gitChangesOpen = false;
+        _showPrompt = true;
         await InvokeAsync(StateHasChanged);
 
         await _historyTcs.Task;
 
         _historyActive = false;
-        _historyMessages = Array.Empty<ChatMsg>();
         await InvokeAsync(StateHasChanged);
         // Let the VDOM remove the view before anything prints below it.
         await Task.Delay(100);
     }
 
     private void CloseHistory() => _historyTcs?.TrySetResult();
+    private void RestoreArchivedAgent(ArchivedAgent archive)
+    {
+        if (Pane?.Workspace.Registry is not { } registry) return;
+        if (registry.Restore(archive) is not null) CloseHistory();
+    }
+    private DateTimeOffset? _archiveClosedAt;
+    private bool SaveAgentHistory(bool closed)
+    {
+        if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        try
+        {
+            Pane.ArchiveLease ??= store.Claim(Pane.PersistKey);
+            if (Pane.ArchiveLease is null) throw new IOException(store.Error);
+            var archive = new ArchivedAgent(Pane.PersistKey, Pane.Name, ProjectRoot.ProjectRoot, Pane.Workspace.Name,
+                closed ? _archiveClosedAt ?? DateTimeOffset.Now : _archiveClosedAt,
+                new(Config.GetEffectiveModelName(), Config.Temperature, Config.MaxTokens, Config.ContextLength) { OllamaEndpoint = Config.OllamaEndpoint, ContextLengthSetByUser = Config.ContextLengthSetByUser, AgentOptions = AgentSettingsDraft.Capture(Config) },
+                _messages.ToList(), AgentArchiveStore.Capture(Pane.Session), AI.ExportHistoryJson(),
+                TokenTracker.TotalPromptTokens, TokenTracker.TotalCompletionTokens, TokenTracker.LastOperation) { MessageCount = _messages.Count };
+            if (!store.Save(archive)) throw new IOException(store.Error);
+            if (closed) _archiveClosedAt = archive.ClosedAt;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Pane.Session.Append(new Text("Agent history could not be saved. " + ex.Message, new Style(Color.Yellow)));
+            return false;
+        }
+    }
+    private void RestoreAgentHistory()
+    {
+        if (Pane?.RestoreFrom is not { } archive) return;
+        using var output = TuiConsole.Enter(Pane.Session);
+        AgentArchiveStore.Replay(archive, Pane.Session);
+        _messages.AddRange(archive.Messages);
+        TokenTracker.Restore(archive.PromptTokens, archive.CompletionTokens, archive.LastUsage);
+        var restored = archive.HistoryJson is null ? 0 : AI.TryRestoreHistoryJson(archive.HistoryJson);
+        if (restored == 0)
+        {
+            var recent = string.Join("\n\n", archive.Messages.TakeLast(20).Select(m => $"{m.Role}: {m.Text}"));
+            if (recent.Length > 12000) recent = recent[^12000..];
+            AI.AppendUserNote("Restored conversation excerpt (full model memory was unavailable):\n" + recent);
+            AnsiConsole.MarkupLine("[yellow]Transcript restored; recent conversation will be re-briefed to the agent.[/]");
+        }
+        else AnsiConsole.MarkupLine("[green]Agent restored with conversation context.[/]");
+        if (!Directory.Exists(archive.ProjectRoot))
+        {
+            AI.AppendUserNote($"Original project directory {archive.ProjectRoot} is unavailable. Current directory is {ProjectRoot.ProjectRoot}; re-read files before working.");
+            AnsiConsole.MarkupLine("[yellow]Original folder unavailable. Using the current project; /change-directory selects another folder.[/]");
+        }
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        if (!store.MarkOpen(archive)) AnsiConsole.MarkupLine("[yellow]Restored agent, but its archive entry could not be updated.[/]");
+        Pane.RestoreFrom = null;
+    }
 
     private void OnApprovalMenuStateChanged()
     {
@@ -1497,12 +1908,10 @@
     }
 
     /// <summary>
-    /// Bound to the wizard's Select.ValueChanged — fires when the user presses Enter on a
-    /// highlighted option (RazorConsole's Select uses Enter as the commit signal).
+    /// Completes the wizard choice when its focused approval selector submits an option.
     /// </summary>
     private void HandleWizardSelectSubmit(string value)
     {
-        _wizardSelectValue = value;
         _wizardSelectTcs?.TrySetResult(value);
     }
 
@@ -1512,83 +1921,118 @@
     /// conflict. Optional <paramref name="validate"/> returns null on success, an error message
     /// on failure — failure prints the error and re-prompts.
     /// </summary>
-    private async Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null)
+    private Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null) =>
+        WizardPromptTextCoreAsync(title, placeholder, validate, initialValue, false);
+
+    private async Task<string> WizardPromptTextCoreAsync(string title, string placeholder, Func<string, string?>? validate, string? initialValue, bool secret)
     {
-        while (true)
+        var restorePrompt = _showPrompt;
+        _wizardInputSecret = secret;
+        try
         {
-            // Render the title as a separate scrollback line above the input box so it
-            // persists after the input is dismissed.
-            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
-
-            // Pre-fill with initialValue when provided (e.g., default URL for endpoint
-            // entry — user can press Enter to accept or edit in place). Empty otherwise,
-            // and the placeholder hint shows in greyed text until the user types.
-            _wizardInputValue = initialValue ?? "";
-            _wizardInputPlaceholder = placeholder;
-            // Async continuations so the awaiting wizard step resumes off the dispatcher
-            // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
-            // note in WaitForVdomInputAsync.
-            _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _showWizardInput = true;
-            _showPrompt = false;
-            await InvokeAsync(StateHasChanged);
-
-            var result = await _wizardInputTcs.Task;
-
-            _showWizardInput = false;
-            await InvokeAsync(StateHasChanged);
-            // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
-            await Task.Delay(50);
-
-            if (validate != null)
+            while (true)
             {
-                var error = validate(result);
-                if (error != null)
-                {
-                    AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
-                    AnsiConsole.WriteLine();
-                    continue;
-                }
-            }
+                // Render the title as a separate scrollback line above the input box so it
+                // persists after the input is dismissed.
+                AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
-            // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
-            Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
-            return result;
+                // Pre-fill with initialValue when provided (e.g., default URL for endpoint
+                // entry — user can press Enter to accept or edit in place). Empty otherwise,
+                // and the placeholder hint shows in greyed text until the user types.
+                _wizardInputValue = initialValue ?? "";
+                _wizardInputPlaceholder = placeholder;
+                // Async continuations so the awaiting wizard step resumes off the dispatcher
+                // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
+                // note in WaitForVdomInputAsync.
+                _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _showWizardInput = true;
+                _showPrompt = false;
+                await InvokeAsync(StateHasChanged);
+
+                var result = await _wizardInputTcs.Task;
+
+                _showWizardInput = false;
+                await InvokeAsync(StateHasChanged);
+                // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
+                await Task.Delay(50);
+
+                if (validate != null)
+                {
+                    var error = validate(result);
+                    if (error != null)
+                    {
+                        AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
+                        AnsiConsole.WriteLine();
+                        continue;
+                    }
+                }
+
+                // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
+                Console.WriteLine($"\u001b[38;2;255;200;80m> {(secret ? "[hidden]" : result)}\u001b[0m");
+                return result;
+            }
+        }
+        finally
+        {
+            _showWizardInput = false;
+            _wizardInputTcs = null;
+            _wizardInputSecret = false;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
     /// <summary>
-    /// Show a list of options rendered through RazorConsole's Select component. User navigates
+    /// Show a list of options rendered through the focused approval component. User navigates
     /// with arrow keys and commits with Enter. Returns the selected option string.
     /// </summary>
-    private async Task<string> WizardPromptSelectAsync(string title, params string[] options)
+    private Task<string> WizardPromptSelectAsync(string title, params string[] options) =>
+        WizardPromptSelectCoreAsync(title, options);
+
+    private async Task<string> WizardPromptSelectCoreAsync(string title, string[] options, string? silentChoice = null, bool liveTitle = false)
     {
         if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
 
-        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+        // Cancellable navigation menus show the title only in the live region.
+        // Persist it together with the choice only after the user commits an action.
+        _wizardSelectTitle = silentChoice is not null || liveTitle ? title : null;
+        if (silentChoice is null && !liveTitle)
+            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
-        _wizardSelectOptions = options;
-        _wizardSelectValue = options[0];
+        _wizardSelectChoices = options.Select(option => new ApprovalSelect.Option(option, Color.DeepSkyBlue1)).ToArray();
         // Async continuations so the awaiting wizard step resumes off the dispatcher
         // thread (HandleWizardSelectSubmit completes this from a Blazor event). See the
         // note in WaitForVdomInputAsync.
         _wizardSelectTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restorePrompt = _showPrompt;
         _showWizardSelect = true;
         _showPrompt = false;
         await InvokeAsync(StateHasChanged);
 
-        var result = await _wizardSelectTcs.Task;
-
-        _showWizardSelect = false;
-        await InvokeAsync(StateHasChanged);
-        await Task.Delay(50);
-
-        Console.WriteLine($"\u001b[38;2;255;200;80m> {result}\u001b[0m");
-        return result;
+        try
+        {
+            var result = await _wizardSelectTcs.Task;
+            if (result != silentChoice)
+            {
+                if (silentChoice is not null)
+                    AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+                AnsiConsole.Write(new Text("> " + result, new Style(new Color(255, 200, 80))));
+            }
+            return result;
+        }
+        finally
+        {
+            _showWizardSelect = false;
+            _wizardSelectTcs = null;
+            _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+            _wizardSelectTitle = null;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     /// <summary>
-    /// Convenience: yes/no confirm rendered as a Select with two options. Used by wizards
+    /// Convenience: yes/no confirm rendered as a component selector. Used by wizards
     /// instead of <c>AnsiConsole.Confirm</c> so the entire flow stays inside the VDOM render
     /// pipeline.
     /// </summary>
@@ -1599,50 +2043,6 @@
         var options = defaultYes ? new[] { yes, no } : new[] { no, yes };
         var picked = await WizardPromptSelectAsync(title, options);
         return picked == yes;
-    }
-
-    /// <summary>
-    /// Called by PromptInput when @ or / triggers autocomplete.
-    /// Hides VDOM, runs imperative autocomplete (Console.ReadKey loop),
-    /// then completes with the full input line.
-    /// </summary>
-    private async Task HandleAutocompleteRequested(string currentInput)
-    {
-        if (_autocompleteActive) return;
-        _autocompleteActive = true;
-
-        try
-        {
-            // 1. Hide PromptInput so Console.ReadKey doesn't conflict with VDOM
-            _showPrompt = false;
-            await InvokeAsync(StateHasChanged);
-            await Task.Delay(100); // Wait for VDOM repaint
-
-            // 2. Run imperative autocomplete on a background thread
-            //    Console.ReadKey blocks, so we use Task.Run.
-            //    ContinueAutocomplete() picks up from the current state machine state
-            //    (already has "@" or "/..." from PromptInput's HandleInput) — no reset.
-            //    Returns null if user erased the trigger (@ or /) — go back to VDOM.
-            var result = await Task.Run(() => CommandAutocomplete.ContinueAutocomplete());
-
-            // Drain any buffered keystrokes typed while the prompt was hidden
-            var resumeText = result ?? StateMachine.State.InputText;
-            var buffered = DrainConsoleKeyBuffer();
-            if (!string.IsNullOrEmpty(buffered))
-            {
-                resumeText += buffered;
-                StateMachine.UpdateText(resumeText);
-            }
-
-            _promptInitialValue = resumeText;
-        }
-        finally
-        {
-            _autocompleteActive = false;
-            _showPrompt = true;
-            _isProcessing = false;
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
     /// <summary>
@@ -1665,15 +2065,11 @@
         await InvokeAsync(StateHasChanged);
 
         var input = await _inputTcs.Task;
+        if (_paneStopped) return string.Empty;
 
-        // Hide the prompt during processing
-        _showPrompt = false;
+        _showPrompt = true;
         _isProcessing = true;
         await InvokeAsync(StateHasChanged);
-
-        // Wait for the VDOM repaint to finish removing the PromptInput
-        // before any imperative Console.Write calls
-        await Task.Delay(100);
 
         return input;
     }
@@ -1686,10 +2082,9 @@
 
     private string ProcessFileReferences(string input)
     {
-        var pattern = @"@([\w.\-/\\]+[\w.])";
-        var matches = Regex.Matches(input, pattern);
+        var matches = FileReferenceToken.Paths(input).ToArray();
 
-        if (matches.Count == 0)
+        if (matches.Length == 0)
             return input;
 
         var contextBlocks = new System.Text.StringBuilder();
@@ -1697,9 +2092,8 @@
         int totalExpansionChars = 0;
         int skippedForBudget = 0;
 
-        foreach (Match match in matches)
+        foreach (var filePath in matches)
         {
-            var filePath = match.Groups[1].Value;
 
             // Skip duplicates
             if (!referencedFiles.Add(filePath))
@@ -1782,32 +2176,12 @@
         return fullContext.ToString();
     }
 
-    private static string DrainConsoleKeyBuffer()
-    {
-        if (!Console.KeyAvailable)
-            return string.Empty;
-
-        var chars = new List<char>();
-        while (Console.KeyAvailable)
-        {
-            var key = Console.ReadKey(intercept: true);
-
-            if (key.Key is ConsoleKey.Enter or ConsoleKey.Escape)
-                continue;
-
-            if (!char.IsControl(key.KeyChar))
-                chars.Add(key.KeyChar);
-        }
-
-        return chars.Count > 0 ? new string(chars.ToArray()) : string.Empty;
-    }
-
     private void ShowOfflineGuidance()
     {
         var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[yellow]MandoCode can't reach Ollama at {endpoint}.[/]");
-        AnsiConsole.MarkupLine("[dim]Start 'ollama serve', pull a model, then type /retry to reconnect — or /setup to walk through setup again.[/]");
+        AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, /ollama-serve to start local Ollama, or /setup to check the server URL. You can also run 'ollama serve' in another terminal.[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -1817,6 +2191,7 @@
     /// </summary>
     private void StartCancelKeyListener()
     {
+        if (TuiConsole.Current is not null) return;
         var listenerCts = new CancellationTokenSource();
         _keyListenerCts = listenerCts;
 
@@ -1863,6 +2238,7 @@
 
     private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null)
     {
+        (Pane?.Session ?? TuiConsole.Current)?.BeginToolTurn();
         // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
         // turn the user then cancelled would sit in the single slot and execute at the end of some
         // later, unrelated turn.
@@ -1921,7 +2297,7 @@
                         var unprinted = SettleReply(chunk);
                         if (unprinted.Length > 0)
                         {
-                            AnsiConsole.MarkupLine("[green]MandoCode:[/]");
+                            PrintReplyHeading();
                             RenderMarkdownGuarded(unprinted);
                         }
 
@@ -1979,6 +2355,13 @@
                             Role = "assistant",
                             Text = responseText
                         });
+                        if (responseText.Contains("Error: Connection to Ollama failed.", StringComparison.Ordinal)
+                            && !await CheckOllamaConnectionAsync())
+                        {
+                            CloseReply();
+                            await HandleRetryCommandAsync();
+                            if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
+                        }
 
                         // 401 auto-recovery: if the response is a 401 sign-in error,
                         // immediately launch the cloud sign-in walkthrough so the user
@@ -1989,22 +2372,19 @@
                             await TryAutoSigninAfter401Async();
                         }
 
-                        // Show per-response token summary (right-aligned, tight to response)
+                        // Show per-response token summary on the left, matching the footer text style.
                         if (Config.EnableTokenTracking)
                         {
                             var lastOp = TokenTracker.LastOperation;
                             if (lastOp != null)
                             {
-                                var inLabel = $"~{TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)} in";
-                                var outLabel = $"{TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)} out";
+                                var inLabel = $"In {TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)}";
+                                var outLabel = $"Out {TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)}";
                                 var tpsLabel = lastOp.TokensPerSecond.HasValue
-                                    ? $": {lastOp.TokensPerSecond.Value:0.#} tok/s"
+                                    ? $" · {lastOp.TokensPerSecond.Value:0.#} tok/s"
                                     : "";
-                                var totalLabel = TokenTrackingService.FormatTokenCount(TokenTracker.TotalSessionTokens);
-                                var tokenSummary = $"[{inLabel}, {outLabel}{tpsLabel}]";
-                                var pad = Math.Max(0, Console.WindowWidth - tokenSummary.Length - 1);
-                                Console.WriteLine();
-                                Console.WriteLine($"\u001b[2m{new string(' ', pad)}{tokenSummary}\u001b[0m");
+                                var tokenSummary = $"{inLabel} · {outLabel}{tpsLabel}";
+                                AnsiConsole.WriteSpaced(new Text(tokenSummary, new Style(Color.Grey62)));
                             }
                         }
 
@@ -2054,18 +2434,26 @@
             Spinner.Stop();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
+            if (IsOllamaTransportFailure(ex))
+            {
+                CloseReply();
+                await HandleRetryCommandAsync();
+                if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
+            }
         }
         finally
         {
             CloseReply();
+            (Pane?.Session ?? TuiConsole.Current)?.CompleteToolTurn();
             StopCancelKeyListener();
             var oldCts = Interlocked.Exchange(ref _requestCts, null);
             oldCts?.Dispose();
 
             // Persist the conversation as of this turn for `mandocode --continue`.
             // Runs on cancel too — whatever the history holds now is what "continue" means.
-            try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+            try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
             catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
         }
     }
 
@@ -2143,7 +2531,7 @@
     // redirect/stop), so these stay markup-free for clean comparisons and scrollback echo.
     private const string ExecutePlanLabel = "Execute plan";
     private const string EditPlanStepLabel = "Edit a step";
-    private const string RejectPlanLabel = "Reject (answer without a plan)";
+    private const string RejectPlanLabel = "One-shot it";
     private const string CancelRequestLabel = "Cancel request";
 
     // App-standard selection treatment for the remaining Spectre prompts — same
@@ -2154,7 +2542,7 @@
     // Plan-approval select bridge — mirrors the wizard TCS pattern above.
     private bool _planSelectActive;
     private TaskCompletionSource<string>? _planSelectTcs;
-    private static readonly ApprovalSelect.Option[] _planSelectOptions =
+    private static readonly ApprovalSelect.Option[] ProposedPlanOptions =
     {
         new(ExecutePlanLabel, Color.Green),
         new(EditPlanStepLabel, Color.DeepSkyBlue1),
@@ -2167,15 +2555,21 @@
     /// <paramref name="ct"/> so a cancelled request (Esc, timeout) unwinds the await
     /// instead of leaving the turn stuck at an orphaned prompt.
     /// </summary>
-    private async Task<string> PromptPlanChoiceAsync(CancellationToken ct)
+    private IReadOnlyList<ApprovalSelect.Option> _planSelectOptions = ProposedPlanOptions;
+
+    private Task<string> PromptPlanChoiceAsync(CancellationToken ct) =>
+        PromptPlanChoiceAsync("The assistant proposes this plan. What would you like to do?", ProposedPlanOptions, ct);
+
+    private async Task<string> PromptPlanChoiceAsync(string title, IReadOnlyList<ApprovalSelect.Option> options, CancellationToken ct)
     {
+        _planSelectOptions = options;
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _planSelectTcs = tcs;
         using var cancelReg = ct.Register(() => tcs.TrySetCanceled(ct));
 
         // Title goes to scrollback imperatively (same as WizardPromptSelectAsync) so the
         // VDOM region holds only the option rows — keeps the live-repaint area minimal.
-        AnsiConsole.MarkupLine("[deepskyblue1]The assistant proposes this plan. What would you like to do?[/]");
+        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
 
         _planSelectActive = true;
         await InvokeAsync(StateHasChanged);
@@ -2188,6 +2582,7 @@
         finally
         {
             _planSelectActive = false;
+            _planSelectTcs = null;
             await InvokeAsync(StateHasChanged);
             // Brief wait so the VDOM tears down the select before imperative writes
             // (matches the wizard primitives' teardown delay).
@@ -2332,6 +2727,8 @@
                 await HandleProgressEventAsync(progressEvent, plan, _requestCts.Token);
             }
 
+            if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !_requestCts.IsCancellationRequested)
+                await ReviewReplacementPlanAsync(plan, revisedInstructions, _requestCts.Token);
             var manifest = PlanHandoff.BuildManifest(plan, PlanHandoff.FileOperations);
             AI.AppendAssistantNote(manifest);
         }
@@ -2492,8 +2889,9 @@
         AI.AppendAssistantNote(manifest);
 
         // Keep --continue honest: the plan's outcome is part of this turn.
-        try { SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
+        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
         catch { /* persistence must never break the chat */ }
+            SaveAgentHistory(false);
     }
 
     private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
@@ -2550,7 +2948,7 @@
         if (choice == RejectPlanLabel)
         {
             _lastPlanOutcome = PlanTurnOutcome.Rejected;
-            AnsiConsole.MarkupLine("[dim]Plan rejected — answering directly instead.[/]");
+            AnsiConsole.MarkupLine("[dim]Plan skipped — one-shotting your request.[/]");
             AnsiConsole.WriteLine();
             // The caller turns this into a fresh follow-up turn: with execution deferred there is
             // no open turn left for the model to answer in, so one is started explicitly.
@@ -2575,6 +2973,9 @@
             Spinner.Stop();
             PlanRunners.Current.CancelPlan(plan);
         }
+
+        if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !ct.IsCancellationRequested)
+            return await ReviewReplacementPlanAsync(plan, revisedInstructions, ct);
 
         AnsiConsole.WriteLine();
         if (plan.Status == TaskPlanStatus.Completed)
@@ -2613,6 +3014,36 @@
         return summary +
                "\n\nThe plan has finished. Respond to the user now with a brief summary of the outcome. " +
                "Do NOT create more files, call more tools, or propose another plan.";
+    }
+
+    private async Task<string> ReviewReplacementPlanAsync(TaskPlan oldPlan, string instructions, CancellationToken ct)
+    {
+        AnsiConsole.MarkupLine("[yellow]The previous plan was stopped because you changed the instructions. Review a replacement before work resumes.[/]");
+        var updatedRequest = $"Original request:\n{oldPlan.OriginalRequest}\n\nLatest user instructions (supersede conflicting earlier requirements):\n{instructions}";
+        AI.AppendUserNote(instructions);
+        AI.SetRequestContext(updatedRequest);
+        Spinner.Start("Creating replacement plan...");
+        TaskPlan replacement;
+        try
+        {
+            var context = "The previous plan was cancelled. Generate new steps and acceptance criteria for the latest instructions. " +
+                "Inspect existing work and retain completed changes that still satisfy the updated request; do not execute tools or repeat work while planning.\n" +
+                "Earlier step results:\n" + string.Join("\n", oldPlan.Steps.Select(step => $"{step.Description}: {step.Result ?? step.ErrorMessage ?? step.Status.ToString()}")) +
+                "\nObserved file changes:\n" + string.Join("\n", PlanHandoff.FileOperations.Select(op => $"{op.Operation}: {op.Path}"));
+            var proposal = await AI.GeneratePlanAsync(updatedRequest, context, ct);
+            replacement = new TaskPlan { OriginalRequest = updatedRequest, Steps = TaskPlannerService.FromProposals(proposal.Steps), Status = TaskPlanStatus.Pending };
+            if (replacement.Steps.Count == 0) throw new InvalidOperationException("The replacement plan contained no steps; the previous plan remains stopped.");
+            PlanFinalQuality.Ensure(replacement);
+        }
+        finally { Spinner.Stop(); }
+        var summary = await HandleProposedPlanAsync(replacement, ct);
+        // The outer handoff builds its manifest from the same plan object. Carry the
+        // reviewed replacement's outcome back so it never reports the stale criteria.
+        oldPlan.OriginalRequest = replacement.OriginalRequest;
+        oldPlan.Steps = replacement.Steps;
+        oldPlan.Status = replacement.Status;
+        oldPlan.ExecutionSummary = replacement.ExecutionSummary;
+        return summary;
     }
 
     /// <summary>
@@ -2712,8 +3143,8 @@
         var step = selectableSteps[selectedIndex];
 
         var revised = await InstructionCoordinator.RequestAsync(
-            $"Edit step {step.StepNumber} instruction (Enter to save):",
-            step.Instruction);
+            $"Edit step {step.StepNumber} instruction",
+            step.Instruction, multiline: true);
 
         if (string.IsNullOrWhiteSpace(revised) ||
             string.Equals(revised.Trim(), step.Instruction?.Trim(), StringComparison.Ordinal))
@@ -2854,30 +3285,30 @@
 
                 // Ask user what to do
                 // Palette: green = try again, gold = redirect (skip), red = destructive.
-                const string retryStepLabel = "[green]Retry this step[/]";
-                const string revisePlanLabel = "[deepskyblue1]Revise the remaining plan[/]";
-                const string skipStepLabel = "[rgb(255,200,80)]Skip this step and continue[/]";
-                const string cancelPlanLabel = "[red]Cancel the plan[/]";
+                const string retryStepLabel = "Retry this step";
+                const string revisePlanLabel = "Revise the remaining plan";
+                const string skipStepLabel = "Skip this step and continue";
+                const string cancelPlanLabel = "Cancel the plan";
 
                 var stepToDecide = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
 
                 // Retry is offered only on the workflow engine. The legacy runner walks the steps
                 // with a foreach and has already moved past this one — it has no way back.
-                var choices = PlanRunners.UsingWorkflowEngine
-                    ? new[] { retryStepLabel, revisePlanLabel, skipStepLabel, cancelPlanLabel }
-                    : new[] { skipStepLabel, cancelPlanLabel };
+                var choices = new List<ApprovalSelect.Option>();
+                if (PlanRunners.UsingWorkflowEngine)
+                {
+                    choices.Add(new(retryStepLabel, Color.Green));
+                    choices.Add(new(revisePlanLabel, Color.DeepSkyBlue1));
+                }
+                choices.Add(new(skipStepLabel, new Color(255, 200, 80)));
+                choices.Add(new(cancelPlanLabel, Color.Red));
 
                 string failChoice;
+                using (await PromptGate.AcquireAsync(ct))
                 using (KeyCoordinator.Suppress())
                 {
-                    failChoice = AnsiConsole.Prompt(
-                        new SelectionPrompt<string>()
-                            .Title("[deepskyblue1]How would you like to proceed?[/]")
-                            .HighlightStyle(SelectionHighlight)
-                            .AddChoices(choices)
-                    );
+                    failChoice = await PromptPlanChoiceAsync("How would you like to proceed?", choices, ct);
                 }
-
                 if (failChoice == cancelPlanLabel)
                 {
                     PlanRunners.Current.CancelPlan(plan);
@@ -2968,10 +3399,10 @@
             Spinner.Stop();
         }
 
-        const string useLabel = "[green]Use revised plan[/]";
-        const string editLabel = "[deepskyblue1]Edit a step[/]";
-        const string keepLabel = "[rgb(255,200,80)]Keep current plan and skip this step[/]";
-        const string cancelLabel = "[red]Cancel the plan[/]";
+        const string useLabel = "Use revised plan";
+        const string editLabel = "Edit a step";
+        const string keepLabel = "Keep current plan and skip this step";
+        const string cancelLabel = "Cancel the plan";
         string choice;
 
         // Keep the background Escape listener suppressed across the revised-plan menu and
@@ -2986,12 +3417,17 @@
                 AnsiConsole.MarkupLine(
                     $"[dim]Steps before {failedStep.StepNumber} are settled and will not run again.[/]");
 
-                choice = AnsiConsole.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("[deepskyblue1]Review the revised remaining plan[/]")
-                        .HighlightStyle(SelectionHighlight)
-                        .AddChoices(useLabel, editLabel, keepLabel, cancelLabel));
-
+                using (await PromptGate.AcquireAsync(ct))
+                {
+                    choice = await PromptPlanChoiceAsync("Review the revised remaining plan",
+                        new ApprovalSelect.Option[]
+                        {
+                            new(useLabel, Color.Green),
+                            new(editLabel, Color.DeepSkyBlue1),
+                            new(keepLabel, new Color(255, 200, 80)),
+                            new(cancelLabel, Color.Red)
+                        }, ct);
+                }
                 if (choice == editLabel)
                 {
                     await EditPlanStepAsync(
@@ -3027,7 +3463,7 @@
             AnsiConsole.MarkupLine($"  • User skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedUserSkillsDirectory)}[/]");
             AnsiConsole.MarkupLine($"  • Project skills: [dim]{Spectre.Console.Markup.Escape(Skills.ResolvedProjectSkillsDirectory)}[/]");
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[dim]Tip: project skills are also discovered by walking up from the project root — put them at the repo root if you launch from a subdirectory.[/]");
+            if (Config.ShowTips) AnsiConsole.MarkupLine("[dim]Tip: project skills are also discovered by walking up from the project root — put them at the repo root if you launch from a subdirectory.[/]");
             AnsiConsole.WriteLine();
             return;
         }
@@ -3547,7 +3983,7 @@
 
         if (_isConnected)
         {
-            var wantChat = AnsiConsole.Confirm("Chat with an AI educator to learn more?", false);
+            var wantChat = await WizardConfirmAsync("Chat with an AI educator to learn more?", false);
             if (wantChat)
             {
                 await AI.EnterLearnModeAsync();
@@ -3570,7 +4006,7 @@
 
         // OSC 52: copy to system clipboard via terminal escape code
         var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
-        Console.Write($"\u001b]52;c;{base64}\u0007");
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
         AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
         AnsiConsole.WriteLine();
@@ -3609,7 +4045,7 @@
             AnsiConsole.MarkupLine("[yellow]Warning: Code blocks truncated to fit clipboard limit.[/]");
         }
 
-        Console.Write($"\u001b]52;c;{base64}\u0007");
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
         AnsiConsole.MarkupLine($"[green]Copied {matches.Count} code block(s) to clipboard[/] [dim]({codeContent.Length} chars)[/]");
         AnsiConsole.WriteLine();
@@ -3629,7 +4065,7 @@
             drops[i] = rng.Next(-height, 0); // stagger start positions
 
         Console.CursorVisible = false;
-        Console.Clear();
+        TuiConsole.Clear();
 
         // Phase 1: Digital rain (~14 frames)
         for (int frame = 0; frame < 14; frame++)
@@ -3675,7 +4111,7 @@
         }
 
         // Phase 2: Fade to black, then reveal the rabbit
-        Console.Clear();
+        TuiConsole.Clear();
         Thread.Sleep(300);
 
         var centerY = height / 2 - 1;
@@ -3697,7 +4133,7 @@
         Thread.Sleep(1500);
 
         // Clear and return
-        Console.Clear();
+        TuiConsole.Clear();
         Console.CursorVisible = true;
     }
 
@@ -3870,51 +4306,83 @@
 
     private async Task HandleRetryCommandAsync()
     {
-        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Checking Ollama connection...[/]");
+        var probe = await RecoverOllamaConnectionAsync();
+        _isConnected = probe.Ok;
 
-        var connected = await CheckOllamaConnectionAsync();
-        _isConnected = connected;
-
-        if (connected)
+        if (probe.Ok)
         {
             AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
             await ValidateCurrentModelAsync();
         }
         else
         {
-            AnsiConsole.MarkupLine($"[red]Unable to reach Ollama at {endpoint}.[/]");
-            AnsiConsole.MarkupLine("[dim]Make sure 'ollama serve' is running, pull a model, then run /retry — or /setup to walk through setup again.[/]");
+            AnsiConsole.WriteLine(probe.Error ?? "Ollama is still unavailable.");
+            ShowOfflineGuidance();
         }
 
         AnsiConsole.WriteLine();
         await InvokeAsync(StateHasChanged);
     }
 
+    private async Task<OllamaSetupHelper.ProbeResult> RecoverOllamaConnectionAsync()
+    {
+        var processing = _isProcessing;
+        _isProcessing = true;
+        Spinner.Start(message: "Checking Ollama connection");
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var recovery = (Pane?.Services ?? Services).GetRequiredService<OllamaConnectionRecovery>();
+            var probe = await recovery.RecoverAsync(Config.OllamaEndpoint, Config.ContextLength,
+                message => Spinner.Start(message: message), _requestCts?.Token ?? Lifetime.ApplicationStopping);
+            if (probe.WasHealed)
+            {
+                Config.OllamaEndpoint = probe.NormalizedUrl;
+                Config.Save();
+                await AI.ReinitializeAsync(Config);
+            }
+            return probe;
+        }
+        catch (OperationCanceledException) { return new(false, Config.OllamaEndpoint, false, "Ollama recovery cancelled."); }
+        finally { Spinner.Stop(); _isProcessing = processing; await InvokeAsync(StateHasChanged); }
+    }
+
+    private static bool IsOllamaTransportFailure(Exception error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            if (current is System.Net.Http.HttpRequestException { StatusCode: null } or System.Net.Sockets.SocketException) return true;
+        return false;
+    }
+
     private async Task HandleConfigCommandAsync()
     {
         AnsiConsole.WriteLine();
-        var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Configuration Options:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(new[]
-                {
-                    "Run configuration wizard",
-                    "View current configuration",
-                    "[rgb(255,200,80)]Cancel[/]"
-                })
-        );
+        var prompts = new ConfigurationPrompts
+        {
+            Select = (title, options) => WizardPromptSelectAsync(title, options),
+            PickModel = PickModelFromPromptAsync,
+            Text = (title, initial, validate, secret) => WizardPromptTextCoreAsync(title, "", validate, initial, secret)
+        };
+        var choice = await WizardPromptSelectCoreAsync("Configuration Options:", new[]
+        {
+            "Run configuration wizard", "View current configuration", "Agent naming", "Cancel"
+        }, silentChoice: "Cancel");
 
         switch (choice)
         {
             case "Run configuration wizard":
                 var updatedConfig = await ConfigurationWizard.RunAsync(
                     Config,
-                    promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+                    prompts: prompts);
+                var configuredAgents = Pane is null ? new[] { Config } :
+                    (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                        .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+                var defaults = Services.GetRequiredService<AgentModelDefaults>();
+                defaults.UpdateSettings(updatedConfig, configuredAgents);
+                defaults.UpdateSetting("model", updatedConfig.GetEffectiveModelName(), configuredAgents);
                 await AI.ReinitializeAsync(updatedConfig);
-                AnsiConsole.Clear();
+                TuiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
 
                 // Re-validate the model after config change
@@ -3939,6 +4407,13 @@
                 }
                 break;
 
+            case "Agent naming":
+                var naming = await WizardPromptSelectCoreAsync($"Agent naming (current: {(Config.UseAgentNames ? "Names" : "Numbers")}; applies to new agents, existing names stay unchanged):",
+                    new[] { "Names (default): unique callsigns such as Neo or Kernel, like Desktop", "Numbers: sequential labels such as Agent 1 or Agent 2; reuse available numbers", "Cancel" }, silentChoice: "Cancel");
+                if (naming != "Cancel")
+                    await HandleConfigSetCommandAsync("agentNaming " + (naming.StartsWith("Names", StringComparison.Ordinal) ? "names" : "numbers"));
+                break;
+
             case "View current configuration":
                 AnsiConsole.WriteLine();
                 Config.Display();
@@ -3949,6 +4424,11 @@
 
     public void Dispose()
     {
+        SaveAgentHistory(true);
+        if (Pane is not null) Pane.SaveHistory = null;
+        _directorySelection?.TrySetResult(null);
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        StopPane();
         StopCancelKeyListener();
         StopMusicVisualizer();
         Spinner.Stop();
@@ -3978,7 +4458,14 @@
         var cts = Interlocked.Exchange(ref _requestCts, null);
         cts?.Dispose();
         MusicPlayer?.Dispose();
-        ThemeService?.Dispose();
+        if (Pane is null || Pane.Id == 1) ThemeService?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Pane is null) { ((IDisposable)this).Dispose(); return; }
+        Dispose();
+        await Pane.DisposeAsync();
     }
 
 }

@@ -10,3 +10,7 @@
 @using MandoCode.Components
 @using MandoCode.Models
 @using MandoCode.Services
+
+@* Razor imports live inside the component namespace, where Spectre.Console can
+   shadow the compilation-unit global alias. Bind display calls locally too. *@
+@using AnsiConsole = MandoCode.Services.TuiConsole

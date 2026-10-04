@@ -1,0 +1,112 @@
+@using Spectre.Console
+@inject RazorConsole.Core.Focus.FocusManager Focus
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="Choose directory" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+    <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-focus-order="0" @onkeydown="Key">
+        <Rows>
+            <Markup Content="@DirectoryPathCaption.Fit(_directory.Length == 0 ? "Drives" : _directory, Math.Max(1, Width - 4))" Foreground="@PaneColors.For(Pane, Color.Purple)" />
+            @for (var row = 0; row < VisibleRows; row++)
+            {
+                var index = _start + row;
+                var item = index < _items.Length ? _items[index] : null;
+                <div @key="row" data-focusable="false" @onclick="@(() => Activate(index))">
+                    <Markup Content="@WorkspaceTabWindow.Fit(item is null ? " " : (index == _selected ? "> " : "  ") + item.Label, Math.Max(1, Width - 4))"
+                            Foreground="@(index == _selected ? Color.Black : PaneColors.For(Pane, Color.Grey85))"
+                            Background="@(item is not null && index == _selected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+                </div>
+            }
+            <Markup Content="@WorkspaceTabWindow.Fit(_error, Math.Max(1, Width - 4))" Foreground="@PaneColors.For(Pane, Color.Yellow)" />
+        </Rows>
+    </div>
+</Box>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter] public string InitialDirectory { get; set; } = "";
+    [Parameter] public int Width { get; set; } = 40;
+    [Parameter] public int Height { get; set; } = 15;
+    [Parameter] public EventCallback<string?> OnComplete { get; set; }
+    private sealed record Item(string Label, string? Path, int Action = 0);
+    private string _directory = "";
+    private string _error = "";
+    private Item[] _items = [];
+    private int _selected;
+    private int _start;
+    private bool _loading;
+    private readonly string _focusKey = "directory-browser-" + Guid.NewGuid().ToString("N");
+    private int VisibleRows => Math.Max(1, Height - 4);
+    protected override async Task OnInitializedAsync() => await Navigate(InitialDirectory);
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Pane is not null) Pane.FocusKey = _focusKey;
+        if ((Pane is null || Pane.Active) && !Focus.IsFocused(_focusKey)) await Focus.FocusAsync(_focusKey);
+    }
+    private async Task Navigate(string path)
+    {
+        if (_loading) return;
+        _loading = true;
+        _error = "Loading folders…";
+        try
+        {
+            var folders = await Task.Run(() => path.Length == 0
+                ? DriveInfo.GetDrives().Where(drive => drive.IsReady).Select(drive => drive.RootDirectory.FullName).ToArray()
+                : Directory.GetDirectories(path).OrderBy(folder => Path.GetFileName(folder), StringComparer.OrdinalIgnoreCase).ToArray());
+            _directory = path;
+            var actions = new List<Item>();
+            if (path.Length > 0) actions.Add(new("✓ Use this folder", path, 1));
+            actions.Add(new("↑ Parent directory", null, 2));
+            actions.Add(new("× Cancel", null, 3));
+            actions.AddRange(folders.Select(folder => new Item("📁 " + (path.Length == 0 ? folder : Path.GetFileName(folder)), folder)));
+            _items = actions.ToArray();
+            _selected = 0;
+            _start = 0;
+            _error = folders.Length == 0 ? "No subfolders" : "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _error = ex is UnauthorizedAccessException ? "Access denied — choose another folder" : ex.Message;
+            if (_items.Length == 0) _items = [new("× Cancel", null, 3)];
+        }
+        finally { _loading = false; }
+    }
+    private async Task Parent()
+    {
+        if (_directory.Length == 0) return;
+        var parent = Directory.GetParent(_directory)?.FullName;
+        await Navigate(parent ?? (OperatingSystem.IsWindows() ? "" : _directory));
+        var parentIndex = Array.FindIndex(_items, item => item.Action == 2);
+        if (parentIndex >= 0)
+        {
+            _selected = parentIndex;
+            _start = Math.Max(0, _selected - VisibleRows + 1);
+        }
+    }
+    private async Task Activate(int index)
+    {
+        if (_loading || index < 0 || index >= _items.Length) return;
+        var item = _items[index];
+        if (item.Action == 1) await OnComplete.InvokeAsync(_directory);
+        else if (item.Action == 2) await Parent();
+        else if (item.Action == 3) await OnComplete.InvokeAsync((string?)null);
+        else if (item.Path is not null) await Navigate(item.Path);
+    }
+    private async Task Key(KeyboardEventArgs key)
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (Pane?.Workspace.Key(Pane, key) == true) return;
+        switch (key.Key)
+        {
+            case "Escape": await OnComplete.InvokeAsync((string?)null); break;
+            case "Enter": case "Return": await Activate(_selected); break;
+            case "ArrowLeft": case "LeftArrow": case "Backspace": await Parent(); break;
+            case "ArrowUp": case "UpArrow": _selected--; break;
+            case "ArrowDown": case "DownArrow": _selected++; break;
+            case "PageUp": _selected -= VisibleRows; break;
+            case "PageDown": _selected += VisibleRows; break;
+            case "Home": _selected = 0; break;
+            case "End": _selected = _items.Length - 1; break;
+        }
+        _selected = Math.Clamp(_selected, 0, Math.Max(0, _items.Length - 1));
+        _start = Math.Clamp(_selected - VisibleRows + 1, 0, Math.Max(0, _items.Length - VisibleRows));
+    }
+}

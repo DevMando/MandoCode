@@ -153,6 +153,12 @@ public class MandoCodeConfig
     [JsonPropertyName("modelName")]
     public string? ModelName { get; set; }
 
+    /// <summary>Saved model for newly created CLI agents; existing agents retain their own model.</summary>
+    [JsonPropertyName("defaultAgentModel")]
+    public string? DefaultAgentModel { get; set; }
+    [JsonPropertyName("defaultAgentOptions")]
+    public Dictionary<string, string>? DefaultAgentOptions { get; set; }
+
     /// <summary>
     /// Optional display identity for this AI instance — "Blazor" instead of "MandoCode" in the
     /// system prompt. Runtime-only ([JsonIgnore]): it names ONE session, so persisting it to
@@ -162,6 +168,12 @@ public class MandoCodeConfig
     /// </summary>
     [JsonIgnore]
     public string? AgentName { get; set; }
+
+    /// <summary>Use Desktop-style callsigns for newly created CLI agents; false uses numbers.</summary>
+    public bool UseAgentNames { get; set; } = true;
+    public bool DimUnfocusedAgents { get; set; } = true;
+    public bool ShowTips { get; set; } = true;
+    [JsonIgnore] public bool AllowPersistence { get; set; } = true;
 
     /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
@@ -535,6 +547,7 @@ public class MandoCodeConfig
     /// </summary>
     public void Save(string? configPath = null)
     {
+        if (!AllowPersistence) return;
         configPath ??= GetDefaultConfigPath();
 
         try

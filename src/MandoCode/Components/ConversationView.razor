@@ -1,0 +1,80 @@
+@using RazorConsole.Core.Rendering
+@inject ScrollableLayoutCoordinator LayoutCoordinator
+@implements IDisposable
+
+<view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
+    <div data-focusable="@(Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)" data-focus-order="1" data-input-managed="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" data-manage-tab="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" @onkeydown="HandleKey" @onwheel="HandleWheel">
+        @Header
+        @foreach (var entry in Entries)
+        {
+            @if (entry.ToolActivity is { Finished: true } activity)
+            {
+                <WorkspaceButton @key="entry.Id" Content="@((activity.Expanded ? "▾ ⚡ " : "▸ ⚡ ") + activity.Summary)" OnClick="@(() => ToggleTools(activity))" />
+            }
+            else if (entry.ToolActivity is null && (entry.ToolOutput is null || !entry.ToolOutput.Finished || entry.ToolOutput.Expanded))
+            {
+            <ConversationEntry @key="entry.Id" Entry="entry" />
+            }
+        }
+    </div>
+</view-height-scrollable>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public IReadOnlyList<TuiEntry> Entries { get; set; } = Array.Empty<TuiEntry>();
+    private readonly string _scrollId = Guid.NewGuid().ToString("N");
+    private int _offset;
+    private bool _following = true;
+    private void ToggleTools(ToolActivity activity)
+    {
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        activity.Expanded = !activity.Expanded;
+    }
+    protected override void OnInitialized()
+    {
+        if (Pane?.PresentationState.GetValueOrDefault("scroll") is ValueTuple<int, bool> saved)
+            (_offset, _following) = saved;
+    }
+    public void Scroll(string key)
+    {
+        var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+        if (maximum == int.MaxValue) return;
+        var current = _following ? maximum : _offset;
+        var page = Math.Max(1, (Pane?.Height ?? SafeHeight) / 2);
+        var next = key switch
+        {
+            "PageUp" => current - page,
+            "PageDown" => current + page,
+            "ArrowUp" => current - 1,
+            "ArrowDown" => current + 1,
+            "Home" => 0,
+            "End" => maximum,
+            _ => current,
+        };
+        SetOffset(next, maximum);
+    }
+    private void HandleKey(KeyboardEventArgs key)
+    {
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
+        if (Pane is not null && !Pane.Active) return;
+        Scroll(key.Key);
+    }
+    private void HandleWheel(WheelEventArgs wheel)
+    {
+        var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+        if (maximum != int.MaxValue) SetOffset((_following ? maximum : _offset) + (int)wheel.DeltaY, maximum);
+    }
+    private void SetOffset(int offset, int maximum)
+    {
+        _offset = Math.Clamp(offset, 0, maximum);
+        _following = _offset == maximum;
+        StateHasChanged();
+    }
+    private static int SafeHeight { get { try { return Math.Max(12, Console.WindowHeight); } catch { return 24; } } }
+    public void Dispose()
+    {
+        if (Pane is not null) Pane.PresentationState["scroll"] = (_offset, _following);
+        LayoutCoordinator.Remove(_scrollId);
+    }
+}

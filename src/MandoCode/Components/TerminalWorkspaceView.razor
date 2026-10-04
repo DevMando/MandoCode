@@ -1,0 +1,135 @@
+@using RazorConsole.Core.Renderables
+@using Spectre.Console
+@using Microsoft.Extensions.DependencyInjection
+@using MandoCode.Models
+@inject WorkspaceRegistry Registry
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+@implements IDisposable
+
+<Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+    <Box Height="1" FillWidth="true">
+        <Flex Direction="FlexDirection.Row" FillWidth="true">
+            @if (LabelWidth > 0)
+            {
+                <Box Width="@LabelWidth"><Markup Content="@(Compact ? " WS " : " WORKSPACES ")" Foreground="Color.Grey70" Background="@BarBackground" Decoration="Decoration.Bold" /></Box>
+            }
+            @if (ArrowWidth > 0)
+            {
+                <Box Width="3"><WorkspaceButton Content=" ‹ " OnClick="@(() => ScrollTabs(-1))" /></Box>
+            }
+            @if (_tabs.AvailableWidth > 0)
+            {
+                <Box Width="@_tabs.AvailableWidth">
+                    <Flex Direction="FlexDirection.Row">
+                        @foreach (var workspace in Registry.Entries)
+                        {
+                            <WorkspaceTab Workspace="workspace" Show="@(_tabs.Includes(Array.IndexOf(_openWorkspaces, workspace)))" Width="@_tabs.TabWidth" Revision="@_revision" />
+                        }
+                        <Markup Content="@(new string(' ', TabPadding))" Background="@BarBackground" />
+                    </Flex>
+                </Box>
+            }
+            @if (ArrowWidth > 0)
+            {
+                <Box Width="3"><WorkspaceButton Content=" › " OnClick="@(() => ScrollTabs(1))" /></Box>
+            }
+            <Box Width="@ActionsWidth">
+                <Flex Direction="FlexDirection.Row">
+                    <WorkspaceButton Content="@(Compact ? " ≡ " : " All ")" OnClick="Registry.TogglePicker" />
+                    <WorkspaceButton Content="@(Compact ? " + " : " + New ")" OnClick="@(() => Registry.Add())" />
+                    <WorkspaceButton Content="@(Compact ? " × " : " × Close ")" OnClick="Registry.Close" />
+                </Flex>
+            </Box>
+        </Flex>
+    </Box>
+    <AgentNavigationBar Workspace="@Registry.Active" Revision="@_revision" />
+    @if (Registry.IsWorkspacePickerOpen)
+    {
+        <Box Height="@PickerHeight" FillWidth="true">
+            <WorkspacePicker Height="@PickerHeight" Revision="@_revision" OnClose="ClosePicker" />
+        </Box>
+    }
+    <Box FillWidth="true" FillHeight="true">
+        @foreach (var workspace in Registry.Entries)
+        {
+            <WorkspaceSurface Workspace="workspace" ReservedHeight="@(2 + TipHeight + (Registry.IsWorkspacePickerOpen ? PickerHeight : 0))" AgentBody="AgentBody" Revision="@_revision" />
+        }
+    </Box>
+    @if (TipHeight > 0)
+    {
+        <Box Height="@TipHeight" FillWidth="true">
+            <Rows>
+                @if (ShowExplorerTip)
+                {
+                    <Markup Content="@ExplorerTip" Foreground="Color.Grey70" Background="@BarBackground" />
+                }
+                @if (ShowAgentTips)
+                {
+                    <Markup Content="@AgentTip" Foreground="Color.Grey70" Background="@BarBackground" />
+                }
+            </Rows>
+        </Box>
+    }
+</Flex>
+
+@code {
+    [Parameter] public RenderFragment<AgentPane>? AgentBody { get; set; }
+    private long _revision;
+    private static readonly Color BarBackground = new(22, 26, 30);
+    private readonly WorkspaceTabWindow _tabs = new();
+    private AgentWorkspace[] _openWorkspaces = [];
+    private bool _pickerWasOpen;
+    private string ExplorerTip => Registry.Active.SelectedPane?.IsHistoryOpen?.Invoke() == true
+        ? "Tab switches list/conversation · Up/Down or Page Up/Page Down navigates · Home/End jumps · Type to search the list · Left/Right selects actions · Enter activates · Esc closes."
+        : Registry.Active.SelectedPane?.IsGitChangesOpen?.Invoke() == true
+        ? Registry.Active.SelectedPane?.IsGitDiffOpen?.Invoke() == true
+            ? "Up/Down or Page Up/Page Down scrolls · Left/Right or Tab/Shift+Tab selects Back, Refresh, Discard Changes · Enter activates · R refreshes · Esc returns to files."
+            : "Up/Down selects files or Refresh · Page Up/Page Down moves through files · Enter opens a file or refreshes · R refreshes · Esc or Alt+G closes Git Changes."
+        : "Arrows select · Enter toggles folders or tags files with @ · Shift + Enter opens natively · Tab switches prompt/explorer · R refreshes · Esc closes.";
+    private bool ShowExplorerTip => !Registry.IsWorkspacePickerOpen && Registry.Active.SelectedPane is { } selected
+        && (selected.IsFileExplorerOpen?.Invoke() == true || selected.IsGitChangesOpen?.Invoke() == true || selected.IsHistoryOpen?.Invoke() == true)
+        && selected.Services.GetRequiredService<MandoCodeConfig>().ShowTips;
+    private static readonly string AgentTip = $"{Keybindings.AgentFocus} switches agents · Click an agent tab to focus · /agent-dim-off keeps background colors · /agent-dim-on restores grayscale.";
+    private bool ShowAgentTips => Registry.Active.Panes.Count > 1
+        && Registry.Active.SelectedPane is { } selected
+        && selected.Services.GetRequiredService<MandoCodeConfig>().ShowTips;
+    private int TipRows(string text) => Math.Max(1, (text.Length + Math.Max(1, Viewport.Width) - 1) / Math.Max(1, Viewport.Width));
+    private int TipHeight => (ShowExplorerTip ? TipRows(ExplorerTip) : 0) + (ShowAgentTips ? TipRows(AgentTip) : 0);
+    private bool Compact => Viewport.Width < 70;
+    private int LabelWidth => Viewport.Width < 28 ? 0 : Compact ? 4 : 12;
+    private int ArrowWidth => Viewport.Width < 36 ? 0 : 6;
+    private int ActionsWidth => Compact ? 9 : 21;
+    private int PickerHeight => Math.Clamp(Viewport.Height / 3, 4, 9);
+    private int TabPadding => Math.Max(0, _tabs.AvailableWidth - Math.Min(_tabs.Capacity, Math.Max(0, _openWorkspaces.Length - _tabs.Start)) * _tabs.TabWidth);
+    private readonly CancellationTokenSource _shutdown = new();
+    protected override void OnInitialized()
+    {
+        Registry.Changed += Changed;
+        Viewport.OnResized += Changed;
+        if (Registry.Active.Panes.Count == 0) Registry.Active.Add();
+        UpdateTabs();
+        _ = RefreshStatusAsync();
+    }
+    private void UpdateTabs()
+    {
+        if (_pickerWasOpen && !Registry.IsWorkspacePickerOpen) _tabs.RevealSelection();
+        _pickerWasOpen = Registry.IsWorkspacePickerOpen;
+        _openWorkspaces = Registry.Workspaces.ToArray();
+        _tabs.Update(_openWorkspaces, Registry.Active, Viewport.Width - LabelWidth - ArrowWidth - ActionsWidth);
+    }
+    private void Changed() => _ = InvokeAsync(() => { UpdateTabs(); _revision++; StateHasChanged(); });
+    private void ScrollTabs(int direction) { _tabs.Scroll(direction, _openWorkspaces.Length); Changed(); }
+    private void ClosePicker()
+    {
+        _tabs.RevealSelection();
+        Registry.ClosePicker();
+        Changed();
+    }
+    private async Task RefreshStatusAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(300));
+        try { while (await timer.WaitForNextTickAsync(_shutdown.Token)) Changed(); }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+    }
+    public void Dispose() { Registry.Changed -= Changed; Viewport.OnResized -= Changed; Registry.IsWorkspacePickerOpen = false; _shutdown.Cancel(); _shutdown.Dispose(); }
+}

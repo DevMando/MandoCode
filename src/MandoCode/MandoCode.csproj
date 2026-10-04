@@ -13,7 +13,7 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.15.2</Version>
+    <Version>0.16.0-alpha</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
@@ -52,7 +52,7 @@
     <!-- Held at 2.x on purpose: NAudio 3.x raised its floor to net9.0, which would drop the
          net8.0 build entirely. Revisit when net8.0 is dropped (November 2026). -->
     <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="RazorConsole.Core" Version="0.5.0" />
+    <PackageReference Include="RazorConsole.Core" Version="0.6.0" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 

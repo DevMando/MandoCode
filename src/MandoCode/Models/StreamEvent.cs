@@ -21,6 +21,7 @@ public class TextChunk : StreamEvent
 /// </summary>
 public class FunctionCall : StreamEvent
 {
+    public string? McpServerName { get; set; }
     public string FunctionName { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public Dictionary<string, object?> Arguments { get; set; } = new();

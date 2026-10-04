@@ -1,0 +1,53 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<Box FillWidth="true" Height="1">
+    @if (Selected)
+    {
+        <Markup Content="@SelectedText" Foreground="@(PaneColors.Muted(Pane) ? Color.Grey62 : Color.Black)" Background="@(PaneColors.Muted(Pane) ? Color.Grey19 : Accent)" />
+    }
+    else
+    {
+        <Flex Direction="FlexDirection.Row" Gap="2" FillWidth="true" Height="1">
+            <Markup Content="@Primary" Foreground="@PaneColors.For(Pane, Accent)" />
+            @if (Secondary.Length > 0)
+            {
+                <Markup Content="@Secondary" Foreground="@PaneColors.For(Pane, Color.Green)" />
+            }
+        </Flex>
+    }
+</Box>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter, EditorRequired] public string Path { get; set; } = "";
+    [Parameter] public bool Selected { get; set; }
+    private bool Directory => Path.EndsWith('/');
+    private Color Accent => Directory ? new Color(86, 182, 194) : new Color(255, 200, 80);
+    private string Normalized => Path.Replace('\\', '/').TrimEnd('/');
+    private int Separator => Normalized.LastIndexOf('/');
+    private int Width => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
+    private string Primary => Clip((Separator >= 0 ? Normalized[(Separator + 1)..] : Normalized) + (Directory ? "/" : ""), Width);
+    private string Secondary => Separator >= 0 ? Clip(Normalized[..(Separator + 1)], Math.Max(0, Width - Cells(Primary) - 2)) : "";
+    private string SelectedText
+    {
+        get
+        {
+            var text = Primary + (Secondary.Length > 0 ? "  " + Secondary : "");
+            return text + new string(' ', Math.Max(0, Width - Cells(text)));
+        }
+    }
+    private static int Cells(string text) => RazorConsole.Core.Input.TextSelectionState.CellWidth(text);
+    private static string Clip(string text, int width)
+    {
+        var output = new System.Text.StringBuilder();
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsControl(rune)) continue;
+            if (Cells(output.ToString() + rune) > width) break;
+            output.Append(rune.ToString());
+        }
+        return output.ToString();
+    }
+}

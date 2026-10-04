@@ -14,7 +14,7 @@ public static class ContextMeter
     /// <param name="Filled">The used part of the bar, or empty when the window is unknown.</param>
     /// <param name="Empty">The unused part, kept separate so it can be drawn without the level color:
     /// in one color, shaded cells read as nearly full on bright or glowing themes.</param>
-    /// <param name="Label">"18k / 32k (56%)", or "~18k tokens in context" without a window.</param>
+    /// <param name="Label">"56% of 32k", or "~18k tokens in context" without a window.</param>
     public sealed record Reading(string Filled, string Empty, string Label, Level Level)
     {
         public string Bar => Filled + Empty;
@@ -38,7 +38,7 @@ public static class ContextMeter
         return new Reading(
             new string('█', filled),
             new string('░', BarCells - filled),
-            $"{used} / {TokenTrackingService.FormatTokenCount(windowTokens)} ({percent}%)",
+            $"{percent}% of {TokenTrackingService.FormatTokenCount(windowTokens)}",
             level);
     }
 

@@ -332,6 +332,15 @@ public class AIService
     {
         var skillIndex = SystemPrompts.BuildSkillIndex(_skillLoader.GetAll());
         _systemPrompt = SystemPrompts.BuildMandoCodeAssistant(_config.EnableWebSearch, _config.AgentName) + "\n\n" + ShellEnvironment.SystemPromptRules;
+        if (_explicitPlanningOnly)
+        {
+            var start = _systemPrompt.IndexOf("MULTI-STEP PLANNING:", StringComparison.Ordinal);
+            var end = _systemPrompt.IndexOf("FILE PATH RULES", start, StringComparison.Ordinal);
+            _systemPrompt = _systemPrompt.Remove(start, end - start).Insert(start,
+                "PLAN MODE:\nOnly the user's /plan command activates structured plan mode. For normal requests, carry out the work directly using available tools. You may explain an approach in prose, but do not call propose_plan or wait for plan approval.\n\n");
+            _systemPrompt = _systemPrompt.Replace("If the work spans several files or systems, use propose_plan (see MULTI-STEP PLANNING below) rather than narrating a plan in prose — a proposed plan is reviewable and gets executed for you; a described one is neither.",
+                "Carry out multi-step requests directly; structured plan mode is entered only through /plan.", StringComparison.Ordinal);
+        }
         _systemPrompt += "\n\n" + VisionSupport.AgentInstruction();
         if (!string.IsNullOrEmpty(skillIndex))
         {
@@ -456,6 +465,16 @@ public class AIService
     /// Replaces the optional tools supplied by the host application and rebuilds the agent so
     /// they participate in normal MAF function calling and fallback execution.
     /// </summary>
+    private bool _explicitPlanningOnly;
+
+    /// <summary>CLI hosts reserve structured planning for /plan; explicit generation remains available.</summary>
+    public void UseExplicitPlanningOnly()
+    {
+        _explicitPlanningOnly = true;
+        RebuildSystemPrompt();
+        BuildAgent();
+    }
+
     public void SetHostTools(IEnumerable<AIFunction>? tools)
     {
         _hostTools = tools?.ToArray() ?? Array.Empty<AIFunction>();
@@ -525,7 +544,7 @@ public class AIService
             tools.Add(NamedTool(webSearchPlugin.FetchWebpage, "fetch_webpage"));
         }
 
-        if (_config.EnableTaskPlanning)
+        if (_config.EnableTaskPlanning && !_explicitPlanningOnly)
         {
             var planningPlugin = new PlanningPlugin();
             tools.Add(NamedTool(planningPlugin.ProposePlan, "propose_plan"));
@@ -708,6 +727,10 @@ public class AIService
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         { throw new TimeoutException("Plan generation timed out. Retry planning or choose a smaller goal."); }
         catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (OllamaModelAvailability.IsUnavailable(ex))
+        {
+            throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+        }
         catch (Exception ex)
         {
             generationError = ex;
@@ -745,6 +768,10 @@ public class AIService
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         { throw new TimeoutException("Plan generation timed out. Retry planning or choose a smaller goal."); }
         catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (OllamaModelAvailability.IsUnavailable(ex))
+        {
+            throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+        }
         catch (Exception ex)
         {
             generationError = ex;
@@ -837,7 +864,7 @@ public class AIService
 
             if (!response.IsSuccessStatusCode)
             {
-                return (false, $"Model '{modelName}' not found. Run: ollama pull {modelName}");
+                return (false, OllamaModelAvailability.ValidationFailure(modelName, response.StatusCode));
             }
 
             // Successful validation must stay successful when older servers omit metadata.
@@ -1348,6 +1375,10 @@ public class AIService
 
         _agentFunctionMiddleware!.OnFunctionInvoked += OnTraceInvoked;
         _agentFunctionMiddleware.OnFunctionCompleted += OnTraceCompleted;
+        // Stop the in-flight model call without cancelling the UI's request token:
+        // the old step ends, but replacement planning/approval can still proceed.
+        void OnReplacementRequested() => requestCts.Cancel();
+        _planHandoff.ReplacementRequested += OnReplacementRequested;
 
         try
         {
@@ -1405,6 +1436,7 @@ public class AIService
         {
             _agentFunctionMiddleware.OnFunctionInvoked -= OnTraceInvoked;
             _agentFunctionMiddleware.OnFunctionCompleted -= OnTraceCompleted;
+            _planHandoff.ReplacementRequested -= OnReplacementRequested;
         }
     }
 
@@ -1550,6 +1582,7 @@ public class AIService
     /// </summary>
     private string FormatHttpFailure(HttpRequestException ex)
     {
+        if (OllamaModelAvailability.IsUnavailable(ex)) return OllamaModelAvailability.Message(_config.GetEffectiveModelName());
         if (IsUnauthorizedError(ex))
         {
             // Brief — the auto-launched cloud sign-in walkthrough that fires right
@@ -1576,6 +1609,7 @@ public class AIService
     /// </summary>
     private string FormatErrorMessage(Exception ex)
     {
+        if (OllamaModelAvailability.IsUnavailable(ex)) return OllamaModelAvailability.Message(_config.GetEffectiveModelName());
         // 401 surfaces here too when the plan-step path rethrows as a generic Exception.
         if (ex is HttpRequestException http && IsUnauthorizedError(http))
             return FormatHttpFailure(http);
@@ -1817,6 +1851,11 @@ public class AIService
                     AppendAgentTurnToHistory(stepHistory, result.NewHistoryMessages, processedResponse);
                     evidenceHistory.AddRange(result.NewHistoryMessages);
                 }
+                catch (Exception) when (scope.PlanCancellationRequested)
+                {
+                    // A provider failure after redirection must not revive the old plan.
+                    throw new PlanCancellationRequestedException();
+                }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw new OperationCanceledException("Step cancelled.", cancellationToken);
@@ -1843,7 +1882,9 @@ public class AIService
                 }
                 catch (HttpRequestException ex)
                 {
-                    throw new Exception($"Connection to Ollama failed: {ex.Message}");
+                    if (OllamaModelAvailability.IsUnavailable(ex))
+                        throw new InvalidOperationException(OllamaModelAvailability.Message(_config.GetEffectiveModelName()), ex);
+                    throw new Exception($"Connection to Ollama failed: {ex.Message}", ex);
                 }
 
                 // Decide whether to auto-continue (while scope is still live so BudgetExhausted reads correctly).

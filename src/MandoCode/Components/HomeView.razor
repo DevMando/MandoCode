@@ -1,4 +1,5 @@
 @using Spectre.Console
+@using RazorConsole.Core.Renderables
 
 @*
     Static-info + connection-state + ready-state block extracted out of App.razor.
@@ -9,11 +10,6 @@
 *@
 
 <Rows>
-    <Markup Content="@($"Project Root: {ProjectRoot}")" Background="Color.Black" />
-    <Markup Content="@($"Runtime: .NET {RuntimeVersion}")" />
-    <Markup Content="@($"Ollama Endpoint: {OllamaEndpoint}")" />
-    <Markup Content="@($"Model: {ModelName}")" />
-
     @if (!ConnectionChecked)
     {
         <Markup Content="🔄 Connecting to Ollama..." />
@@ -21,44 +17,44 @@
     else if (!IsConnected)
     {
         <Rows>
-            <Markup Content="@($"Couldn't reach Ollama at {OllamaEndpoint}")" Foreground="Color.Yellow" />
-            <Markup Content="Type /setup to retry onboarding, or /retry to reconnect." Foreground="Color.Grey" />
+            <Markup Content="@($"Couldn't reach Ollama at {OllamaEndpoint}")" Foreground="@PaneColors.For(Pane, Color.Yellow)" />
+            <Markup Content="Type /setup to retry onboarding, or /retry to reconnect." Foreground="@PaneColors.For(Pane, Color.Grey)" />
         </Rows>
     }
     else if (!string.IsNullOrEmpty(OnboardingStatus))
     {
-        <Markup Content="@($"⏳ {OnboardingStatus}")" Foreground="Color.DeepSkyBlue1" />
+        <Markup Content="@($"⏳ {OnboardingStatus}")" Foreground="@PaneColors.For(Pane, Color.DeepSkyBlue1)" />
     }
     else if (!string.IsNullOrEmpty(ModelWarning))
     {
-        <Panel Border="@BoxBorder.Ascii" BorderColor="Color.Yellow">
-            <Rows>
-                <Markup Content="@ModelWarning" />
-            </Rows>
-        </Panel>
+        <Markup Content="@ModelWarning" Foreground="@PaneColors.For(Pane, Color.Yellow)" />
     }
     else
     {
         <Markup Content="✅ MandoCode is ready!" />
+        @if (SupportsVision)
+        {
+            <Markup Content="👁️ Vision supported" Foreground="@PaneColors.For(Pane, Color.Grey)" />
+        }
         <HelpDisplay />
-        <Markup Content="@("Tip: reference files inline, e.g. What does @Program.cs do?")" />
         @if (!string.IsNullOrEmpty(UpdateNotice))
         {
             <Columns>
                 @* Gold message + green command — the app's existing palette (gold values, green hints).
                    Markup escapes inline color tags, so two colors = two Markup elements side by side. *@
                 <Markup Content="@UpdateNotice" Foreground="@(new Color(255, 200, 80))" />
-                <Markup Content="@UpdateCommand" Foreground="Color.Green" />
+                <Markup Content="@UpdateCommand" Foreground="@PaneColors.For(Pane, Color.Green)" />
             </Columns>
         }
     }
 </Rows>
 
 @code {
-    [Parameter] public string ProjectRoot { get; set; } = "";
-    [Parameter] public string RuntimeVersion { get; set; } = "";
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+
+
+    [Parameter] public bool SupportsVision { get; set; }
     [Parameter] public string OllamaEndpoint { get; set; } = "";
-    [Parameter] public string ModelName { get; set; } = "";
     [Parameter] public bool ConnectionChecked { get; set; }
     [Parameter] public bool IsConnected { get; set; }
     [Parameter] public string OnboardingStatus { get; set; } = "";

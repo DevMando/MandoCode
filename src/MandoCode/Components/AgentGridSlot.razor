@@ -1,0 +1,24 @@
+@using Spectre.Console
+
+@if (Pane is not null)
+{
+    <Box Width="@PaneWidth" Height="@PaneHeight"
+         Border="@(Workspace.Panes.Count > 1 ? BoxBorder.Rounded : BoxBorder.None)"
+         BorderColor="@(Pane?.Active == true ? Color.Green : Color.Grey)"
+         Title="">
+        @if (Pane is { } pane)
+        {
+            <AgentPaneContent @key="pane.Id" Pane="pane" AgentBody="AgentBody" />
+        }
+    </Box>
+}
+
+@code {
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter] public int Slot { get; set; }
+    [Parameter] public int PaneWidth { get; set; }
+    [Parameter] public int PaneHeight { get; set; }
+    [Parameter] public RenderFragment<AgentPane>? AgentBody { get; set; }
+    [Parameter] public long Revision { get; set; }
+    private AgentPane? Pane => Workspace.Panes.FirstOrDefault(p => p.Slot == Slot);
+}

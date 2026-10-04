@@ -1,0 +1,94 @@
+@using RazorConsole.Core.Input
+@using RazorConsole.Core.Focus
+@using RazorConsole.Core.Rendering
+@using Spectre.Console
+@inject FocusManager Focus
+@inject ITerminalViewport Viewport
+
+<Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, Color.Purple)" Expand="true">
+    <Rows>
+        <TextArea Buffer="@_buffer" Editable="true" Width="@EditorWidth" Height="@EditorHeight"
+                  WordWrap="true" Hook="@_hook" CharacterStyle="@(_ => new Style(PaneColors.For(Pane, new Color(255, 200, 80))))"
+                  OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="OnSubmit" />
+        <Markup Content="Enter save · Shift/Alt+Enter new line · ↑/↓ move · PgUp/PgDn scroll · Esc cancel" Foreground="@PaneColors.For(Pane, Color.Grey)" />
+    </Rows>
+</Panel>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter] public string Title { get; set; } = "Edit plan step";
+    [Parameter] public string InitialValue { get; set; } = "";
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public string? PersistenceKey { get; set; }
+    private TextSelectionState _buffer = new();
+    private readonly string _hook = "plan-step-" + Guid.NewGuid().ToString("N");
+    private bool _initialized;
+    private int EditorWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
+    private IReadOnlyList<TextSelectionState.TextRow> WrappedRows => _buffer.Wrap(EditorWidth, wordWrap: true);
+    private int EditorHeight => Math.Clamp(WrappedRows.Count, Math.Min(3, MaximumHeight), MaximumHeight);
+    private int MaximumHeight => Math.Max(1, Math.Min(12, (Pane?.Height ?? Viewport.Height) - 7));
+
+    protected override void OnParametersSet()
+    {
+        if (_initialized) return;
+        _initialized = true;
+        if (Pane is not null && PersistenceKey is { } key && Pane.PresentationState.TryGetValue("editor", out var saved)
+            && saved is EditorDraft draft && draft.Key == key) _buffer = draft.Buffer;
+        else
+        {
+            _buffer.SetText(InitialValue);
+            if (Pane is not null && PersistenceKey is { } newKey) Pane.PresentationState["editor"] = new EditorDraft(newKey, _buffer);
+        }
+    }
+    private sealed record EditorDraft(string Key, TextSelectionState Buffer);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Pane is not null) Pane.FocusKey = _hook;
+        if (firstRender && (Pane is null || Pane.Active)) await Focus.FocusAsync(_hook);
+    }
+
+    private void HandleChanged() => StateHasChanged();
+
+    private async Task<bool> PreviewKey(KeyboardEventArgs key)
+    {
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (Pane is not null && !Pane.Active) return true;
+        if (key.Key == "Escape")
+        {
+            await OnCancel.InvokeAsync();
+            return true;
+        }
+        if (key.Key is not ("ArrowUp" or "ArrowDown" or "PageUp" or "PageDown" or "Home" or "End")) return false;
+        var rows = WrappedRows;
+        var rowIndex = rows.Select((row, index) => (row, index)).Last(pair => pair.row.Start <= _buffer.Cursor).index;
+        var current = rows[rowIndex];
+        var column = TextSelectionState.CellWidth(_buffer.Text[current.Start..Math.Min(_buffer.Cursor, current.End)]);
+        var targetRow = key.Key switch
+        {
+            "ArrowUp" => rowIndex - 1,
+            "ArrowDown" => rowIndex + 1,
+            "PageUp" => rowIndex - Math.Max(1, EditorHeight - 1),
+            "PageDown" => rowIndex + Math.Max(1, EditorHeight - 1),
+            _ => rowIndex
+        };
+        var target = key.Key switch
+        {
+            "Home" => key.CtrlKey ? 0 : current.Start,
+            "End" => key.CtrlKey ? _buffer.Text.Length : current.End,
+            _ => _buffer.PositionAt(rows[Math.Clamp(targetRow, 0, rows.Count - 1)], column)
+        };
+        if (key.ShiftKey)
+        {
+            _buffer.Begin(_buffer.Cursor, 1, true);
+            _buffer.Extend(target);
+        }
+        else _buffer.Begin(target, 1, false);
+        _buffer.End();
+        var cursorRow = rows.Select((row, index) => (row, index)).Last(pair => pair.row.Start <= _buffer.Cursor).index;
+        _buffer.Offset = Math.Clamp(_buffer.Offset, Math.Max(0, cursorRow - EditorHeight + 1), cursorRow);
+        StateHasChanged();
+        return true;
+    }
+}

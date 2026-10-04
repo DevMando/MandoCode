@@ -1,0 +1,198 @@
+@using RazorConsole.Core.Renderables
+@using Spectre.Console
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+@inject IServiceProvider Services
+@implements IDisposable
+
+<CascadingValue Value="_explorerFocus" IsFixed="true">
+<Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+    <Flex Direction="FlexDirection.Row" FillWidth="true" FillHeight="true">
+        @if (!NarrowPanel)
+        {
+            <Box FillWidth="true" FillHeight="true">
+                <CascadingValue Name="AgentContentWidth" Value="@ContentWidth">
+                    <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+                        <Box FillWidth="true" FillHeight="true">
+                            <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+                                <Box FillWidth="true" FillHeight="true">
+                                    <ConversationView @ref="_conversation" Header="Header" Entries="@_state.Entries" />
+                                </Box>
+                                <AgentStatus State="@_state" />
+                            </Flex>
+                        </Box>
+                        @Bottom
+                    </Flex>
+                </CascadingValue>
+            </Box>
+        }
+        @if (DirectoryBrowserOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <DirectoryBrowser InitialDirectory="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnComplete="OnDirectoryChosen" />
+            </Box>
+        }
+        @if (FileExplorerOpen && !DirectoryBrowserOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentFileExplorer Root="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnFileExplorerClose" />
+            </Box>
+        }
+        @if (GitChangesOpen && !DirectoryBrowserOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentGitChanges Root="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnGitChangesClose" OnDiffChanged="DiffChanged" OnDiscarded="OnGitDiscarded" />
+            </Box>
+        }
+        @if (HistoryOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentHistoryBrowser Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnHistoryClose" OnRestore="OnHistoryRestore" />
+            </Box>
+        }
+        @if (SettingsOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <AgentSettingsPanel Config="@(SettingsConfig!)" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSettingsClose" OnSave="OnSettingsSave" OnModel="OnSettingsModel" ModelPicker="SettingsModelPicker" OnModelSelected="OnSettingsModelSelected" OnModelCancel="OnSettingsModelCancel" OnApplyDefaults="OnApplyDefaults" OnSaveDefaults="OnSaveDefaults" />
+            </Box>
+        }
+    </Flex>
+    @if (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) && !DirectoryBrowserOpen)
+    {
+        <CascadingValue Name="AgentContentWidth" Value="@AvailableWidth">@Bottom</CascadingValue>
+    }
+</Flex>
+</CascadingValue>
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private RenderFragment Bottom => @<Rows>
+        <Box FillWidth="true">@Footer</Box>
+        @if (!string.IsNullOrEmpty(ProjectDirectory))
+        {
+            <Box FillWidth="true" Height="1">
+                <Flex Direction="FlexDirection.Row" FillWidth="true">
+                    <Box Width="@DirectoryWidth">
+                        <div data-focusable="false" @onclick="OpenProjectDirectory"
+                             @onmouseenter="@(() => _directoryHovered = true)" @onmouseleave="@(() => _directoryHovered = false)">
+                            <Markup Content="@DirectoryPathCaption.Fit(ProjectDirectory, DirectoryWidth)"
+                                    Foreground="@PaneColors.For(Pane, _directoryHovered ? Color.Grey93 : new Color(198, 120, 221))" />
+                        </div>
+                    </Box>
+                    <Box Width="@ChangeDirectoryButtonWidth">
+                        <WorkspaceButton Content="@WorkspaceTabWindow.Fit(ChangeDirectoryLabel, ChangeDirectoryButtonWidth)"
+                                         Selected="@DirectoryBrowserOpen" SelectedBackground="@(new Color(80, 55, 101))"
+                                         HoverBackground="@(new Color(96, 69, 119))" OnClick="ChangeDirectory" />
+                    </Box>
+                    <Box Width="@FilesButtonWidth">
+                        <WorkspaceButton Content="@WorkspaceTabWindow.Fit(FileExplorerLabel, FilesButtonWidth)"
+                                         Selected="@FileExplorerOpen" SelectedBackground="@(new Color(80, 55, 101))"
+                                         HoverBackground="@(new Color(96, 69, 119))" OnClick="ToggleExplorer" />
+                    </Box>
+                </Flex>
+            </Box>
+        }
+    </Rows>;
+    private readonly ExplorerFocusScope _explorerFocus = new();
+    private void FocusChanged() => _ = InvokeAsync(StateHasChanged);
+    protected override void OnParametersSet()
+    {
+        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) && !DirectoryBrowserOpen;
+        if (!GitChangesOpen) _gitDiffOpen = false;
+        if (Pane is not null) { Pane.ExplorerFocus = _explorerFocus; Pane.IsGitDiffOpen = () => GitChangesOpen && _gitDiffOpen; }
+    }
+    private TuiSession Session { get; set; } = default!;
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public string ProjectDirectory { get; set; } = "";
+    [Parameter] public bool DirectoryBrowserOpen { get; set; }
+    [Parameter] public bool FileExplorerOpen { get; set; }
+    [Parameter] public bool GitChangesOpen { get; set; }
+    [Parameter] public bool HistoryOpen { get; set; }
+    [Parameter] public bool SettingsOpen { get; set; }
+    [Parameter] public MandoCode.Models.MandoCodeConfig? SettingsConfig { get; set; }
+    [Parameter] public EventCallback OnSettingsClose { get; set; }
+    [Parameter] public EventCallback OnSettingsModel { get; set; }
+    [Parameter] public ModelPickerState? SettingsModelPicker { get; set; }
+    [Parameter] public EventCallback<string> OnSettingsModelSelected { get; set; }
+    [Parameter] public EventCallback OnSettingsModelCancel { get; set; }
+    [Parameter] public EventCallback<AgentSettingsDraft> OnSettingsSave { get; set; }
+    [Parameter] public EventCallback OnApplyDefaults { get; set; }
+    [Parameter] public EventCallback<AgentSettingsDraft> OnSaveDefaults { get; set; }
+    [Parameter] public EventCallback OnHistoryClose { get; set; }
+    [Parameter] public EventCallback<ArchivedAgent> OnHistoryRestore { get; set; }
+    [Parameter] public EventCallback OnGitChangesClose { get; set; }
+    [Parameter] public EventCallback<string> OnGitDiscarded { get; set; }
+    private bool _gitDiffOpen;
+    private void DiffChanged(bool open) { _gitDiffOpen = open; Pane?.Workspace.Refresh(); StateHasChanged(); }
+    [Parameter] public EventCallback OnFileExplorerClose { get; set; }
+    [Parameter] public EventCallback<string?> OnDirectoryChosen { get; set; }
+    private int AvailableWidth => Math.Max(1, Pane?.Width ?? Viewport.Width);
+    private int BrowserWidth => HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : Math.Min(50, AvailableWidth / 2);
+    private bool NarrowPanel => HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen) && AvailableWidth < 90);
+    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) ? BrowserWidth : 0);
+    private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) ? 6 : 0));
+    private int FooterWidth => Math.Max(2, ContentWidth - 2);
+    private bool ShowButtonShortcuts => FooterWidth >= 70;
+    private int ChangeDirectoryButtonWidth => ShowButtonShortcuts ? 26 : FooterWidth >= 48 ? 18 : FooterWidth >= 30 ? 12 : Math.Min(3, Math.Max(1, FooterWidth / 3));
+    private int FilesButtonWidth => ShowButtonShortcuts ? 23 : FooterWidth >= 48 ? 15 : FooterWidth >= 30 ? 10 : Math.Min(7, Math.Max(1, FooterWidth / 3));
+    private string ChangeDirectoryLabel => ShowButtonShortcuts ? " Change Directory (Alt+D) " : FooterWidth >= 48 ? " Change Directory " : FooterWidth >= 30 ? " Change Dir " : " ↪ ";
+    private string FileExplorerLabel => ShowButtonShortcuts ? " File Explorer (Alt+E) " : FooterWidth >= 48 ? " File Explorer " : FooterWidth >= 30 ? " Explorer " : " Files ";
+    private int DirectoryWidth => Math.Max(1, FooterWidth - ChangeDirectoryButtonWidth - FilesButtonWidth);
+    [Parameter] public EventCallback OnChangeDirectory { get; set; }
+    private async Task ChangeDirectory()
+    {
+        if (Pane is not null) Pane.Workspace.Focus(Pane);
+        await OnChangeDirectory.InvokeAsync();
+    }
+    [Parameter] public EventCallback OnFileExplorerToggle { get; set; }
+    private async Task ToggleExplorer()
+    {
+        if (Pane is not null) Pane.Workspace.Focus(Pane);
+        await OnFileExplorerToggle.InvokeAsync();
+    }
+    private bool _directoryHovered;
+    private void OpenProjectDirectory()
+    {
+        try
+        {
+            var directory = System.IO.Path.GetFullPath(ProjectDirectory);
+            if (!System.IO.Directory.Exists(directory))
+                throw new System.IO.DirectoryNotFoundException("The project directory no longer exists.");
+            var start = OperatingSystem.IsWindows()
+                ? new System.Diagnostics.ProcessStartInfo(directory) { UseShellExecute = true }
+                : new System.Diagnostics.ProcessStartInfo(OperatingSystem.IsMacOS() ? "open" : "xdg-open") { UseShellExecute = false };
+            if (!OperatingSystem.IsWindows()) start.ArgumentList.Add(directory);
+            using var process = System.Diagnostics.Process.Start(start);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.IO.IOException or ArgumentException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            Session.Append(new Text($"Couldn't open the project directory: {ex.Message}", new Style(Color.Yellow)));
+        }
+    }
+    private ConversationView? _conversation;
+    public void Scroll(string key) => _conversation?.Scroll(key);
+    private TuiSnapshot _state = new(Array.Empty<TuiEntry>(), false, "", "");
+    private readonly CancellationTokenSource _shutdown = new();
+    protected override void OnInitialized()
+    {
+        _explorerFocus.Changed += FocusChanged;
+        Session = Pane?.Session ?? (TuiSession)Services.GetService(typeof(TuiSession))!;
+        _state = Session.Snapshot();
+        _ = RefreshAsync(_shutdown.Token);
+    }
+    private async Task RefreshAsync(CancellationToken token)
+    {
+        var revision = Session.Revision;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(80));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                Session.RefreshStatus();
+                if (Session.Revision == revision) continue;
+                await InvokeAsync(() => { revision = Session.Revision; _state = Session.Snapshot(); StateHasChanged(); });
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+    public void Dispose() { _explorerFocus.Changed -= FocusChanged; _explorerFocus.Active = false; _shutdown.Cancel(); _shutdown.Dispose(); }
+}

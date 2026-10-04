@@ -1,0 +1,82 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@using RazorConsole.Core.Rendering
+@inject AgentArchiveStore Store
+@inject ScrollableLayoutCoordinator LayoutCoordinator
+@implements IDisposable
+
+<Box Width="@Width" Height="@Height" Border="BoxBorder.Rounded" Title="@(_focused ? "Conversation · focused" : "Conversation")" BorderColor="@PaneColors.For(Pane, _focused ? Color.DeepSkyBlue1 : Color.Purple)">
+ <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+  @if (_archive is { } agent)
+  {
+   <Box Height="1" FillWidth="true"><Markup Content="@Fit(agent.Name + " · " + agent.Settings.Model)" Foreground="@PaneColors.For(Pane, Color.Purple)" /></Box>
+   <Box Height="1" FillWidth="true"><Markup Content="@DirectoryPathCaption.Fit(agent.ProjectRoot, Math.Max(1, Width - 4))" Foreground="@PaneColors.For(Pane, Color.Purple)" /></Box>
+   <Box FillHeight="true" FillWidth="true">
+    <div data-focusable="false" @onclick="@(() => OnFocus.InvokeAsync())" @onwheel="Wheel">
+     <view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
+      <Rows>
+       @foreach (var block in _blocks)
+       {
+        <RenderableContent Content="@block.Content" />
+        @if (block.SpaceAfter) { <Markup Content=" " /> }
+       }
+      </Rows>
+     </view-height-scrollable>
+    </div>
+   </Box>
+  }
+  else { <Markup Content="Select an agent to review its conversation." Foreground="Color.Grey70" /> }
+ </Flex>
+</Box>
+
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [Parameter] public ArchivedAgent? Agent { get; set; }
+ [Parameter] public bool Focused { get; set; }
+ [Parameter] public EventCallback OnFocus { get; set; }
+ [Parameter] public int Width { get; set; } = 60;
+ [Parameter] public int Height { get; set; } = 24;
+ private bool _focused => Focused;
+ private ArchivedAgent? _archive;
+ private string? _key;
+ private readonly string _scrollId = "history-conversation-" + Guid.NewGuid().ToString("N");
+ private int _offset;
+ private bool _following = true;
+ private IReadOnlyList<TuiEntry> _blocks = [];
+ protected override void OnParametersSet()
+ {
+  if (_key == Agent?.Key) return;
+  _key = Agent?.Key;
+  _archive = _key is null ? null : Store.Load(_key);
+  _offset = 0; _following = true;
+  LayoutCoordinator.Remove(_scrollId);
+  var session = new TuiSession();
+  if (_archive is not null)
+  {
+   AgentArchiveStore.Replay(_archive, session);
+   if (_archive.Transcript.Count == 0)
+    foreach (var message in _archive.Messages)
+     session.AppendSpaced(new Text((message.Role == "user" ? "You" : _archive.Name) + ":\n" + message.Text));
+  }
+  _blocks = session.Snapshot().Entries;
+ }
+ public void Scroll(string key)
+ {
+  var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+  if (maximum == int.MaxValue) return;
+  var current = _following ? maximum : _offset;
+  var page = Math.Max(1, Height - 4);
+  var next = key switch { "ArrowUp" => current - 1, "ArrowDown" => current + 1,
+   "PageUp" => current - page, "PageDown" => current + page, "Home" => 0, "End" => maximum, _ => current };
+  SetOffset(next, maximum);
+ }
+ private void Wheel(WheelEventArgs args)
+ {
+  if (Pane is not null && !Pane.Active) return;
+  var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
+  if (maximum != int.MaxValue) SetOffset((_following ? maximum : _offset) + (int)args.DeltaY, maximum);
+ }
+ private void SetOffset(int offset, int maximum) { _offset = Math.Clamp(offset, 0, maximum); _following = _offset == maximum; StateHasChanged(); }
+ private string Fit(string text) => WorkspaceTabWindow.Fit(text, Math.Max(1, Width - 4));
+ public void Dispose() => LayoutCoordinator.Remove(_scrollId);
+}

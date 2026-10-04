@@ -1,0 +1,234 @@
+@using Spectre.Console
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.AspNetCore.Components.Web
+@using RazorConsole.Core.Renderables
+@inject AgentArchiveStore Store
+@inject RazorConsole.Core.Focus.FocusManager Focus
+@implements IDisposable
+
+<Flex Direction="@(SideBySide ? FlexDirection.Row : FlexDirection.Column)" FillWidth="true" FillHeight="true">
+<Box Width="@ListWidth" Height="@ListHeight" FillHeight="@SideBySide" Border="BoxBorder.Rounded" Title="@(_conversationFocused ? "Agent History" : "Agent History · focused")" BorderColor="@PaneColors.For(Pane, _conversationFocused ? Color.Purple : Color.DeepSkyBlue1)">
+ <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+  <Rows>
+   <Flex Direction="FlexDirection.Row">
+    <Box Width="@SearchWidth"><div data-focusable="false" @onclick="FocusSearch"><Markup Content="@SearchCaption" Foreground="@PaneColors.For(Pane, Color.Gold1)" /></div></Box>
+    @for (var i = 0; i < Labels.Length; i++)
+    {
+     var action = i;
+     <div data-focusable="false" @onclick="@(() => Activate(action))"><Markup Content="@Labels[i]" Foreground="@(!_confirm && _action == i ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(!_confirm && _action == i ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" /></div>
+    }
+   </Flex>
+   @if (_confirm)
+   {
+    <Markup Content="@Fit("Permanently delete " + Selected?.Name + " and its saved conversation?")" Foreground="Color.Gold1" />
+    <Flex Direction="FlexDirection.Row">
+     <Markup Content="@(_deleteSelected ? "  Cancel " : "> Cancel ")" Foreground="@(!_deleteSelected ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(!_deleteSelected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+     <Markup Content=" " />
+     <Markup Content="@(_deleteSelected ? "> Delete " : "  Delete ")" Foreground="@(_deleteSelected ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(_deleteSelected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+    </Flex>
+   }
+   else
+   {
+    <Markup Content="@Columns("Agent", "Project", "Date", "  ")" Foreground="@PaneColors.For(Pane, Color.Purple)" />
+    <Markup Content="@(new string('─', RowWidth))" Foreground="Color.Grey50" />
+    @if (_items.Count == 0) { <Markup Content="@(_query.Length == 0 ? "No closed agents yet." : "No matching conversations.")" Foreground="Color.Grey70" /> }
+    @foreach (var display in _rows.Skip(_start).Take(PageSize))
+    {
+     @if (display.Project is { } project)
+     {
+      <Markup Content="@DirectoryPathCaption.Fit(project, RowWidth)" Foreground="@PaneColors.For(Pane, Color.Purple)" />
+     }
+     else
+     {
+     var index = display.Index; var item = _items[index];
+     <div @key="item.Key" data-focusable="false" @onclick="@(() => Select(index))">
+      <Markup Content="@Row(item, index)" Foreground="@(index == _selected ? Color.Black : PaneColors.For(Pane, Color.Grey85))" Background="@(index == _selected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+     </div>
+     }
+    }
+
+   }
+   <Markup Content="@Fit(_error)" Foreground="Color.Yellow" />
+  </Rows>
+ </div>
+</Box>
+<AgentHistoryConversation @ref="_conversation" Agent="@Selected" Width="@PreviewWidth" Height="@PreviewHeight" Focused="@_conversationFocused" OnFocus="FocusConversation" />
+</Flex>
+
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+ [Parameter] public int Width { get; set; } = 60;
+ [Parameter] public int Height { get; set; } = 24;
+ [Parameter] public EventCallback OnClose { get; set; }
+ [Parameter] public EventCallback<ArchivedAgent> OnRestore { get; set; }
+ private readonly string _focusKey = "agent-history-" + Guid.NewGuid().ToString("N");
+ private static readonly string[] Labels = [" Restore ", " Delete ", " Close "];
+ private IReadOnlyList<ArchivedAgent> _items = [];
+ private readonly List<(int Index, string? Project)> _rows = [];
+ private int _selected, _start, _action;
+ private string _query = "", _error = "";
+ private bool _confirm, _deleteSelected;
+ private bool _conversationFocused;
+ private AgentHistoryConversation? _conversation;
+ private Task FocusConversation() { _conversationFocused = true; StateHasChanged(); return FocusPanel(); }
+ private Task TogglePanel(bool reverse) { if (_confirm) return CycleAction(reverse); _conversationFocused = !_conversationFocused; StateHasChanged(); return Task.CompletedTask; }
+ private ArchivedAgent? Selected => _items.ElementAtOrDefault(_selected);
+ private bool SideBySide => Width >= 120;
+ private int ListWidth => SideBySide ? Width * 45 / 100 : Width;
+ private int ListHeight => SideBySide ? Height : Math.Max(5, Height / 2);
+ private int PreviewWidth => SideBySide ? Width - ListWidth : Width;
+ private int PreviewHeight => SideBySide ? Height : Math.Max(1, Height - ListHeight);
+ private int PageSize => Math.Max(1, ListHeight - 6);
+ private int SearchWidth => Math.Max(1, RowWidth - Labels.Sum(label => label.Length));
+ private string SearchCaption
+ {
+  get
+  {
+   if (_query.Length == 0) return Cell("Search…", SearchWidth);
+   var label = SearchWidth >= 12 ? "Search: " : "";
+   var available = Math.Max(1, SearchWidth - label.Length);
+   var text = _query;
+   if (RazorConsole.Core.Input.TextSelectionState.CellWidth(text) > available)
+   {
+    var tail = "";
+    foreach (var rune in text.EnumerateRunes().Reverse())
+    {
+     if (RazorConsole.Core.Input.TextSelectionState.CellWidth(rune + tail) > available - 1) break;
+     tail = rune + tail;
+    }
+    text = "…" + tail;
+   }
+   return Cell(label + text, SearchWidth);
+  }
+ }
+ private Task FocusSearch() { _conversationFocused = false; StateHasChanged(); return FocusPanel(); }
+ private string Fit(string text) => WorkspaceTabWindow.Fit(text, Math.Max(1, ListWidth - 4));
+ private int RowWidth => Math.Max(1, ListWidth - 4);
+ private int ColumnSpace => Math.Max(3, RowWidth - 6);
+ private int AgentWidth => Math.Min(16, Math.Max(1, ColumnSpace / 5));
+ private int DateWidth => Math.Min(16, Math.Max(1, ColumnSpace / 3));
+ private int ProjectWidth => Math.Max(1, ColumnSpace - AgentWidth - DateWidth);
+ private static string Cell(string text, int width)
+ {
+  var fitted = WorkspaceTabWindow.Fit(text.Replace('\r', ' ').Replace('\n', ' '), width);
+  return fitted + new string(' ', Math.Max(0, width - RazorConsole.Core.Input.TextSelectionState.CellWidth(fitted)));
+ }
+ private string Columns(string agent, string project, string date, string marker)
+  => Fit(marker + Cell(agent, AgentWidth) + "  " + Cell(project, ProjectWidth) + "  " + Cell(date, DateWidth));
+ private string Row(ArchivedAgent item, int index)
+ {
+  var format = DateWidth >= 16 ? "MMM d h:mm tt" : DateWidth >= 12 ? "M/d h:mmtt" : "M/d htt";
+  var date = item.ClosedAt?.ToLocalTime().ToString(format) ?? "";
+  var project = DirectoryPathCaption.Fit(item.ProjectRoot, ProjectWidth, showIcon: false);
+  return Columns(item.Name, project, date, index == _selected ? "> " : "  ");
+ }
+ private bool _disposed;
+ protected override void OnInitialized() { Store.Changed += HistoryChanged; Reload(); }
+ private void HistoryChanged() => _ = InvokeAsync(() => { if (!_disposed) { Reload(preserveSelection: true); StateHasChanged(); } });
+ protected override void OnParametersSet()
+ {
+  Reveal();
+  if (ExplorerFocus is not null) { ExplorerFocus.FocusExplorer = FocusPanel; ExplorerFocus.NavigateTab = TogglePanel; }
+ }
+ protected override async Task OnAfterRenderAsync(bool firstRender)
+ {
+  if ((Pane is null || Pane.Active) && (firstRender || ExplorerFocus?.PromptFocused == false && !Focus.IsFocused(_focusKey))) await FocusPanel();
+ }
+ private async Task FocusPanel()
+ {
+  if (Pane is not null && !Pane.Active) return;
+  if (Pane is not null) Pane.FocusKey = _focusKey;
+  await Focus.FocusAsync(_focusKey);
+  ExplorerFocus?.SetPromptFocused(false);
+ }
+ private Task CycleAction(bool reverse)
+ {
+  if (!_confirm) _action = (_action + (reverse ? 2 : 1)) % 3;
+  else _deleteSelected = !_deleteSelected;
+  StateHasChanged();
+  return Task.CompletedTask;
+ }
+ private void Reload(bool preserveSelection = false)
+ {
+  var selectedKey = preserveSelection ? Selected?.Key : null;
+  var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+  var groups = Store.Closed(_query).GroupBy(a => a.ProjectRoot.TrimEnd('/', '\\'), comparer)
+   .OrderByDescending(g => g.Max(a => a.ClosedAt));
+  var items = new List<ArchivedAgent>();
+  _rows.Clear();
+  foreach (var group in groups)
+  {
+   _rows.Add((-1, group.First().ProjectRoot));
+   foreach (var item in group.OrderByDescending(a => a.ClosedAt).ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase))
+   {
+    _rows.Add((items.Count, null)); items.Add(item);
+   }
+  }
+  _items = items; _error = Store.Error ?? "";
+  if (selectedKey is not null && items.FindIndex(a => a.Key == selectedKey) is var index && index >= 0) _selected = index;
+  _selected = Math.Clamp(_selected, 0, Math.Max(0, _items.Count - 1)); Reveal();
+ }
+ private void Reveal()
+ {
+  var row = _rows.FindIndex(r => r.Index == _selected);
+  _start = Math.Clamp(row - PageSize + 1, 0, Math.Max(0, _rows.Count - PageSize));
+ }
+ private async Task Select(int index) { _conversationFocused = false; _selected = index; Reveal(); await FocusPanel(); }
+ private async Task Activate(int action)
+ {
+  await FocusPanel(); _action = action;
+  if (action == 2) { await OnClose.InvokeAsync(); return; }
+  if (Selected is not { } item) return;
+  if (action == 0)
+  {
+   var fresh = Store.Load(item.Key);
+   if (fresh is null) { _error = "This saved conversation is unavailable."; return; }
+   await OnRestore.InvokeAsync(fresh);
+  }
+  else { _confirm = true; _deleteSelected = false; }
+ }
+ private async Task Key(KeyboardEventArgs key)
+ {
+  if (Pane is not null && !Pane.Active) return;
+  await FocusPanel();
+  if (_confirm)
+  {
+   if (key.Key == "Escape") _confirm = false;
+   else if (key.Key is "ArrowLeft" or "ArrowRight" or "Tab") _deleteSelected = !_deleteSelected;
+   else if (key.Key == "Enter")
+   {
+    var failure = _deleteSelected && Selected is { } item && !Store.DeleteClosed(item.Key) ? Store.Error ?? "Delete failed." : "";
+    _confirm = false; _action = 0; Reload(); if (failure.Length > 0) _error = failure;
+   }
+   return;
+  }
+  if (key.Key == "Escape") { await OnClose.InvokeAsync(); return; }
+  if (key.Key == "Tab") { await TogglePanel(key.ShiftKey); return; }
+  if (Pane?.Workspace.Key(Pane, key) == true) return;
+  if (_conversationFocused)
+  {
+   if (key.Key is "ArrowUp" or "ArrowDown" or "PageUp" or "PageDown" or "Home" or "End") _conversation?.Scroll(key.Key);
+   return;
+  }
+  switch (key.Key)
+  {
+   case "ArrowUp": _selected--; break;
+   case "ArrowDown": _selected++; break;
+   case "PageUp": _selected -= PageSize; break;
+   case "PageDown": _selected += PageSize; break;
+   case "Home": _selected = 0; break;
+   case "End": _selected = _items.Count - 1; break;
+   case "ArrowLeft": await CycleAction(true); return;
+   case "ArrowRight": await CycleAction(false); return;
+   case "Enter": await Activate(_action); return;
+   case "Backspace": if (_query.Length > 0) _query = _query[..^1]; _selected = 0; Reload(); return;
+   default:
+    if (key.Key.Length == 1 && !key.CtrlKey && !key.AltKey && !key.MetaKey) { _query += key.Key; _selected = 0; Reload(); }
+    else if (key.CtrlKey && key.Key.Equals("u", StringComparison.OrdinalIgnoreCase)) { _query = ""; Reload(); }
+    return;
+  }
+  _selected = Math.Clamp(_selected, 0, Math.Max(0, _items.Count - 1)); Reveal();
+ }
+ public void Dispose() { _disposed = true; Store.Changed -= HistoryChanged; if (ExplorerFocus?.NavigateTab == TogglePanel) ExplorerFocus.NavigateTab = null; }
+}
