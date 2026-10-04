@@ -60,6 +60,14 @@ You can also close MandoCode and update manually:
 dotnet tool update -g MandoCode
 ```
 
+Developers can exercise the real updater helper without installing or updating any tool:
+
+```bash
+dotnet run --project tests/UpdateSimulation/UpdateSimulation.csproj
+```
+
+This simulation replaces the package update command, verifies the helper waits for its parent to exit, and runs success and failure cases. Logs remain under `bin/update-simulation`. It does not test an actual NuGet installation or the interactive confirmation/history workflow.
+
 ## Troubleshooting
 
 ```bash

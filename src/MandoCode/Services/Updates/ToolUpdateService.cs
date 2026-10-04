@@ -43,11 +43,15 @@ public sealed class ToolUpdateService
         catch (Exception ex) { return "Could not check the .NET SDK: " + ex.Message; }
     }
 
-    public void Prepare(string version)
+    public void Prepare(string version) => Prepare(version,
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "updates", Guid.NewGuid().ToString("N")));
+
+    // An isolated destination lets the simulation exercise the real prepare/launch
+    // code without writing to the user's update history.
+    internal void Prepare(string version, string directory)
     {
         if (!Version.TryParse(version, out _) || version.Any(c => !char.IsAsciiDigit(c) && c != '.'))
             throw new ArgumentException("Expected a stable numeric version.", nameof(version));
-        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "updates", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         // --configfile is supported by both .NET 8 and .NET 10 SDKs. Isolate this
         // update from project-specific/private feeds; the release was checked on NuGet.
