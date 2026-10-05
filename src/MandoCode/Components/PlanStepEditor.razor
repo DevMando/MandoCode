@@ -7,10 +7,10 @@
 
 <Panel Title="@Title" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, Color.Purple)" Expand="true">
     <Rows>
-        <TextArea Buffer="@_buffer" Editable="true" Width="@EditorWidth" Height="@EditorHeight"
+        <TextArea Buffer="@_buffer" Editable="@(!ReadOnly)" Width="@EditorWidth" Height="@EditorHeight"
                   WordWrap="true" Hook="@_hook" CharacterStyle="@(_ => new Style(PaneColors.For(Pane, new Color(255, 200, 80))))"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="OnSubmit" />
-        <Markup Content="Enter save · Shift/Alt+Enter new line · ↑/↓ move · PgUp/PgDn scroll · Esc cancel" Foreground="@PaneColors.For(Pane, Color.Grey)" />
+        <Markup Content="@(ReadOnly ? "↑/↓ · PgUp/PgDn scroll · Esc back" : "Enter save · Shift/Alt+Enter new line · ↑/↓ move · PgUp/PgDn scroll · Esc cancel")" Foreground="@PaneColors.For(Pane, Color.Grey)" />
     </Rows>
 </Panel>
 
@@ -21,13 +21,16 @@
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback OnCancel { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
+    [Parameter] public int? Width { get; set; }
+    [Parameter] public int? Height { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
     private TextSelectionState _buffer = new();
     private readonly string _hook = "plan-step-" + Guid.NewGuid().ToString("N");
     private bool _initialized;
-    private int EditorWidth => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
+    private int EditorWidth => Math.Max(1, (Width ?? Pane?.Width ?? Viewport.Width) - 4);
     private IReadOnlyList<TextSelectionState.TextRow> WrappedRows => _buffer.Wrap(EditorWidth, wordWrap: true);
     private int EditorHeight => Math.Clamp(WrappedRows.Count, Math.Min(3, MaximumHeight), MaximumHeight);
-    private int MaximumHeight => Math.Max(1, Math.Min(12, (Pane?.Height ?? Viewport.Height) - 7));
+    private int MaximumHeight => Math.Max(1, Height.HasValue ? Height.Value - 4 : Math.Min(12, (Pane?.Height ?? Viewport.Height) - 7));
 
     protected override void OnParametersSet()
     {
@@ -55,6 +58,7 @@
     {
         if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
         if (Pane is not null && !Pane.Active) return true;
+        if (key.Key == "Tab") return true;
         if (key.Key == "Escape")
         {
             await OnCancel.InvokeAsync();

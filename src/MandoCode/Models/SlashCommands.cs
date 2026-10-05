@@ -66,11 +66,9 @@ public static class SlashCommands
         { "/music-vol", "Set volume (0-100), e.g. /music-vol 70" },
         { "/music-playlist", "Select a genre and start playing" },
         { "/music-list", "Show available tracks" },
-        { "/skills", "List installed skills (auto-invoked by the model when relevant)" },
+        { "/skills", "Manage user skills: install, generate, edit, and enable or disable" },
         { "/force-skill", "Override: force a specific skill to run now" },
-        { "/mcp", "List configured MCP servers with status and tool counts" },
-        { "/mcp add", "Interactively add a new MCP server to config" },
-        { "/mcp remove", "Remove an MCP server from config (usage: /mcp remove <name>)" },
+        { "/mcp", "Manage shared MCP servers: add, edit, test, and enable or disable" },
         { "/mcp tools", "List tools exposed by connected MCP servers (usage: /mcp tools <server>)" },
         { "/mcp-reload", "Restart all MCP servers and re-register their tools" },
         { "/exit", "Exit MandoCode" }

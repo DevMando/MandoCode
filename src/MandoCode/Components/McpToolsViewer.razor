@@ -1,0 +1,61 @@
+@using RazorConsole.Core.Renderables
+@using Spectre.Console
+@inject RazorConsole.Core.Focus.FocusManager Focus
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="@($"{ServerName} · {Tools.Count} tools")" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+ <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+  <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+   <Rows>
+    @foreach (var line in Lines.Skip(_offset).Take(PageSize)) {
+     <RenderableContent Content="@RenderLine(line.Text, line.Heading)" />
+    }
+   </Rows>
+  </div>
+  <Box FillHeight="true"><Markup Content=" " /></Box>
+  <Markup Content="@($"↑/↓ scroll · PgUp/PgDn page · Home/End · Esc back   {_offset + 1}–{Math.Min(Lines.Count, _offset + PageSize)} / {Lines.Count}")" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
+ </Flex>
+</Box>
+
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [Parameter] public string ServerName { get; set; } = "Tools";
+ [Parameter] public IReadOnlyList<ToolDescription> Tools { get; set; } = [];
+ [Parameter] public int Width { get; set; } = 60;
+ [Parameter] public int Height { get; set; } = 24;
+ [Parameter] public EventCallback OnClose { get; set; }
+ public sealed record ToolDescription(string Name, string? Description);
+ private sealed record DisplayLine(string Text, bool Heading);
+ private readonly string _focusKey = "mcp-tools-" + Guid.NewGuid().ToString("N");
+ private Text RenderLine(string text, bool heading) => new(text, new Style(PaneColors.For(Pane, heading ? Color.Purple : Color.Grey85), decoration: heading ? Decoration.Bold : Decoration.None));
+ private int _offset;
+ private int PageSize => Math.Max(1, Height - 5);
+ private IReadOnlyList<DisplayLine> Lines {
+  get {
+   var result = new List<DisplayLine>();
+   foreach (var tool in Tools) {
+    foreach (var line in AgentSettingsDraft.Wrap(tool.Name, Math.Max(1, Width - 4))) result.Add(new(line, true));
+    foreach (var line in AgentSettingsDraft.Wrap(string.IsNullOrWhiteSpace(tool.Description) ? "No description provided." : tool.Description, Math.Max(1, Width - 6))) result.Add(new("  " + line, false));
+    result.Add(new("", false));
+   }
+   if (result.Count == 0) result.Add(new("This server exposes no tools.", false));
+   return result;
+  }
+ }
+ protected override async Task OnAfterRenderAsync(bool firstRender) {
+  if (firstRender && (Pane is null || Pane.Active)) {
+   if (Pane is not null) Pane.FocusKey = _focusKey;
+   await Focus.FocusAsync(_focusKey);
+  }
+ }
+ private async Task Key(KeyboardEventArgs key) {
+  if (Pane is not null && !Pane.Active) return;
+  if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
+  if (key.Key == "Escape") { await OnClose.InvokeAsync(); return; }
+  var last = Math.Max(0, Lines.Count - PageSize);
+  _offset = Math.Clamp(key.Key switch {
+   "ArrowUp" => _offset - 1, "ArrowDown" => _offset + 1,
+   "PageUp" => _offset - PageSize, "PageDown" => _offset + PageSize,
+   "Home" => 0, "End" => last, _ => _offset
+  }, 0, last);
+ }
+}

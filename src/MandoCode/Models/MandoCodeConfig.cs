@@ -628,7 +628,7 @@ public class MandoCodeConfig
         // and only when the as-typed URL actually fails to reach the daemon.
 
         // Normalize MCP server lookups to case-insensitive — otherwise InputStateMachine's
-        // lowercasing of commands ("/mcp remove Solana" → "mcp remove solana") would miss
+        // lowercasing of commands ("/mcp tools Solana" → "mcp tools solana") would miss
         // an entry the user originally saved with capital letters. System.Text.Json
         // deserializes into a default (case-sensitive) dict regardless of the property's
         // initializer, so we rebuild here once rather than at every lookup site.
