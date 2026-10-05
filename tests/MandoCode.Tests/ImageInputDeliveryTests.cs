@@ -50,7 +50,7 @@ public class ImageInputDeliveryTests
         await foreach (var _ in ai.ChatStreamAsync("check the page")) { }
 
         // The model must actually receive the bytes...
-        var delivered = seen.Any(body => body.Contains(Convert.ToBase64String(Png)));
+        var delivered = seen.Count > 0 && seen[0].Contains(Convert.ToBase64String(Png));
         Assert.True(delivered, "the image never reached the model: " + string.Join("\n", seen));
 
         // ...and the image must not linger in history to be re-uploaded on every later request.

@@ -55,6 +55,7 @@ public static class SlashCommands
         { "/compact", "Compress conversation context into a recap (keeps this transcript)" },
         { "/clear", "Wipe all conversation context and start fresh" },
         { "/history", $"Find and restore closed agents, transcripts, and conversation context ({Keybindings.AgentHistory})" },
+        { "/ollama-pull", "Browse Ollama models and download a model" },
         { "/ollama-serve", "Start local Ollama and retry the connection twice" },
         { "/learn", "Learn about LLMs and local AI models" },
         { "/retry", "Retry Ollama connection" },

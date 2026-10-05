@@ -944,6 +944,9 @@ public class AIService
         var deliveredImages = new List<ChatMessage>();
         try
         {
+            // User-tagged images must reach the first request, before any tool calls.
+            if (await TakePendingImageMessageAsync(_chatHistory) is { } initialImageMessage)
+                deliveredImages.Add(initialImageMessage);
             int continuations = 0;
             while (true)
             {

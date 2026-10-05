@@ -27,7 +27,7 @@
 @code {
     [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
-    private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Max(command => command.Length));
+    private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Select(command => command.Length).DefaultIfEmpty(0).Max());
     private IEnumerable<int> VisibleIndices
     {
         get
