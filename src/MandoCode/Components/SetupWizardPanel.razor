@@ -1,0 +1,136 @@
+@using Spectre.Console
+@using RazorConsole.Core.Input
+@inject RazorConsole.Core.Focus.FocusManager Focus
+@implements IDisposable
+
+@if (_browsing)
+{
+    <OllamaPullPanel Endpoint="@Config.OllamaEndpoint" Width="@Width" Height="@Height" OnClose="CloseBrowser" OnDownloaded="Downloaded" />
+}
+else
+{
+    <Panel Title="Welcome to MandoCode" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, Color.Purple)" Expand="true">
+        <Rows>
+            <Markup Content="Connect → Choose model → Download → Verify → Ready" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
+            <Markup Content="@Spectre.Console.Markup.Escape(_stage)" Foreground="@PaneColors.For(Pane, new Color(86, 182, 194))" />
+            @foreach (var line in AgentSettingsDraft.Wrap(_message, Math.Max(1, Width - 4)))
+            { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="@PaneColors.For(Pane, Color.Grey85)" /> }
+            <Markup Content=" " />
+            @if (_urlInput)
+            {
+                <TextArea Buffer="@_url" Editable="true" Width="@Math.Max(1, Width - 4)" Height="1" WordWrap="false" Hook="@_urlKey" OnPreviewKey="UrlKey" OnSubmit="SubmitUrl" />
+            }
+            else
+            {
+                <div @key="_key" data-focus-key="@_key" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+                    <Rows>
+                        @if (_choices.Length == 0)
+                        { <Markup Content="@($"{Frames[_frame % Frames.Length]} Working")" Foreground="@PaneColors.For(Pane, Color.Green)" /> }
+                        @for (var i = 0; i < _choices.Length; i++)
+                        {
+                            var index = i;
+                            var label = _choices[i];
+                            <div data-focusable="false" @onclick="@(() => Select(index))"><Rows>
+                                @foreach (var line in AgentSettingsDraft.Wrap((_selected == index ? "> " : "  ") + label, Math.Max(1, Width - 4)))
+                                { <Markup Content="@Spectre.Console.Markup.Escape(line)" Foreground="@(_selected == index ? Color.Black : PaneColors.For(Pane, Color.Green))" Background="@(_selected == index ? Color.DeepSkyBlue1 : Color.Default)" /> }
+                            </Rows></div>
+                        }
+                        @if (_choices.Length == 0)
+                        { <div data-focusable="false" @onclick="Pause"><Markup Content="> Finish later (Esc)" Foreground="Color.Black" Background="Color.DeepSkyBlue1" /></div> }
+                    </Rows>
+                </div>
+            }
+            <Markup Content=" " />
+            <Markup Content="↑/↓ or Tab select · Enter choose · Esc back / finish later" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
+        </Rows>
+    </Panel>
+}
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+    [Parameter, EditorRequired] public MandoCodeConfig Config { get; set; } = default!;
+    [Parameter] public int Width { get; set; } = 80;
+    [Parameter] public int Height { get; set; } = 24;
+    [Parameter] public EventCallback<OnboardingFlow.FlowResult> OnComplete { get; set; }
+    private readonly string _key = "setup-" + Guid.NewGuid().ToString("N"), _urlKey = "setup-url-" + Guid.NewGuid().ToString("N");
+    private readonly CancellationTokenSource _stop = new();
+    private readonly SetupOperations _operations = new();
+    private readonly TextSelectionState _url = new();
+    private TaskCompletionSource<string?>? _answer;
+    private string _stage = "Connect", _message = "Checking your setup";
+    private string[] _choices = [];
+    private int _selected, _frame;
+    private bool _urlInput, _browsing, _disposed;
+    private static readonly string[] Frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    protected override void OnInitialized() { _ = Animate(); _ = Run(); }
+    private async Task Run()
+    {
+        try
+        {
+            var workflow = new SetupWorkflow(_operations, Choose, AskUrl, Browse, Status);
+            var result = await workflow.Run(Config, _stop.Token);
+            if (!_disposed) await InvokeAsync(() => OnComplete.InvokeAsync(result));
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed)
+            {
+                try { await Choose("Setup paused", ex.Message, ["Finish later"]); }
+                catch (OperationCanceledException) { }
+                if (!_disposed) await InvokeAsync(() => OnComplete.InvokeAsync(new(false, true, null)));
+            }
+        }
+    }
+    private void Status(string stage, string message) { _stage = stage; _message = message; if (!_disposed) _ = InvokeAsync(StateHasChanged); }
+    private async Task<string?> Choose(string stage, string message, string[] choices)
+    {
+        _stop.Token.ThrowIfCancellationRequested();
+        _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _choices = choices; _selected = 0; Status(stage, message);
+        try { return await _answer.Task.WaitAsync(_stop.Token); }
+        finally { _choices = []; _answer = null; }
+    }
+    private async Task<string?> AskUrl(string current)
+    {
+        _url.SetText(current); _urlInput = true; Status("Connect", "Enter the Ollama URL, for example http://localhost:11434. Enter accepts it; Esc goes back.");
+        _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        try { return await _answer.Task.WaitAsync(_stop.Token); }
+        finally { _urlInput = false; _answer = null; }
+    }
+    private Task<bool> UrlKey(KeyboardEventArgs key) { if (key.Key == "Escape") { _answer?.TrySetResult(null); return Task.FromResult(true); } return Task.FromResult(false); }
+    private void SubmitUrl(string value)
+    {
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) { Status("Connect", "Enter a complete http:// or https:// Ollama URL."); return; }
+        _answer?.TrySetResult(value.Trim().TrimEnd('/'));
+    }
+    private async Task<string?> Browse()
+    {
+        _answer = new(TaskCreationOptions.RunContinuationsAsynchronously); _browsing = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _answer.Task.WaitAsync(_stop.Token); }
+        finally { _browsing = false; _answer = null; }
+    }
+    private void CloseBrowser() => _answer?.TrySetResult(null);
+    private void Downloaded(string model) => _answer?.TrySetResult(model);
+    private void Select(int index) { if (index >= 0 && index < _choices.Length) _answer?.TrySetResult(_choices[index]); }
+    private void Pause() { _stop.Cancel(); _answer?.TrySetCanceled(); }
+    private Task Cycle(bool reverse) { if (_choices.Length > 0) _selected = (_selected + (reverse ? _choices.Length - 1 : 1)) % _choices.Length; StateHasChanged(); return Task.CompletedTask; }
+    private async Task Key(KeyboardEventArgs key)
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (key.Key == "Escape") { var back = Array.IndexOf(_choices, "Back"); if (_stage == "Ready") Select(0); else if (back >= 0) Select(back); else Pause(); }
+        else if (key.Key is "ArrowUp" or "ArrowDown" or "Tab") await Cycle(key.Key == "ArrowUp" || key.ShiftKey);
+        else if (key.Key == "Enter") { if (_choices.Length > 0) Select(_selected); else Pause(); }
+    }
+    protected override void OnParametersSet() { if (ExplorerFocus is not null && !_browsing) ExplorerFocus.NavigateTab = Cycle; }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_browsing || Pane is not null && !Pane.Active) return;
+        var key = _urlInput ? _urlKey : _key;
+        if (Pane is not null) Pane.FocusKey = key;
+        if (!Focus.IsFocused(key)) await Focus.FocusAsync(key);
+    }
+    private async Task Animate() { try { while (!_stop.IsCancellationRequested) { await Task.Delay(120, _stop.Token); if (_choices.Length == 0 && !_browsing && !_urlInput) { _frame++; if (!_disposed) await InvokeAsync(StateHasChanged); } } } catch (OperationCanceledException) { } }
+    public void Dispose() { _disposed = true; _stop.Cancel(); _operations.Dispose(); if (ExplorerFocus?.NavigateTab == Cycle) ExplorerFocus.NavigateTab = null; }
+}

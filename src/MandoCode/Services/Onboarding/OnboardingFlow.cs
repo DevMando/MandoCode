@@ -219,6 +219,8 @@ public sealed class OnboardingFlow
         {
             AnsiConsole.MarkupLine($"[yellow]Note: model [white]{Spectre.Console.Markup.Escape(finalModel)}[/] didn't validate via /api/show.[/]");
             AnsiConsole.MarkupLine($"[dim]You may need to run: [deepskyblue1]ollama pull {Spectre.Console.Markup.Escape(finalModel)}[/] and then /retry — or /setup to pick a different model.[/]");
+            config.Save();
+            return new FlowResult(Connected: true, Skipped: true, FinalModel: null);
         }
 
         config.HasCompletedOnboarding = true;
@@ -778,9 +780,9 @@ public sealed class OnboardingFlow
             AnsiConsole.MarkupLine("[green]`ollama signin` finished. Re-checking authentication...[/]");
         }
 
-        // Final check — does the daemon report cloud-tag visibility now?
-        var finalAuth = await OllamaSetupHelper.CheckCloudSignInAsync(url, ct);
-        return finalAuth == OllamaSetupHelper.CloudAuthState.SignedIn;
+        // A successful signin does not require an existing cloud model. The caller
+        // retries the download/inference, which verifies the daemon's authentication.
+        return true;
     }
 
     private static string Truncate(string s, int max)
