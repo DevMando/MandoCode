@@ -239,16 +239,25 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/music-lofi` | Switch to lofi |
 | `/music-synthwave` | Switch to synthwave |
 | `/music-list` | List available tracks |
-| `/mcp` | List configured MCP servers with status and tool counts |
-| `/mcp add` | Interactively add a new MCP server to config |
-| `/mcp remove <name>` | Remove an MCP server from config |
+| `/mcp` | Open the shared MCP manager: add/edit, test, enable/disable, and inspect tools |
 | `/mcp tools <server>` | List tools exposed by connected MCP servers (server optional) |
 | `/mcp-reload` | Restart all MCP servers and re-register their tools |
+| `/skills` | Manage user skills: install from Git/ZIP/folder, edit, generate/refine, and enable/disable |
 | `/clear` | Clear conversation history |
 | `/history` | Search and restore closed agents, including transcripts and conversation context (Alt+H) |
 | `/exit` | Exit MandoCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
 | `!cd <path>` | Change project root directory |
+
+### MCP and Skills managers
+
+Open `/mcp` for MCP Servers or `/skills` for Skills, or choose **Manage MCP Servers** / **Manage Skills** in Agent Settings → Integrations. Each table row has Enable/Disable, Edit, and Delete buttons; MCP rows also have Tools. Click an item's name or press Enter on it to view full details. Up/Down moves between rows, Left/Right selects row actions, Tab visits all controls, and Escape returns or closes. Buttons wrap beneath their item in narrow panes. New Skill offers Write Manually with field explanations, or Create with AI with a task description and model picker. Manual forms contain only Name, Description, and Instructions; AI refinement is optional and opens separately. Generated drafts remain editable until Save Skill. Install offers a folder browser or Git URL/ZIP input. Add/New, Install, and Search appear above the table. The selected item has its full name and wrapped details directly below the table; bulk toggles, Refresh, Close, and operation feedback stay in the footer. These managers edit shared user settings; Agent Settings still controls whether a particular agent can use MCP tools.
+
+For MCP, choose **Add Server**, select stdio or HTTP, fill in the executable/URL, then **Test Connection** or **Save & Connect**. Enter stdio arguments one per line, keeping arguments with spaces together without extra quotes. Environment variables and HTTP headers use one `KEY=value` per line. Enable/Disable and Enable All/Disable All persist the selection and reconnect open agents without clearing their conversations. Connection failures remain visible in the list; Details shows the complete error. Installing a stdio server means configuring its launch command, such as `npx` or `uvx`; the executable must be available on your system.
+
+For Skills, **Install** accepts a Git repository URL, local ZIP archive, or folder containing one or more `SKILL.md` directories. It copies the skill's bundled files, skips existing names, and does not alter project skills. **New Skill** and **Edit** provide name, description, and instructions fields. To generate a draft, enter a Generation request, choose the authoring model, and select **Generate**; **Refine** revises existing instructions. Review the Instructions before **Save Skill**. Authoring uses a separate conversation with no tools and leaves the agent's conversation and model unchanged.
+
+Skills use the same enable/disable convention as Desktop (`SKILL.md` / `SKILL.md.disabled`). Removing a skill moves it into `.trash` inside your user skills directory, with its recovery path shown in Details. Shared changes wait until other agents finish their requests and close their settings menus. Project skills keep their existing precedence over user skills.
 
 ### Setup vs config vs model
 
@@ -549,7 +558,7 @@ MandoCode speaks the [Model Context Protocol](https://modelcontextprotocol.io) a
 
 Two ways:
 
-- **`/mcp add`** inside MandoCode — an interactive wizard that prompts through name, transport, URL/command, and optional headers/env vars, previews the JSON, and saves + reloads automatically.
+- **`/mcp`** inside MandoCode → **Add Server** — the server editor for name, transport, URL/command, and optional headers/env vars, with Test Connection and Save & Connect.
 - **Hand-edit `~/.mandocode/config.json`** — useful when copy-pasting a `mcpServers` block from a server's README. Run `/mcp-reload` after saving.
 
 ### Config shape
@@ -603,9 +612,9 @@ MandoCode cannot tell a read-only MCP tool from a destructive one by inspecting 
 
 ### Slash commands
 
-- `/mcp` — shows each configured server with its transport, connection status, and live tool count
-- `/mcp add` — interactive wizard for adding a new server without hand-editing JSON
-- `/mcp remove <name>` — remove a server from config (with confirm)
+- `/mcp` — opens the shared server manager with connection status and tool inspection
+- `/mcp` → **Add Server** — configure a new server without hand-editing JSON
+- `/mcp` → **Delete** on a server row — remove a server from config (with confirmation)
 - `/mcp tools <server>` — list every tool exposed by connected servers with descriptions (server arg optional — omit to list all)
 - `/mcp-reload` — tears down every MCP client, restarts them, and re-registers their tools on the agent (useful when you edit the config mid-session)
 

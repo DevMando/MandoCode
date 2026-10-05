@@ -98,6 +98,7 @@
  [Parameter] public EventCallback<AgentSettingsDraft> OnSave { get; set; }
  [Parameter] public EventCallback OnApplyDefaults { get; set; }
  [Parameter] public EventCallback<AgentSettingsDraft> OnSaveDefaults { get; set; }
+ [Parameter] public EventCallback<int> OnManageIntegrations { get; set; }
  private static readonly string[] Groups = ["Model", "Behavior", "Integrations"];
  private AgentSettingsDraft _draft = default!;
  private string _draftModel = "";
@@ -124,6 +125,7 @@
   ? Presets.Select(PresetLabel).Concat(_editing.Key == "streaming" ? new[] { "Back" } : new[] { "Custom value", "Back" }).Concat(Actions).ToArray()
   : (_tab == 0 ? new[] { "Model: " + Config.GetEffectiveModelName() } : Array.Empty<string>())
   .Concat(Fields.Select(f => f.Label + ": " + (f.Toggle ? (f.Read(_draft.Config) == "True" ? "On" : "Off") : f.Read(_draft.Config))))
+  .Concat(_tab == 2 ? new[] { "Manage MCP Servers", "Manage Skills" } : Array.Empty<string>())
   .Concat(Actions).ToArray();
  private int FieldOffset => _tab == 0 ? 1 : 0;
  private int TextWidth => Math.Max(3, Width - 4);
@@ -147,7 +149,7 @@
   }
  }
  private bool IsCurrentPreset(int index) => _editing is not null && index < Presets.Length && Presets[index] == _editing.Read(_draft.Config);
- private string Description => _selected >= OptionCount ? ActionDescription : _editing is not null ? PresetDescription : (_selected >= FieldOffset && _selected < Fields.Length + FieldOffset ? Fields[_selected - FieldOffset].Description : "Choose a model for this agent.");
+ private string Description => Items.ElementAtOrDefault(_selected) is "Manage MCP Servers" or "Manage Skills" ? "Install, edit, and enable shared user integrations. Save any agent edits before opening this manager." : _selected >= OptionCount ? ActionDescription : _editing is not null ? PresetDescription : (_selected >= FieldOffset && _selected < Fields.Length + FieldOffset ? Fields[_selected - FieldOffset].Description : "Choose a model for this agent.");
  private string PresetDescription => _editing!.Label + ": " + (_editing.Key == "temperature" && _selected < Presets.Length && double.TryParse(Presets[_selected], out var temperature)
   ? temperature <= 0.2 ? "Focused wording for precise code edits. Higher values allow more varied answers." : temperature <= 0.4 ? "A little variety while keeping code edits focused." : temperature <= 0.7 ? "Balanced wording for general coding and explanations. Lower values keep replies more focused." : "More inventive wording for brainstorming. Check generated code carefully."
   : _editing.Description);
@@ -234,6 +236,12 @@
   if (_tab == 0 && index == 0)
   {
    await OnModel.InvokeAsync();
+   return;
+  }
+  if (Items[index] is "Manage MCP Servers" or "Manage Skills")
+  {
+   if (HasChanges) { _status = "Save or discard this agent's pending settings before managing shared integrations."; return; }
+   await OnManageIntegrations.InvokeAsync(Items[index] == "Manage Skills" ? 1 : 0);
    return;
   }
   var fieldIndex = index - FieldOffset;

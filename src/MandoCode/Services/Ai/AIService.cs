@@ -1,4 +1,4 @@
-﻿/**
+/**
  *  Author: DevMando
  *  Date: 2025-12-10
  *  Description: AIService.cs - Manages AI interactions using Microsoft Agent Framework with Ollama.
@@ -379,7 +379,7 @@ public class AIService
     /// switches via /model and /setup keep using <see cref="ReinitializeAsync"/> —
     /// a different model mid-history is a different conversation.
     /// </summary>
-    public async Task RefreshSettingsAsync(MandoCodeConfig config)
+    public async Task RefreshSettingsAsync(MandoCodeConfig config, CancellationToken cancellationToken = default)
     {
         _config = config;
         if (_visionIdentity != ModelIdentity) await ValidateModelAsync();
@@ -394,7 +394,15 @@ public class AIService
         }
 
         BuildAgent();
-        await AttachMcpPluginsAsync();
+        await AttachMcpPluginsAsync(cancellationToken);
+    }
+
+    /// <summary>Rebinds tools after clients reconnect without discarding the conversation.</summary>
+    public async Task RefreshMcpConnectionsAsync(CancellationToken cancellationToken = default)
+    {
+        _mcpAgentToolsByServer.Clear();
+        _mcpToolServerByName.Clear();
+        await RefreshSettingsAsync(_config, cancellationToken);
     }
 
     /// <summary>

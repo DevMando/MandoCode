@@ -52,7 +52,13 @@
         @if (SettingsOpen)
         {
             <Box Width="@BrowserWidth" FillHeight="true">
-                <AgentSettingsPanel Config="@(SettingsConfig!)" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSettingsClose" OnSave="OnSettingsSave" OnModel="OnSettingsModel" ModelPicker="SettingsModelPicker" OnModelSelected="OnSettingsModelSelected" OnModelCancel="OnSettingsModelCancel" OnApplyDefaults="OnApplyDefaults" OnSaveDefaults="OnSaveDefaults" />
+                <AgentSettingsPanel Config="@(SettingsConfig!)" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSettingsClose" OnSave="OnSettingsSave" OnModel="OnSettingsModel" ModelPicker="SettingsModelPicker" OnModelSelected="OnSettingsModelSelected" OnModelCancel="OnSettingsModelCancel" OnApplyDefaults="OnApplyDefaults" OnSaveDefaults="OnSaveDefaults" OnManageIntegrations="OnManageIntegrations" />
+            </Box>
+        }
+        @if (IntegrationsOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <IntegrationSettingsPanel Config="@(SettingsConfig!)" Coordinator="@(IntegrationCoordinator!)" Kind="@IntegrationKind" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnIntegrationsClose" />
             </Box>
         }
     </Flex>
@@ -95,7 +101,7 @@
     private void FocusChanged() => _ = InvokeAsync(StateHasChanged);
     protected override void OnParametersSet()
     {
-        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) && !DirectoryBrowserOpen;
+        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen) && !DirectoryBrowserOpen;
         if (!GitChangesOpen) _gitDiffOpen = false;
         if (Pane is not null) { Pane.ExplorerFocus = _explorerFocus; Pane.IsGitDiffOpen = () => GitChangesOpen && _gitDiffOpen; }
     }
@@ -108,6 +114,11 @@
     [Parameter] public bool GitChangesOpen { get; set; }
     [Parameter] public bool HistoryOpen { get; set; }
     [Parameter] public bool SettingsOpen { get; set; }
+    [Parameter] public bool IntegrationsOpen { get; set; }
+    [Parameter] public int IntegrationKind { get; set; }
+    [Parameter] public CliIntegrationCoordinator? IntegrationCoordinator { get; set; }
+    [Parameter] public EventCallback OnIntegrationsClose { get; set; }
+    [Parameter] public EventCallback<int> OnManageIntegrations { get; set; }
     [Parameter] public MandoCode.Models.MandoCodeConfig? SettingsConfig { get; set; }
     [Parameter] public EventCallback OnSettingsClose { get; set; }
     [Parameter] public EventCallback OnSettingsModel { get; set; }
@@ -126,9 +137,9 @@
     [Parameter] public EventCallback OnFileExplorerClose { get; set; }
     [Parameter] public EventCallback<string?> OnDirectoryChosen { get; set; }
     private int AvailableWidth => Math.Max(1, Pane?.Width ?? Viewport.Width);
-    private int BrowserWidth => HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : Math.Min(50, AvailableWidth / 2);
-    private bool NarrowPanel => HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen) && AvailableWidth < 90);
-    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen) ? BrowserWidth : 0);
+    private int BrowserWidth => HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : IntegrationsOpen ? Math.Min(80, AvailableWidth * 2 / 3) : Math.Min(50, AvailableWidth / 2);
+    private bool NarrowPanel => HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen || IntegrationsOpen) && AvailableWidth < 90);
+    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen) ? BrowserWidth : 0);
     private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) ? 6 : 0));
     private int FooterWidth => Math.Max(2, ContentWidth - 2);
     private bool ShowButtonShortcuts => FooterWidth >= 70;
