@@ -9,13 +9,7 @@
     }
     else
     {
-        <Flex Direction="FlexDirection.Row" Gap="2" FillWidth="true" Height="1">
-            <Markup Content="@Primary" Foreground="@PaneColors.For(Pane, Accent)" />
-            @if (Secondary.Length > 0)
-            {
-                <Markup Content="@Secondary" Foreground="@PaneColors.For(Pane, Color.Green)" />
-            }
-        </Flex>
+        <Markup Content="@Primary" Foreground="@PaneColors.For(Pane, Accent)" />
     }
 </Box>
 
@@ -29,12 +23,11 @@
     private int Separator => Normalized.LastIndexOf('/');
     private int Width => Math.Max(1, (Pane?.Width ?? Viewport.Width) - 4);
     private string Primary => Clip((Separator >= 0 ? Normalized[(Separator + 1)..] : Normalized) + (Directory ? "/" : ""), Width);
-    private string Secondary => Separator >= 0 ? Clip(Normalized[..(Separator + 1)], Math.Max(0, Width - Cells(Primary) - 2)) : "";
     private string SelectedText
     {
         get
         {
-            var text = Primary + (Secondary.Length > 0 ? "  " + Secondary : "");
+            var text = Primary;
             return text + new string(' ', Math.Max(0, Width - Cells(text)));
         }
     }

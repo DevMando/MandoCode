@@ -226,6 +226,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/config` | Adjust settings — guided wizard |
 | `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
+| `/ollama-pull` | Browse the Ollama library and download a model |
 | `/ollama-serve` | Start local Ollama if unavailable and retry the connection twice |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
@@ -248,6 +249,10 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/exit` | Exit MandoCode |
 | `!<cmd>` | Shell escape (e.g., `!git status`) |
 | `!cd <path>` | Change project root directory |
+
+### Downloading Ollama models
+
+Use `/ollama-pull` anytime to browse the Ollama library, choose a model tag, and download it with progress. Use the search box to filter model names; choose Popular, Name A–Z, or Newest (the default) (Ctrl+S cycles sorting). The table shows model names, capabilities, and hosting. Toggle Cloud to show only models marked for cloud hosting. Tab cycles through search, sorting/filter buttons, and the list. Left/Right selects a sorting button; Enter applies it. Ctrl+P pulls the model name typed in the search field. Enter, Escape, or the Cancel button cancels a download. Use `/model` afterwards to switch to the downloaded model.
 
 ### MCP and Skills managers
 

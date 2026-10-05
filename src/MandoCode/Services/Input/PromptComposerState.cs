@@ -8,6 +8,7 @@ public sealed class PromptComposerState(InputStateMachine machine)
 {
     public TextSelectionState Buffer { get; } = new();
     public InputRenderState Suggestions => machine.State;
+    public bool FilesLoading => machine.FilesLoading && Suggestions.Mode == AutocompleteMode.File;
     public bool IsOpen => Suggestions.Mode != AutocompleteMode.None && Suggestions.DropdownItems.Count > 0;
     public void SetText(string text)
     {
@@ -35,6 +36,7 @@ public sealed class PromptComposerState(InputStateMachine machine)
     }
     public bool HandleKey(string key)
     {
+        if (FilesLoading && key == "Escape") { machine.CancelFileLoading(); machine.ProcessKey(new ConsoleKeyInfo('\0', ConsoleKey.Escape, false, false, false)); return true; }
         if (!IsOpen) return false;
         var consoleKey = key switch
         {

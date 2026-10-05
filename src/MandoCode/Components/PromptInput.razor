@@ -12,6 +12,7 @@
     }
     else if (ChatFeaturesEnabled)
     {
+        @if (_composer.FilesLoading) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
         <AutocompletePopup Composer="_composer" />
     }
     <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
@@ -73,6 +74,7 @@
         if (ExplorerFocus is not null) ExplorerFocus.Changed += ExplorerFocusChanged;
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
+        if (ChatFeaturesEnabled) { _files = (Pane?.Services ?? Services).GetService(typeof(FileAutocompleteProvider)) as FileAutocompleteProvider; if (_files is not null) _files.SuggestionsChanged += FilesChanged; }
         var key = StateKey;
         if (Pane is not null && key is not null && Pane.PresentationState.TryGetValue(key, out var saved) && saved is ComposerDraft draft
             && draft.Key == PersistenceKey && draft.InitialValue == InitialValue && ReferenceEquals(draft.Picker, ModelPicker))
@@ -88,10 +90,18 @@
             if (Pane is not null && key is not null) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
         }
     }
+    private FileAutocompleteProvider? _files;
+    private bool _disposed;
+    private int _loadingFrame;
+    private readonly CancellationTokenSource _loadingStop = new();
+    private static readonly string[] LoadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    private void FilesChanged() { if (!_disposed) _ = InvokeAsync(() => { if (_disposed) return; _composer.Refresh(); StateHasChanged(); }); }
+    private async Task AnimateLoading() { try { while (!_loadingStop.IsCancellationRequested) { await Task.Delay(120, _loadingStop.Token); if (_composer.FilesLoading) await InvokeAsync(() => { _loadingFrame++; StateHasChanged(); }); } } catch (OperationCanceledException) { } }
     private sealed record ComposerDraft(PromptComposerState Composer, string InitialValue, ModelPickerState? Picker, string? Key);
     private void ExplorerFocusChanged() => _ = InvokeAsync(StateHasChanged);
     public void Dispose()
     {
+        _disposed = true; _loadingStop.Cancel(); if (_files is not null) _files.SuggestionsChanged -= FilesChanged;
         if (ExplorerFocus is not null) ExplorerFocus.Changed -= ExplorerFocusChanged;
     }
     protected override void OnParametersSet()
@@ -111,6 +121,7 @@
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender) _ = AnimateLoading();
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
         if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
         // A panel's focus request may precede registration of the new snapshot.

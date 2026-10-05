@@ -33,6 +33,8 @@ public class InputStateMachine
 
     // Render state snapshot
     public InputRenderState State { get; } = new();
+    public void CancelFileLoading() => _fileProvider?.CancelPending();
+    public bool FilesLoading => _fileProvider?.IsIndexing == true;
 
     public InputStateMachine(
         Dictionary<string, string> commands,
@@ -177,6 +179,10 @@ public class InputStateMachine
     /// </summary>
     public InputAction UpdateText(string text)
     {
+        var sameText = _input.ToString() == text;
+        var selectedFile = sameText && _mode == AutocompleteMode.File
+            ? _filteredFiles.ElementAtOrDefault(_selectedIndex) : null;
+        var previousIndex = _selectedIndex;
         _input.Clear();
         _input.Append(text);
         _cursorPos = text.Length;
@@ -187,11 +193,13 @@ public class InputStateMachine
         {
             _atAnchorPos = atPos;
             var fragment = text.Substring(atPos + 1);
-            _filteredFiles = _fileProvider.FilterFiles(fragment);
-            if (_filteredFiles.Any())
+            _filteredFiles = _fileProvider.GetSuggestions(fragment);
+            if (_filteredFiles.Any() || _fileProvider?.IsLoading == true)
             {
                 _mode = AutocompleteMode.File;
-                _selectedIndex = 0;
+                var retainedIndex = selectedFile is null ? -1 : _filteredFiles.IndexOf(selectedFile);
+                _selectedIndex = retainedIndex >= 0 ? retainedIndex
+                    : sameText ? Math.Clamp(previousIndex, 0, Math.Max(0, _filteredFiles.Count - 1)) : 0;
                 SyncState();
                 return InputAction.ShowFileDropdown;
             }
@@ -518,8 +526,8 @@ public class InputStateMachine
             && (_cursorPos == 1 || (_cursorPos >= 2 && _input[_cursorPos - 2] == ' ')))
         {
             _atAnchorPos = _cursorPos - 1;
-            _filteredFiles = _fileProvider.FilterFiles("");
-            if (_filteredFiles.Any())
+            _filteredFiles = _fileProvider.GetSuggestions("");
+            if (_filteredFiles.Any() || _fileProvider?.IsLoading == true)
             {
                 _mode = AutocompleteMode.File;
                 _selectedIndex = 0;
@@ -531,8 +539,8 @@ public class InputStateMachine
         {
             // Typing after @: filter files
             var fragment = _input.ToString().Substring(_atAnchorPos + 1);
-            _filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
-            if (_filteredFiles.Any())
+            _filteredFiles = _fileProvider?.GetSuggestions(fragment) ?? new();
+            if (_filteredFiles.Any() || _fileProvider?.IsLoading == true)
             {
                 _selectedIndex = 0;
                 SyncState();
@@ -613,8 +621,8 @@ public class InputStateMachine
         _cursorPos = _input.Length;
 
         // Re-filter to show directory contents
-        _filteredFiles = _fileProvider?.FilterFiles(dirPath) ?? new();
-        if (_filteredFiles.Any())
+        _filteredFiles = _fileProvider?.GetSuggestions(dirPath) ?? new();
+        if (_filteredFiles.Any() || _fileProvider?.IsLoading == true)
         {
             _selectedIndex = 0;
         }
@@ -640,8 +648,8 @@ public class InputStateMachine
             else
             {
                 var fragment = _input.ToString().Substring(_atAnchorPos + 1);
-                _filteredFiles = _fileProvider?.FilterFiles(fragment) ?? new();
-                if (_filteredFiles.Any())
+                _filteredFiles = _fileProvider?.GetSuggestions(fragment) ?? new();
+                if (_filteredFiles.Any() || _fileProvider?.IsLoading == true)
                 {
                     _selectedIndex = Math.Min(_selectedIndex, _filteredFiles.Count - 1);
                 }
