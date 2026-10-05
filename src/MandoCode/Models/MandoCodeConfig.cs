@@ -46,11 +46,10 @@ public class MandoCodeConfig
     };
 
     /// <summary>
-    /// Cloud model auto-pulled by the onboarding wizard when a signed-in user has no
-    /// models yet. Tuned for the broadest "best out-of-box" experience on hardware-light
-    /// setups; bump as Ollama publishes newer cloud-tier defaults.
+    /// Initial cloud recommendation for new configurations. Existing saved models
+    /// remain unchanged; setup offers this and other current flash cloud starters.
     /// </summary>
-    public const string DefaultCloudModel = "glm-5.2:cloud";
+    public const string DefaultCloudModel = "glm-5.3-flash:cloud";
 
     /// <summary>
     /// True when the tag names an Ollama cloud model. Cloud tags end in "cloud" with a

@@ -47,6 +47,7 @@
  [Parameter] public int Width { get; set; } = 60;
  [Parameter] public int Height { get; set; } = 24;
  [Parameter] public EventCallback OnClose { get; set; }
+ [Parameter] public EventCallback<string> OnDownloaded { get; set; }
  private readonly string _focusKey = "ollama-pull-" + Guid.NewGuid().ToString("N");
  private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
  private readonly CancellationTokenSource _shutdown = new();
@@ -165,7 +166,7 @@
  private async Task Download(string name) {
   if (string.IsNullOrWhiteSpace(name)) return;
   _status = "Starting download: " + name;
-  await Run(async ct => { await Library.Pull(Endpoint, name.Trim(), p => { _status = p.Status + (p.Total > 0 ? $" · {Math.Clamp(p.Completed * 100d / p.Total, 0, 100):F0}% · {p.Completed / 1048576d:F1}/{p.Total / 1048576d:F1} MiB" : ""); if (!_disposed) _ = InvokeAsync(StateHasChanged); }, ct); _status = name + " downloaded. Select it with /model when ready."; });
+  await Run(async ct => { await Library.Pull(Endpoint, name.Trim(), p => { _status = p.Status + (p.Total > 0 ? $" · {Math.Clamp(p.Completed * 100d / p.Total, 0, 100):F0}% · {p.Completed / 1048576d:F1}/{p.Total / 1048576d:F1} MiB" : ""); if (!_disposed) _ = InvokeAsync(StateHasChanged); }, ct); _status = name + " downloaded. Select it with /model when ready."; if (OnDownloaded.HasDelegate) await InvokeAsync(() => OnDownloaded.InvokeAsync(name.Trim())); });
  }
  private async Task Key(KeyboardEventArgs key) {
   if (Pane is not null && !Pane.Active) return;

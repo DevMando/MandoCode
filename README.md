@@ -252,6 +252,8 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 
 ### Downloading Ollama models
 
+First-run setup and `/setup` use a guided panel: **Connect → Choose model → Download → Verify → Ready**. Choose a recommended cloud starter (`glm-5.3-flash:cloud` or `deepseek-v4.1-flash:cloud`), a local starter with approximate download sizes, an installed model, or the full model browser. Cloud requires Ollama sign-in and internet; account limits and pricing apply. Local model memory use depends on the model and context, beyond download size. Back returns from choices, and Escape pauses setup. Downloads target your configured Ollama server; remote cloud authentication must be configured on that server. Setup tests a real model response before saving it as the default for new agents. Failed verification offers retry, another model, or Finish later. Existing model preferences are preserved until verification succeeds.
+
 Use `/ollama-pull` anytime to browse the Ollama library, choose a model tag, and download it with progress. Use the search box to filter model names; choose Popular, Name A–Z, or Newest (the default) (Ctrl+S cycles sorting). The table shows model names, capabilities, and hosting. Toggle Cloud to show only models marked for cloud hosting. Tab cycles through search, sorting/filter buttons, and the list. Left/Right selects a sorting button; Enter applies it. Ctrl+P pulls the model name typed in the search field. Enter, Escape, or the Cancel button cancels a download. Use `/model` afterwards to switch to the downloaded model.
 
 ### MCP and Skills managers
@@ -318,7 +320,7 @@ Models with **tool/function calling** support work best with MandoCode. The firs
 
 | Model | Notes |
 |-------|-------|
-| `glm-5.2:cloud` | **Default** — auto-pulled by `/setup` when you pick Cloud |
+| `glm-5.3-flash:cloud` | **Default cloud starter** — offered by `/setup` alongside `deepseek-v4.1-flash:cloud` |
 | `minimax-m3:cloud` | General-purpose alternative |
 | `kimi-k2.7-code:cloud` | Code-focused |
 
@@ -345,7 +347,7 @@ Located at `~/.mandocode/config.json`
 ```json
 {
   "ollamaEndpoint": "http://localhost:11434",
-  "modelName": "glm-5.2:cloud",
+  "modelName": "glm-5.3-flash:cloud",
   "modelPath": null,
   "temperature": 0.7,
   "maxTokens": 32768,
@@ -382,7 +384,7 @@ Located at `~/.mandocode/config.json`
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ollamaEndpoint` | `http://localhost:11434` | Ollama server URL |
-| `modelName` | `glm-5.2:cloud` | Model to use |
+| `modelName` | `glm-5.3-flash:cloud` | Model to use |
 | `modelPath` | `null` | Optional path to a local GGUF model file |
 | `temperature` | `0.7` | Response creativity (0.0 = focused, 1.0 = creative) |
 | `maxTokens` | `32768` | Cap on a single reply (`NumPredict`) — a runaway-generation safety ceiling, **not** the context window. If the model announces work then stops without acting, this is too low (see Troubleshooting) |

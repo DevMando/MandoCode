@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell OllamaPullOpen="@_ollamaPullOpen" OllamaEndpoint="@Config.OllamaEndpoint" OnOllamaPullClose="CloseOllamaPull" IntegrationsOpen="@_integrationsOpen" IntegrationCoordinator="@(Services.GetRequiredService<CliIntegrationCoordinator>())" IntegrationKind="@_integrationKind" OnIntegrationsClose="CloseIntegrations" OnManageIntegrations="ManageIntegrations" SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell SetupOpen="@_setupOpen" OnSetupComplete="SetupComplete" OllamaPullOpen="@_ollamaPullOpen" OllamaEndpoint="@Config.OllamaEndpoint" OnOllamaPullClose="CloseOllamaPull" IntegrationsOpen="@_integrationsOpen" IntegrationCoordinator="@(Services.GetRequiredService<CliIntegrationCoordinator>())" IntegrationKind="@_integrationKind" OnIntegrationsClose="CloseIntegrations" OnManageIntegrations="ManageIntegrations" SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -40,7 +40,7 @@
 {
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !_settingsOpen && !_ollamaPullOpen && !_integrationsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+@if (_showPrompt && !_setupOpen && !_settingsOpen && !_ollamaPullOpen && !_integrationsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
@@ -223,7 +223,7 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     private bool _paneStopped;
     private string? _headerModel;
-    private void StopPane() { _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
+    private void StopPane() { _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -433,7 +433,7 @@
             McpGate = agentServices.GetRequiredService<McpApprovalGate>();
             PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
             UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
-            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _settingsOpen || _ollamaPullOpen || _integrationsOpen;
+            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _setupOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen;
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
             if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
@@ -568,7 +568,7 @@
         // First-run or recovering-from-broken-state: launch the guided wizard. Once a
         // user has completed (or explicitly skipped) onboarding, an unreachable Ollama
         // falls through to the static panel + /retry / /setup loop instead.
-        var shouldOnboard = MandoCodeConfig.IsFirstRun() || (!probe.Ok && !Config.HasCompletedOnboarding);
+        var shouldOnboard = MandoCodeConfig.IsFirstRun() || !Config.HasCompletedOnboarding;
         if (shouldOnboard)
         {
             // Suppress HomeView while the wizard runs — otherwise the VDOM render
@@ -638,14 +638,13 @@
     /// </summary>
     private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
     {
-        var flow = new OnboardingFlow(
-            setStatus: SetOnboardingStatus,
-            promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue),
-            pickModelVdom: PickModelFromPromptAsync);
-
+        _setupCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _setupOpen = true;
+        _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
+        await InvokeAsync(StateHasChanged);
         try
         {
-            var result = await flow.RunAsync(Config, forceInteractive);
+            var result = await _setupCompletion.Task;
             if (result.Connected && !string.IsNullOrEmpty(result.FinalModel))
             {
                 await AI.ReinitializeAsync(Config);
@@ -653,9 +652,14 @@
         }
         finally
         {
+            _setupOpen = false;
+            _setupCompletion = null;
             SetOnboardingStatus("");
         }
     }
+    private bool _setupOpen;
+    private TaskCompletionSource<OnboardingFlow.FlowResult>? _setupCompletion;
+    private void SetupComplete(OnboardingFlow.FlowResult result) => _setupCompletion?.TrySetResult(result);
 
     private void SetOnboardingStatus(string status)
     {

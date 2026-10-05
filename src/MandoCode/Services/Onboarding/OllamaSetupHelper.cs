@@ -220,13 +220,13 @@ public static class OllamaSetupHelper
     /// signed out — pulled models stick around in /api/tags but inference returns
     /// 401 because the daemon's local auth token is gone.
     /// </summary>
-    public static async Task<AuthTestResult> TestCloudAuthAsync(string url, string modelName, CancellationToken ct = default)
+    public static async Task<AuthTestResult> TestCloudAuthAsync(string url, string modelName, CancellationToken ct = default, int timeoutSeconds = 20)
     {
         if (string.IsNullOrWhiteSpace(modelName))
             return new AuthTestResult(false, false, "Empty model name");
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             var body = new StringContent(
                 System.Text.Json.JsonSerializer.Serialize(new
                 {
@@ -375,7 +375,7 @@ public static class OllamaSetupHelper
 
             using var proc = Process.Start(psi);
             if (proc == null) return -1;
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode;
         }
         catch
@@ -437,12 +437,23 @@ public static class OllamaSetupHelper
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode;
         }
         catch
         {
             return -1;
+        }
+    }
+
+    private static async Task WaitForOwnedProcessAsync(Process process, CancellationToken ct)
+    {
+        try { await process.WaitForExitAsync(ct); }
+        catch (OperationCanceledException)
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            throw;
         }
     }
 
@@ -618,7 +629,7 @@ public static class OllamaSetupHelper
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode == 0;
         }
         catch
