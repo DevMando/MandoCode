@@ -175,6 +175,9 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
                 if (!key.ShiftKey && !key.CtrlKey && pane.Active && pane.IsBusy?.Invoke() != true && pane.IsAwaitingInput?.Invoke() != true && pane.SubmitCommand is not null)
                     _ = pane.SubmitCommand(key.Key.Equals("k", StringComparison.OrdinalIgnoreCase) ? "/skills" : "/mcp");
                 return true;
+            case "c":
+                if (!key.ShiftKey && !key.CtrlKey && pane.Active && pane.IsAwaitingInput?.Invoke() != true && pane.ToggleSnapshots is not null) _ = pane.ToggleSnapshots();
+                return true;
             case "s":
                 if (!key.ShiftKey && pane.Active && pane.ToggleSettings is not null) _ = pane.ToggleSettings();
                 return true;
@@ -240,6 +243,8 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Func<bool>? IsAwaitingInput { get; set; }
     public Action? Stop { get; set; }
     public Func<string, Task>? SubmitCommand { get; set; }
+    public Func<CliPeerRequest, Task<CliPeerAnswer>>? AskPeer { get; set; }
+    public Func<Task<IReadOnlyList<MandoCode.Models.ChatMsg>>>? ReadConversation { get; set; }
     internal AgentModelSelectionGate ModelSelection { get; } = new();
     public Func<Task>? ToggleFileExplorer { get; set; }
     public Func<Task>? ToggleGitChanges { get; set; }

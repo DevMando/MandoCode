@@ -10,6 +10,8 @@ public sealed record ArchivedBlock(List<ArchivedSpan> Spans, string? UserPrompt,
 {
     public long? ToolGroup { get; init; }
     public ToolActivity? ToolActivity { get; init; }
+    public string? AgentGroup { get; init; }
+    public AgentExchange? AgentActivity { get; init; }
 }
 public sealed record ArchivedSettings(string? Model, double Temperature, int MaxTokens, int? ContextLength)
 {
@@ -175,7 +177,7 @@ public sealed class AgentArchiveStore
     {
         var entries = session.Snapshot().Entries;
         // Startup help/status is not part of a conversation. Transient spinner state is not an entry.
-        var start = entries.ToList().FindIndex(e => e.UserPrompt is not null);
+        var start = entries.ToList().FindIndex(e => e.UserPrompt is not null || e.AgentActivity is not null);
         if (start < 0) return [];
         var options = new RenderOptions(Spectre.Console.AnsiConsole.Profile.Capabilities, new Size(120, 10000));
         var blocks = new List<ArchivedBlock>();
@@ -187,7 +189,9 @@ public sealed class AgentArchiveStore
             blocks.Add(new(spans, entry.UserPrompt, entry.SpaceAfter)
             {
                 ToolGroup = entry.ToolActivity is not null ? entry.Id : entry.ToolOutput is { } output ? groups.GetValueOrDefault(output) : null,
-                ToolActivity = entry.ToolActivity
+                ToolActivity = entry.ToolActivity,
+                AgentGroup = entry.AgentOutput?.Id,
+                AgentActivity = entry.AgentActivity
             });
         }
         return blocks;
@@ -196,6 +200,10 @@ public sealed class AgentArchiveStore
     {
         session.Clear();
         var groups = archive.Transcript.Where(b => b.ToolActivity is not null && b.ToolGroup is not null).ToDictionary(b => b.ToolGroup!.Value, b => b.ToolActivity!);
+        // Restored completed exchanges must not collide with fresh j1/m1 IDs.
+        var agentGroups = archive.Transcript.Where(b => b.AgentActivity is not null).ToDictionary(b => b.AgentActivity!.Id,
+            b => new AgentExchange { Id = "archive-" + Guid.NewGuid().ToString("N"), Title = b.AgentActivity!.Title, Status = b.AgentActivity.Status,
+                CreatedAt = b.AgentActivity.CreatedAt, UpdatedAt = b.AgentActivity.UpdatedAt });
         foreach (var block in archive.Transcript)
         {
             var text = new Paragraph();
@@ -208,7 +216,9 @@ public sealed class AgentArchiveStore
             }
             if (block.ToolActivity is { } activity) { activity.Finished = true; activity.Expanded = false; }
             session.AppendRestored(text, block.UserPrompt, block.SpaceAfter, block.ToolActivity,
-                block.ToolActivity is null && block.ToolGroup is { } group ? groups.GetValueOrDefault(group) : null);
+                block.ToolActivity is null && block.ToolGroup is { } group ? groups.GetValueOrDefault(group) : null,
+                block.AgentActivity is { } exchange ? agentGroups.GetValueOrDefault(exchange.Id) : null,
+                block.AgentGroup is { } agentGroup ? agentGroups.GetValueOrDefault(agentGroup) : null);
         }
     }
 }

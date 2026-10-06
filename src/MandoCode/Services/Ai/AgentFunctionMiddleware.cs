@@ -113,6 +113,8 @@ public class AgentFunctionMiddleware
         Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
         CancellationToken cancellationToken)
     {
+        if (CliAgentCallChain.IsReview && !ReviewAllows(context.Function.Name))
+            return "This is a read-only agent review. That tool is unavailable; inspect files/status and report findings without changing files, running commands, proposing plans, or assigning work.";
         if (_currentScope.Value?.PlanCancellationRequested == true)
             return "The user cancelled the plan. All further tool calls are refused. Stop immediately — do not call tools, write files, or continue the work.";
 
@@ -870,7 +872,9 @@ public class AgentFunctionMiddleware
     }
 
     private static bool IsMutatingFunction(string? functionName) =>
-        functionName is "write_file" or "edit_file" or "delete_file" or "delete_folder" or "create_folder";
+        functionName is "write_file" or "edit_file" or "delete_file" or "delete_folder" or "create_folder" or "ask_agent" or "ask_agent_and_wait" or "ask_agent_async" or "delegate_to_agent" or "request_agent_review" or "handoff_to_agent" or "send_agent_message" or "update_agent_job" or "cancel_agent_job";
+
+    internal static bool ReviewAllows(string name) => name is "read_file_contents" or "list_all_project_files" or "list_files_match_glob_pattern" or "grep_files" or "search_text_in_files" or "get_absolute_path" or "search_web" or "fetch_webpage" or "load_skill" or "list_agents" or "get_agent_status" or "read_agent_transcript" or "check_delegations";
 
     private static readonly Regex ShellFileReadVerbs =
         new(@"^\s*(?:type|cat|head|tail|more|less|nl|gc|Get-Content|findstr|grep|sls|Select-String|sed|awk)\b",

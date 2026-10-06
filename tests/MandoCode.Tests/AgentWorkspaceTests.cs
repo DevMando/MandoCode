@@ -390,4 +390,27 @@ public class AgentWorkspaceTests
         Assert.Contains(label, SlashCommands.All[command]);
         Assert.Contains(Keybindings.All, binding => binding.Keys == label && binding.Action.Contains(command));
     }
+    [Fact]
+    public void SnapshotShortcut_UsesActivePaneToggle()
+    {
+        using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add();
+        var inactive = workspace.Add();
+        workspace.Focus(pane);
+        var calls = 0;
+        pane.ToggleSnapshots = inactive.ToggleSnapshots = () => { calls++; return Task.CompletedTask; };
+        Assert.False(workspace.Key(pane, new() { Key = "c" }));
+        Assert.True(workspace.Key(pane, new() { Key = "C", AltKey = true }));
+        Assert.Equal(1, calls);
+        workspace.Key(inactive, new() { Key = "c", AltKey = true });
+        workspace.Key(pane, new() { Key = "c", AltKey = true, ShiftKey = true });
+        workspace.Key(pane, new() { Key = "c", AltKey = true, CtrlKey = true });
+        pane.IsAwaitingInput = () => true;
+        workspace.Key(pane, new() { Key = "c", AltKey = true });
+        Assert.Equal(1, calls);
+        Assert.Contains(Keybindings.ContextSnapshots, SlashCommands.All["/snapshot-context-import"]);
+        Assert.Contains(Keybindings.All, binding => binding.Keys == "Alt+C");
+    }
+
 }

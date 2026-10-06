@@ -24,9 +24,10 @@ public static class PaneColors
         public IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
         {
             var width = Width(maxWidth);
+            var muted = Muted(pane);
             foreach (var segment in content.Render(Options(options, width), width))
             {
-                if (!Muted(pane) || segment.IsLineBreak)
+                if (!muted || segment.IsLineBreak)
                 {
                     yield return segment;
                     continue;

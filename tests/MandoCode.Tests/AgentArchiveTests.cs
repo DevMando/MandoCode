@@ -128,6 +128,28 @@ public sealed class AgentArchiveTests
     }
 
     [Fact]
+    public void PeerOnlyTranscriptRestoresCollapsedGroupsAndTheirDetails()
+    {
+        var session = new TuiSession();
+        session.Append(new Text("startup"));
+        session.AppendAgentExchange("Fusion · Question\nRequest", Color.Purple, "q1", "Working");
+        using (session.CaptureAgentExchange("q1")) session.AppendSpaced(new Text("Reply"));
+        var original = session.Snapshot().Entries[1].AgentActivity!;
+        original.Expanded = true;
+        var archive = Sample() with { Transcript = AgentArchiveStore.Capture(session) };
+        archive = JsonSerializer.Deserialize<ArchivedAgent>(JsonSerializer.Serialize(archive))!;
+        var restored = new TuiSession();
+        AgentArchiveStore.Replay(archive, restored);
+        var entries = restored.Snapshot().Entries;
+        Assert.Equal(3, entries.Count);
+        var group = entries[0].AgentActivity!;
+        Assert.False(group.Expanded);
+        Assert.All(entries.Skip(1), entry => Assert.Same(group, entry.AgentOutput));
+        restored.AppendAgentExchange("New question\nNew request", Color.Purple, "q1", "Working");
+        Assert.Equal(2, restored.Snapshot().Entries.Count(e => e.AgentActivity is not null));
+    }
+
+    [Fact]
     public async Task ModelHistoryIncludesToolCallsAndResultsAfterArchiveRoundTrip()
     {
         using var fixture = new ArchiveFolder();

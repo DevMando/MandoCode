@@ -53,7 +53,7 @@ public static class SlashCommands
         { "/plan-resume", "Continue an unfinished plan where it left off" },
         { "/plan-discard", "Forget an unfinished plan" },
         { "/snapshot-context-create", "Save a summary of this agent conversation" },
-        { "/snapshot-context-import", "Browse saved context snapshots and import a summary" },
+        { "/snapshot-context-import", $"Browse saved context snapshots and import a summary ({Keybindings.ContextSnapshots})" },
         { "/compact", "Compress conversation context into a recap (keeps this transcript)" },
         { "/clear", "Wipe all conversation context and start fresh" },
         { "/history", $"Find and restore closed agents, transcripts, and conversation context ({Keybindings.AgentHistory})" },

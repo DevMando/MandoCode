@@ -9,11 +9,12 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
     private readonly IServiceScopeFactory _scopes;
     internal AgentCallsigns Callsigns { get; } = new();
     private readonly List<AgentWorkspace> _entries = [];
+    private AgentWorkspace[] _snapshot = [];
     private int _nextWorkspaceId;
     private int _nextAgentId;
     private bool _changing;
     public IReadOnlyList<AgentWorkspace> Entries => _entries;
-    public IEnumerable<AgentWorkspace> Workspaces => _entries.Where(w => !w.IsClosed);
+    public IEnumerable<AgentWorkspace> Workspaces => Volatile.Read(ref _snapshot).Where(w => !w.IsClosed);
     public AgentWorkspace Active { get; private set; }
     public bool IsWorkspacePickerOpen { get; set; }
     public event Action? Changed;
@@ -32,6 +33,7 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
         workspace.Registry = this;
         workspace.AllocateAgentId = () => Interlocked.Increment(ref _nextAgentId);
         _entries.Add(workspace);
+        Volatile.Write(ref _snapshot, _entries.ToArray());
     }
     public AgentWorkspace Add(string? name = null)
     {

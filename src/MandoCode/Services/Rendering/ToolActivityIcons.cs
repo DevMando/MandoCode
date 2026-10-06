@@ -12,6 +12,7 @@ public static class ToolActivityIcons
         if (name.StartsWith("skills_")) name = name[7..];
         return name switch
         {
+            "list_agents" or "get_agent_status" or "read_agent_transcript" or "ask_agent" or "ask_agent_and_wait" or "ask_agent_async" or "send_agent_message" or "delegate_to_agent" or "request_agent_review" or "handoff_to_agent" or "check_delegations" or "update_agent_job" or "cancel_agent_job" or "wait_for_agent_job" => "🤖",
             "search_web" => "🔎",
             "fetch_webpage" => "🌐",
             "load_skill" => "🧠",
@@ -22,4 +23,18 @@ public static class ToolActivityIcons
             _ => "⚡"
         };
     }
+    public static string Label(string name, string fallback) => name switch
+    {
+        "ask_agent_and_wait" => "Asking another agent · waiting for reply",
+        "ask_agent_async" => "Sending a question · reply will arrive later",
+        "send_agent_message" => "Sending an agent inbox message · no reply requested",
+        "delegate_to_agent" => "Assigning background work",
+        "request_agent_review" => "Requesting a background review",
+        "handoff_to_agent" => "Transferring task responsibility",
+        "update_agent_job" => "Queuing an interaction update",
+        "cancel_agent_job" => "Requesting interaction cancellation",
+        "wait_for_agent_job" => "Waiting for a background result",
+        "check_delegations" => "Checking background interactions",
+        _ => fallback
+    };
 }
