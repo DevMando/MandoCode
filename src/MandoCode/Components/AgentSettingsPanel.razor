@@ -9,13 +9,13 @@
    @for (var i = 0; i < Groups.Length; i++)
    {
     var tab = i;
-    <div data-focusable="false" @onclick="@(() => ChangeTab(tab))"><Markup Content="@($" {Groups[i]} ")" Foreground="@(_tab == i ? Color.Black : Color.Grey85)" Background="@(_tab == i ? new Color(80, 55, 101) : new Color(22, 26, 30))" /></div>
+    <div data-focusable="false" @onclick="@(() => ChangeTab(tab))"><Markup Content="@($" {Groups[i]} ")" Foreground="@(_tab == i ? Color.White : Color.Grey85)" Background="@(_tab == i ? new Color(80, 55, 101) : new Color(22, 26, 30))" /></div>
    }
   </Flex></Box>
   <Box FillWidth="true" Height="@(ModelPicker is not null ? Math.Max(3, Height - 4) : Math.Min(PageSize, VisibleOptions.Sum(i => AgentSettingsDraft.Wrap(Items[i], TextWidth - 2).Length)))">
   @if (_custom && _editing is { } field)
   {
-   <Rows><Markup Content="@Spectre.Console.Markup.Escape(field.Label)" Foreground="Color.Purple" />
+   <Rows><Markup Content="@Spectre.Console.Markup.Escape(field.Label)" Foreground="Color.Green" />
    <PromptInput @ref="_customInput" ChatFeaturesEnabled="false" InitialValue="@field.Read(_draft.Config)" OnSubmit="SubmitValue" OnCancel="CancelCustom" Placeholder="Custom value" />
    </Rows>
   }
@@ -32,9 +32,9 @@
      @foreach (var index in VisibleOptions)
      {
       <div data-focusable="false" @onclick="@(() => Activate(index))"><Rows>
-       @foreach (var line in AgentSettingsDraft.Wrap(Items[index], TextWidth - 2).Select((text, row) => (text, row)))
+       @foreach (var line in OptionLines(index))
        {
-        <Markup Content="@Spectre.Console.Markup.Escape((line.row == 0 && index == _selected ? "> " : "  ") + line.text)" Foreground="@(index == _selected ? Color.Black : IsCurrentPreset(index) ? Color.Green : PaneColors.For(Pane, Color.Grey85))" Background="@(index == _selected ? PaneColors.For(Pane, Color.DeepSkyBlue1) : Color.Default)" />
+        <RenderableContent Content="@line" />
        }
       </Rows></div>
      }
@@ -56,8 +56,8 @@
     <Markup Content="Discard unsaved changes?" Foreground="Color.Green" />
    </Rows></Box>
    <Box Height="3" FillWidth="true"><Flex Direction="FlexDirection.Row">
-    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="KeepEditing"><Markup Content="@(_discardSelected ? "  Keep editing" : "> Keep editing")" Foreground="@(!_discardSelected ? Color.Black : Color.Grey85)" Background="@(!_discardSelected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
-    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Green"><div data-focusable="false" @onclick="Discard"><Markup Content="@(_discardSelected ? "> Discard changes" : "  Discard changes")" Foreground="@(_discardSelected ? Color.Black : Color.Grey85)" Background="@(_discardSelected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="KeepEditing"><Markup Content="@(_discardSelected ? "  Keep editing" : "> Keep editing")" Foreground="@(!_discardSelected ? Color.White : Color.Grey85)" Background="@(!_discardSelected ? SelectionBackground : Color.Default)" /></div></Box>
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Green"><div data-focusable="false" @onclick="Discard"><Markup Content="@(_discardSelected ? "> Discard changes" : "  Discard changes")" Foreground="@(_discardSelected ? Color.White : Color.Grey85)" Background="@(_discardSelected ? SelectionBackground : Color.Default)" /></div></Box>
    </Flex></Box>
   }
   else
@@ -67,7 +67,7 @@
    {
     var index = OptionCount + action;
     var label = Actions[action];
-    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="@(label == "Save" ? HasChanges ? Color.Green : Color.Grey42 : Color.Grey62)"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(label == "Save" && !HasChanges ? Color.Grey42 : index == _selected ? Color.Black : Color.Grey85)" Background="@(index == _selected && (label != "Save" || HasChanges) ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+    <Box Width="@(TextWidth / 2)" Height="3" Border="BoxBorder.Rounded" BorderColor="@(label == "Save" ? HasChanges ? Color.Green : Color.Grey42 : Color.Grey62)"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(label == "Save" && !HasChanges ? Color.Grey42 : index == _selected ? Color.White : Color.Grey85)" Background="@(index == _selected && (label != "Save" || HasChanges) ? SelectionBackground : Color.Default)" /></div></Box>
    }
   </Flex></Box>
   <Box Height="@GlobalDescriptionLines.Length"><Rows>@foreach (var line in GlobalDescriptionLines) { <Markup Content="@line" Foreground="Color.Grey70" /> }</Rows></Box>
@@ -75,7 +75,7 @@
   {
    var index = OptionCount + action;
    var label = Actions[action];
-   <Box Height="@(AgentSettingsDraft.Wrap(label, TextWidth - 4).Length + 2)" FillWidth="true" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(index == _selected ? Color.Black : Color.Grey85)" Background="@(index == _selected ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+   <Box Height="@(AgentSettingsDraft.Wrap(label, TextWidth - 4).Length + 2)" FillWidth="true" Border="BoxBorder.Rounded" BorderColor="Color.Grey62"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@((index == _selected ? "> " : "  ") + label)" Foreground="@(index == _selected ? Color.White : Color.Grey85)" Background="@(index == _selected ? SelectionBackground : Color.Default)" /></div></Box>
   }
   }
   @if (Config.ShowTips) { <Box Height="@TipLines.Length" FillWidth="true"><Rows>@foreach (var line in TipLines) { <Markup Content="@line" Foreground="Color.Grey50" /> }</Rows></Box> }
@@ -100,6 +100,30 @@
  [Parameter] public EventCallback<AgentSettingsDraft> OnSaveDefaults { get; set; }
  [Parameter] public EventCallback<int> OnManageIntegrations { get; set; }
  private static readonly string[] Groups = ["Model", "Behavior", "Integrations"];
+ private static readonly Color SelectionBackground = new(80, 55, 101);
+ private static readonly Color ValueColor = new(255, 200, 80);
+ private IEnumerable<Spectre.Console.Markup> OptionLines(int index)
+ {
+  var item = Items[index];
+  var labelEnd = _editing is null && (index < Fields.Length + FieldOffset) ? item.IndexOf(": ", StringComparison.Ordinal) + 2 : 0;
+  var background = index == _selected ? SelectionBackground : Color.Default;
+  var offset = 0;
+  var row = 0;
+  foreach (var line in AgentSettingsDraft.Wrap(item, TextWidth - 2))
+  {
+   var start = item.IndexOf(line, offset, StringComparison.Ordinal);
+   if (start < 0) start = offset;
+   var labelLength = Math.Clamp(labelEnd - start, 0, line.Length);
+   var ordinary = index == _selected ? Color.White : Color.Grey85;
+   string Paint(string text, Color color, bool bold = false) => $"[{color.ToMarkup()}{(index == _selected ? " on #503765" : "")}{(bold ? " bold" : "")}]" + Spectre.Console.Markup.Escape(text) + "[/]";
+   var result = Paint(row++ == 0 && index == _selected ? "> " : "  ", ordinary);
+   if (labelLength > 0) result += Paint(line[..labelLength], index == _selected ? Color.White : Color.Green);
+   var value = labelEnd > 0 || (_editing is not null && index < Presets.Length);
+   result += Paint(line[labelLength..], index == _selected ? Color.White : value ? ValueColor : ordinary, IsCurrentPreset(index));
+   offset = start + line.Length;
+   yield return new Spectre.Console.Markup(result);
+  }
+ }
  private AgentSettingsDraft _draft = default!;
  private string _draftModel = "";
  private AgentSettingsDraft.Field? _editing;

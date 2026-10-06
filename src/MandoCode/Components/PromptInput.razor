@@ -2,6 +2,7 @@
 @using MandoCode.Models
 @using MandoCode.Services
 @using Spectre.Console
+@using RazorConsole.Core.Renderables
 @implements IDisposable
 
 <div data-focusable="false" @onclick="FocusPromptAsync">
@@ -10,18 +11,49 @@
     {
         <ModelPickerPopup Picker="ModelPicker" />
     }
+    else if (_emojiOpen && ChatFeaturesEnabled)
+    {
+        <Panel Border="BoxBorder.Rounded" BorderColor="@InputColor(Color.Purple)" Expand="true" Title="Emoji">
+            <Rows>
+                @for (var row = EmojiStartRow; row < Math.Min(EmojiRowCount, EmojiStartRow + EmojiVisibleRows); row++)
+                {
+                    var rowIndex = row;
+                    <Flex Direction="FlexDirection.Row" Height="1">
+                        @for (var col = 0; col < EmojiColumns && rowIndex * EmojiColumns + col < _emojiChoices.Count; col++)
+                        {
+                            var index = rowIndex * EmojiColumns + col;
+                            <Box Width="5"><div data-focusable="false" @onclick="@(() => ChooseEmoji(index))"><Markup Content="@($" {_emojiChoices[index]} ")" Foreground="@InputColor(Color.White)" Background="@(index == _emojiSelected ? new Color(80, 55, 101) : Color.Default)" /></div></Box>
+                        }
+                    </Flex>
+                }
+                @if (_emojiChoices.Count == 0) { <Markup Content="No matching emoji" Foreground="@InputColor(Color.Grey)" /> }
+                <Markup Content="Type in prompt · ↑/↓/←/→ select · Enter insert · Esc close" Foreground="@InputColor(Color.Grey)" />
+            </Rows>
+        </Panel>
+    }
     else if (ChatFeaturesEnabled)
     {
         @if (_composer.FilesLoading) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
         <AutocompletePopup Composer="_composer" />
     }
+    <Flex Direction="FlexDirection.Row" Height="3">
+    <Box Width="@PromptWidth">
     <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
         <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="1"
                   WordWrap="false" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
                   CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
-                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen)"
+                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen)"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
     </Panel>
+    </Box>
+    @if (ShowEmojiButton)
+    {
+        <Box Width="1"><Markup Content=" " /></Box>
+        <Box Width="8" Height="3" Border="BoxBorder.Rounded" BorderColor="@InputColor(_emojiOpen ? Color.Purple : Color.Green)">
+            <div data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" @onkeydown="EmojiButtonKey" @onclick="OpenEmojiPicker"><Markup Content="  😀  " Foreground="@InputColor(Disabled ? Color.Grey : Color.White)" /></div>
+        </Box>
+    }
+    </Flex>
 </Rows>
 </div>
 
@@ -50,7 +82,7 @@
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
-    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files";
+    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files, : for emojis";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
@@ -61,7 +93,53 @@
     private string _lastInitialValue = "";
     private string? StateKey => PersistenceKey is not null ? "instruction-composer" : ChatFeaturesEnabled ? "chat-composer" : null;
     [Inject] private RazorConsole.Core.Rendering.ITerminalViewport Viewport { get; set; } = default!;
-    private int InputWidth => Math.Max(1, (ContentWidth ?? Pane?.Width ?? Viewport.Width) - 4);
+    private bool ShowEmojiButton => ChatFeaturesEnabled && ModelPicker is null && (ContentWidth ?? Pane?.Width ?? Viewport.Width) >= 18;
+    private int PromptWidth => Math.Max(1, (ContentWidth ?? Pane?.Width ?? Viewport.Width) - (ShowEmojiButton ? 9 : 0));
+    private int InputWidth => Math.Max(1, PromptWidth - 4);
+    private bool _emojiOpen;
+    private int _emojiSelected;
+    private IReadOnlyList<string> _emojiChoices = PromptEmojiAliases.PickerEmojis;
+    private bool _emojiFromToken;
+    private string _emojiFragment = "";
+    private int _dismissedEmojiStart = -1;
+    private int EmojiColumns => Math.Max(1, Math.Min(12, ((ContentWidth ?? Pane?.Width ?? Viewport.Width) - 4) / 5));
+    private int EmojiRowCount => (_emojiChoices.Count + EmojiColumns - 1) / EmojiColumns;
+    private int EmojiVisibleRows => Math.Max(1, Math.Min(4, Viewport.Height / 4));
+    private int EmojiStartRow => Math.Max(0, _emojiSelected / EmojiColumns - EmojiVisibleRows + 1);
+    private async Task OpenEmojiPicker()
+    {
+        if (Disabled || !ShowEmojiButton || Pane is { Active: false }) return;
+        _emojiOpen = !_emojiOpen;
+        _emojiFromToken = false;
+        _emojiChoices = PromptEmojiAliases.PickerEmojis;
+        _emojiSelected = 0;
+        if (_emojiOpen && PromptEmojiAliases.Fragment(_composer.Buffer) is { } token)
+        {
+            _emojiFromToken = true;
+            _emojiFragment = token.Name;
+            _emojiChoices = PromptEmojiAliases.Match(token.Name);
+            _dismissedEmojiStart = -1;
+        }
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
+    private async Task EmojiButtonKey(KeyboardEventArgs key)
+    {
+        if (key.Key is "Enter" or "Return" or " ") await OpenEmojiPicker();
+        else if (key.Key is "Escape" or "Tab") await FocusPromptAsync();
+    }
+    private async Task ChooseEmoji(int index)
+    {
+        if (Disabled || !ChatFeaturesEnabled || Pane is { Active: false } || index < 0 || index >= _emojiChoices.Count) return;
+        if (_emojiFromToken) PromptEmojiAliases.ReplaceFragment(_composer.Buffer, _emojiChoices[index]);
+        else PromptEmojiAliases.Insert(_composer.Buffer, _emojiChoices[index]);
+        _composer.Refresh();
+        _emojiOpen = false;
+        _emojiFromToken = false;
+        _dismissedEmojiStart = -1;
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
     public async Task FocusPromptAsync()
     {
         if (Pane is not null && !Pane.Active) return;
@@ -106,6 +184,7 @@
     }
     protected override void OnParametersSet()
     {
+        if (Disabled || ModelPicker is not null) _emojiOpen = false;
         if (!ReferenceEquals(ModelPicker, _previousPicker))
         {
             _previousPicker = ModelPicker;
@@ -142,6 +221,23 @@
 
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
+        if (Pane is { Active: false }) return true;
+        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (_emojiOpen && ChatFeaturesEnabled && !Disabled)
+        {
+            switch (key.Key)
+            {
+                case "ArrowLeft": case "LeftArrow": _emojiSelected = Math.Max(0, _emojiSelected - 1); break;
+                case "ArrowRight": case "RightArrow": _emojiSelected = Math.Max(0, Math.Min(_emojiChoices.Count - 1, _emojiSelected + 1)); break;
+                case "ArrowUp": case "UpArrow": _emojiSelected = Math.Max(0, _emojiSelected - EmojiColumns); break;
+                case "ArrowDown": case "DownArrow": _emojiSelected = Math.Max(0, Math.Min(_emojiChoices.Count - 1, _emojiSelected + EmojiColumns)); break;
+                case "Enter": case "Return": await ChooseEmoji(_emojiSelected); return true;
+                case "Escape": case "Tab": _emojiOpen = false; _dismissedEmojiStart = PromptEmojiAliases.Fragment(_composer.Buffer)?.Start ?? -1; break;
+                default: return false;
+            }
+            StateHasChanged();
+            return true;
+        }
         if (key.Key == "Tab" && ExplorerFocus?.Active == true && (Pane is null || Pane.Active))
         {
             await ExplorerFocus.ToggleAsync(key.ShiftKey);
@@ -181,12 +277,35 @@
             StateHasChanged();
             return true;
         }
+        if (key.Key == "Tab" && ShowEmojiButton) { await OpenEmojiPicker(); return true; }
         return false;
     }
     private void HandleChanged()
     {
         if (ModelPicker is { } picker) picker.Filter(_composer.Buffer.Text);
-        else if (ChatFeaturesEnabled) _composer.Refresh();
+        else if (ChatFeaturesEnabled)
+        {
+            var expanded = PromptEmojiAliases.Expand(_composer.Buffer);
+            var fragment = PromptEmojiAliases.Fragment(_composer.Buffer);
+            if (fragment is { } token && !Disabled)
+            {
+                if (_dismissedEmojiStart != token.Start)
+                {
+                    if (!_emojiOpen || !_emojiFromToken || _emojiFragment != token.Name) _emojiSelected = 0;
+                    _emojiChoices = PromptEmojiAliases.Match(token.Name);
+                    _emojiFragment = token.Name;
+                    _emojiFromToken = true;
+                    _emojiOpen = true;
+                }
+            }
+            else
+            {
+                if (_emojiFromToken || expanded) _emojiOpen = false;
+                _emojiFromToken = false;
+                _dismissedEmojiStart = -1;
+            }
+            _composer.Refresh();
+        }
         StateHasChanged();
     }
     private async Task HandleSubmit(string value)

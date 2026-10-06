@@ -232,12 +232,13 @@ public class TuiLayoutTests
     }
 
 
-    internal static async Task<string> Frame(TuiSession session, int width, int height, bool disabled = false, bool metadata = false, string initialValue = "", ModelPickerState? modelPicker = null)
+    internal static async Task<string> Frame(TuiSession session, int width, int height, bool disabled = false, bool metadata = false, string initialValue = "", ModelPickerState? modelPicker = null, SnapshotStore? snapshots = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddRazorConsoleServices();
         services.AddSingleton(session);
+        if (snapshots is not null) services.AddSingleton(snapshots);
         services.AddSingleton<ITerminalViewport>(new FixedViewport(width, height));
         services.AddSingleton(new InputStateMachine(new Dictionary<string, string> { ["/help"] = "Help" }, null));
         services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, TranscriptEntryTranslator>());
@@ -267,8 +268,15 @@ public class TuiLayoutTests
                 builder.AddAttribute(3, "ModelPicker", modelPicker);
                 builder.CloseComponent();
             };
-            var root = await renderer.RenderComponentAsync<ChatShell>(ParameterView.FromDictionary(
-                new Dictionary<string, object?> { ["Footer"] = footer }));
+            var parameters = new Dictionary<string, object?> { ["Footer"] = footer };
+            if (snapshots is not null)
+            {
+                parameters["SnapshotsOpen"] = true;
+                parameters["SnapshotContext"] = new SnapshotContext();
+                parameters["SettingsConfig"] = new MandoCodeConfig { ModelName = "test-model", AllowPersistence = false };
+                parameters["OllamaEndpoint"] = "http://127.0.0.1:1";
+            }
+            var root = await renderer.RenderComponentAsync<ChatShell>(ParameterView.FromDictionary(parameters));
             var document = new HtmlDocument();
             document.LoadHtml(root.ToHtmlString());
             var vdom = VNode.CreateRegion();

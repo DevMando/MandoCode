@@ -15,6 +15,8 @@ public class ToolActivityIconsTests
     [InlineData("delete_folder", "🗑️")]
     [InlineData("execute_command", "⚡")]
     [InlineData("unknown_tool", "⚡")]
+    [InlineData("load_skill", "🧠")]
+    [InlineData("Skills_load_skill", "🧠")]
     public void UsesToolIdentity(string tool, string icon) => Assert.Equal(icon, ToolActivityIcons.For(tool));
 
     [Fact]

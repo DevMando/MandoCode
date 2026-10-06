@@ -61,6 +61,12 @@
                 <OllamaPullPanel Endpoint="@OllamaEndpoint" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnOllamaPullClose" />
             </Box>
         }
+        @if (SnapshotsOpen)
+        {
+            <Box Width="@BrowserWidth" FillHeight="true">
+                <ContextSnapshotsPanel Context="@(SnapshotContext!)" Endpoint="@OllamaEndpoint" CurrentModel="@(SettingsConfig!.GetEffectiveModelName())" StartCreating="SnapshotCreate" SwitchOffer="SnapshotOffer" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSnapshotsClose" OnCapture="OnSnapshotCapture" OnKeepMemory="OnSnapshotKeepMemory" />
+            </Box>
+        }
         @if (SetupOpen)
         {
             <Box Width="@AvailableWidth" FillHeight="true">
@@ -113,7 +119,7 @@
     private void FocusChanged() => _ = InvokeAsync(StateHasChanged);
     protected override void OnParametersSet()
     {
-        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen || OllamaPullOpen || SetupOpen) && !DirectoryBrowserOpen;
+        _explorerFocus.Active = (FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen || SnapshotsOpen || OllamaPullOpen || SetupOpen) && !DirectoryBrowserOpen;
         if (!GitChangesOpen) _gitDiffOpen = false;
         if (Pane is not null) { Pane.ExplorerFocus = _explorerFocus; Pane.IsGitDiffOpen = () => GitChangesOpen && _gitDiffOpen; }
     }
@@ -128,6 +134,13 @@
     [Parameter] public bool SettingsOpen { get; set; }
     [Parameter] public bool OllamaPullOpen { get; set; }
     [Parameter] public bool SetupOpen { get; set; }
+    [Parameter] public bool SnapshotsOpen { get; set; }
+    [Parameter] public bool SnapshotCreate { get; set; }
+    [Parameter] public bool SnapshotOffer { get; set; }
+    [Parameter] public SnapshotContext? SnapshotContext { get; set; }
+    [Parameter] public EventCallback OnSnapshotsClose { get; set; }
+    [Parameter] public EventCallback OnSnapshotCapture { get; set; }
+    [Parameter] public EventCallback OnSnapshotKeepMemory { get; set; }
     [Parameter] public EventCallback<OnboardingFlow.FlowResult> OnSetupComplete { get; set; }
     [Parameter] public string OllamaEndpoint { get; set; } = "http://localhost:11434";
     [Parameter] public EventCallback OnOllamaPullClose { get; set; }
@@ -154,9 +167,9 @@
     [Parameter] public EventCallback OnFileExplorerClose { get; set; }
     [Parameter] public EventCallback<string?> OnDirectoryChosen { get; set; }
     private int AvailableWidth => Math.Max(1, Pane?.Width ?? Viewport.Width);
-    private int BrowserWidth => HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : (IntegrationsOpen || OllamaPullOpen) ? Math.Min(80, AvailableWidth * 2 / 3) : Math.Min(50, AvailableWidth / 2);
-    private bool NarrowPanel => SetupOpen || HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen || IntegrationsOpen || OllamaPullOpen) && AvailableWidth < 90);
-    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen || OllamaPullOpen) ? BrowserWidth : 0);
+    private int BrowserWidth => SnapshotsOpen ? AvailableWidth < 140 ? AvailableWidth : Math.Min(140, AvailableWidth * 3 / 4) : HistoryOpen || _gitDiffOpen || AvailableWidth < 90 ? AvailableWidth : (IntegrationsOpen || SnapshotsOpen || OllamaPullOpen) ? Math.Min(80, AvailableWidth * 2 / 3) : Math.Min(50, AvailableWidth / 2);
+    private bool NarrowPanel => SetupOpen || (SnapshotsOpen && AvailableWidth < 140) || HistoryOpen || _gitDiffOpen || ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || SettingsOpen || IntegrationsOpen || SnapshotsOpen || OllamaPullOpen) && AvailableWidth < 90);
+    private int ContentWidth => NarrowPanel ? AvailableWidth : AvailableWidth - ((DirectoryBrowserOpen || FileExplorerOpen || GitChangesOpen || HistoryOpen || SettingsOpen || IntegrationsOpen || SnapshotsOpen || OllamaPullOpen) ? BrowserWidth : 0);
     private int PanelHeight => Math.Max(6, (Pane?.Height ?? Viewport.Height) - (NarrowPanel && (FileExplorerOpen || GitChangesOpen || HistoryOpen) ? 6 : 0));
     private int FooterWidth => Math.Max(2, ContentWidth - 2);
     private bool ShowButtonShortcuts => FooterWidth >= 70;

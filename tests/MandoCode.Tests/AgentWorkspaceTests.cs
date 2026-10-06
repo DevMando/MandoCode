@@ -358,4 +358,36 @@ public class AgentWorkspaceTests
         workspace.Command(first, "/agent-close");
         Assert.Single(workspace.Panes);
     }
+
+    [Theory]
+    [InlineData("k", "/skills", "Alt+K")]
+    [InlineData("M", "/mcp", "Alt+M")]
+    public void IntegrationShortcuts_OpenOnlyForActiveIdleAgent(string key, string command, string label)
+    {
+        using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add();
+        var inactive = workspace.Add();
+        workspace.Focus(pane);
+        var submitted = new List<string>();
+        pane.SubmitCommand = inactive.SubmitCommand = value => { submitted.Add(value); return Task.CompletedTask; };
+        Assert.False(workspace.Key(pane, new() { Key = key }));
+        Assert.True(workspace.Key(pane, new() { Key = key, AltKey = true }));
+        Assert.Equal(new[] { command }, submitted);
+        submitted.Clear();
+        workspace.Key(inactive, new() { Key = key, AltKey = true });
+        workspace.Key(pane, new() { Key = key, AltKey = true, ShiftKey = true });
+        workspace.Key(pane, new() { Key = key, AltKey = true, CtrlKey = true });
+        pane.IsBusy = () => true;
+        workspace.Key(pane, new() { Key = key, AltKey = true });
+        pane.IsBusy = () => false;
+        pane.IsAwaitingInput = () => true;
+        workspace.Key(pane, new() { Key = key, AltKey = true });
+        Assert.Empty(submitted);
+        pane.IsAwaitingInput = () => false;
+        Assert.True(workspace.Key(pane, new() { Key = key, MetaKey = true }));
+        Assert.Equal(new[] { command }, submitted);
+        Assert.Contains(label, SlashCommands.All[command]);
+        Assert.Contains(Keybindings.All, binding => binding.Keys == label && binding.Action.Contains(command));
+    }
 }

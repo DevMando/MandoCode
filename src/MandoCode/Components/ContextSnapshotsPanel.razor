@@ -1,0 +1,316 @@
+@using RazorConsole.Core.Renderables
+@using RazorConsole.Core.Input
+@using Spectre.Console
+@inject RazorConsole.Core.Focus.FocusManager Focus
+@inject SnapshotStore Store
+@implements IDisposable
+
+<Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="Context Snapshots" BorderColor="@PaneColors.For(Pane, Color.Purple)">
+ <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+  <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
+   @if (BrowserMode) {
+    <Flex Direction="@(Width >= 50 ? FlexDirection.Row : FlexDirection.Column)" FillWidth="true">
+     <Box Width="@SearchWidth" Height="3" Border="BoxBorder.Rounded" Title="Search" BorderColor="@PaneColors.For(Pane, _inputFocused ? Color.DeepSkyBlue1 : Color.Grey50)">
+      <div data-focusable="false" @onclick="FocusInput"><TextArea Buffer="@_input" Editable="true" Width="@Math.Max(1, SearchWidth - 2)" Height="1" WordWrap="false" CharacterStyle="@(_ => new Style(new Color(255, 200, 80)))" Hook="@_inputKey" OnPreviewKey="InputKey" OnChanged="InputChanged" OnSubmit="InputSubmitted" /></div>
+     </Box>
+     <Flex Direction="FlexDirection.Row">@ActionButton("Create Snapshot", BeginCreate, 20) @ActionButton("Close", Close, 9)</Flex>
+    </Flex>
+   } else {
+    <Rows>
+     @if (_busy) { @Wrapped($"{Frames[_frame % Frames.Length]} {_status}", Color.Purple) @Button("Cancel", Cancel) }
+     else if (_offer) {
+      @Wrapped("The model changed. Keep the conversation with this model, or save a snapshot of the previous context?", Color.Grey85)
+      @Button("Keep Memory", KeepMemory) @Button("Create Snapshot", BeginCreate) @Button("Dismiss", Close)
+     } else if (_confirmDelete) {
+      @Wrapped($"Delete snapshot “{Selected?.Name}”? This removes the saved summary.", Color.Grey85)
+      @Button("Cancel", CancelDelete) @Button("Delete", Delete)
+     } else if (_choosingModel) {
+      @Wrapped("Summarizer model · ↑/↓ select · Enter choose · Esc back", Color.Grey70)
+      @foreach (var i in Enumerable.Range(Math.Max(0, _modelIndex - RowsVisible / 2), Math.Min(RowsVisible, _models.Length - Math.Max(0, _modelIndex - RowsVisible / 2)))) {
+       var index = i;
+       <div data-focusable="false" @onclick="@(() => ChooseModel(index))">@Literal(WorkspaceTabWindow.Fit((_modelIndex == i ? "> " : "  ") + _models[i], Width - 4), _modelIndex == i ? Color.Black : PaneColors.For(Pane, Color.Green), _modelIndex == i ? Color.DeepSkyBlue1 : Color.Default)</div>
+      }
+     } else {
+      <Box FillWidth="true" Height="3" Border="BoxBorder.Rounded" Title="Snapshot name (optional)" BorderColor="@PaneColors.For(Pane, _inputFocused ? Color.DeepSkyBlue1 : Color.Grey50)">
+       <div data-focusable="false" @onclick="FocusInput"><TextArea Buffer="@_input" Editable="true" Width="@Math.Max(1, Width - 6)" Height="1" WordWrap="false" CharacterStyle="@(_ => new Style(new Color(255, 200, 80)))" Hook="@_inputKey" OnPreviewKey="InputKey" OnChanged="InputChanged" OnSubmit="InputSubmitted" /></div>
+      </Box>
+      @Wrapped("Type a name, or leave it blank for an AI title. Tab moves to the model and buttons.", Color.Grey70)
+      @Wrapped("Creates a saved summary of this conversation. Your agent's current context stays intact.", Color.Grey70)
+      @Button("Model: " + _model, ShowModels) @Button("Create", Create) @Button("Back", Back)
+     }
+    </Rows>
+   }
+  </div>
+  @if (BrowserMode) {
+   <Flex Direction="@(WideBrowser ? FlexDirection.Row : FlexDirection.Column)" FillWidth="true" FillHeight="true">
+    <Box Width="@ListWidth" Height="@ListHeight" Border="BoxBorder.Rounded" Title="Snapshots" BorderColor="@PaneColors.For(Pane, ListFocused ? Color.DeepSkyBlue1 : Color.Grey50)">
+     <Rows>
+      @foreach (var rowIndex in VisibleRows) {
+       var index = rowIndex;
+       var row = DisplayRows[index];
+       @if (row.Item is null) {
+        <div data-focusable="false" @onclick="@(() => ToggleProject(row.Project))">@Literal(WorkspaceTabWindow.Fit(($"{(_collapsed.Contains(row.Project) ? "▸" : "▾")} {ProjectLabel(row.Project)}"), ListWidth - 4), ListFocused && _listRow == index ? Color.Black : PaneColors.For(Pane, Color.Purple), ListFocused && _listRow == index ? Color.DeepSkyBlue1 : Color.Default)</div>
+       } else {
+        var item = row.Item;
+        var selected = Selected?.Id == item.Id;
+        var background = selected ? ListFocused ? Color.DeepSkyBlue1 : new Color(36, 41, 47) : Color.Default;
+        <div data-focusable="false" @onclick="@(() => Select(Array.FindIndex(Matches, s => s.Id == item.Id)))">
+         @Literal(WorkspaceTabWindow.Fit((selected && ListFocused ? "> " : "  ") + item.Name, ListWidth - 4), selected && ListFocused ? Color.Black : PaneColors.For(Pane, Color.Green), background)
+         @Literal(WorkspaceTabWindow.Fit($"  {item.CapturedAt.ToLocalTime():MMM d, yyyy h:mm tt}", ListWidth - 4), selected && ListFocused ? Color.Black : PaneColors.For(Pane, Color.Grey70), background)
+         @Literal(WorkspaceTabWindow.Fit("  " + item.OriginModel, ListWidth - 4), selected && ListFocused ? Color.Black : PaneColors.For(Pane, Color.Grey70), background)
+        </div>
+       }
+      }
+      @if (Matches.Length == 0) { @WrappedTo("No snapshots found. Create one from a conversation to get started.", ListWidth - 4, Color.Grey70) }
+     </Rows>
+    </Box>
+    <Box Width="@PreviewWidth" Height="@SummaryHeight" Border="BoxBorder.Rounded" Title="Summary" BorderColor="@PaneColors.For(Pane, _previewFocused ? Color.DeepSkyBlue1 : Color.Grey50)">
+     <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
+      @if (Selected is { } snapshot) {
+       @WrappedTo(snapshot.Name, PreviewWidth - 4, Color.Green)
+       @WrappedTo($"{snapshot.MessageCount} messages · Summarized by {snapshot.SummarizerModel}", PreviewWidth - 4, Color.Purple)
+       <Box FillHeight="true" FillWidth="true">
+        <div data-focusable="false" @onclick="FocusPreview" @onwheel="PreviewWheel"><Rows>
+         @foreach (var line in PreviewLines.Skip(_previewOffset).Take(PreviewHeight)) { @Literal(line, PaneColors.For(Pane, Color.Grey85)) }
+        </Rows></div>
+       </Box>
+       @Literal($"{Math.Min(_previewOffset + 1, PreviewLines.Length)}–{Math.Min(_previewOffset + PreviewHeight, PreviewLines.Length)} / {PreviewLines.Length} lines", PaneColors.For(Pane, Color.Grey62))
+       <Flex Direction="FlexDirection.Row">@ActionButton("Import into Agent", Import, 21) @ActionButton("Delete", ConfirmDelete, 10)</Flex>
+      } else {
+       @WrappedTo("Select a snapshot to read its summary.", PreviewWidth - 4, Color.Grey70)
+       <Box FillHeight="true"><Markup Content=" " /></Box>
+       <Flex Direction="FlexDirection.Row">@ActionButton("Import into Agent", Import, 21) @ActionButton("Delete", ConfirmDelete, 10)</Flex>
+      }
+     </Flex>
+    </Box>
+   </Flex>
+  } else { <Box FillHeight="true"><Markup Content=" " /></Box> }
+  @if (!_busy && _status.Length > 0) { @Wrapped(_status, _error ? Color.Yellow : Color.Green) }
+  @if (!_busy) { @Wrapped(Hint, Color.Grey62) }
+ </Flex>
+</Box>
+@code {
+ [CascadingParameter] public AgentPane? Pane { get; set; }
+ [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+ [Parameter] public SnapshotContext Context { get; set; } = default!;
+ [Parameter] public string Endpoint { get; set; } = "http://localhost:11434";
+ [Parameter] public string CurrentModel { get; set; } = "";
+ [Parameter] public bool StartCreating { get; set; }
+ [Parameter] public bool SwitchOffer { get; set; }
+ [Parameter] public int Width { get; set; } = 70;
+ [Parameter] public int Height { get; set; } = 30;
+ [Parameter] public EventCallback OnClose { get; set; }
+ [Parameter] public EventCallback OnKeepMemory { get; set; }
+ [Parameter] public EventCallback OnCapture { get; set; }
+ private readonly string _focusKey = "snapshots-" + Guid.NewGuid().ToString("N"), _inputKey = "snapshot-input-" + Guid.NewGuid().ToString("N");
+ private readonly TextSelectionState _input = new();
+ private readonly CancellationTokenSource _shutdown = new();
+ private CancellationTokenSource? _operation;
+ private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
+ private static readonly string[] Frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+ private string _model = "", _query = "", _status = "";
+ private string[] _models = [];
+ private int _selected, _action, _modelIndex, _previewOffset, _frame;
+ private bool _listFocused = true;
+ private bool _previewFocused;
+ private int _listRow = 1, _listOffset;
+ private Guid? _selectionId;
+ private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
+ private sealed record BrowserRow(string Project, ContextSnapshot? Item);
+ private bool BrowserMode => !_create && !_offer && !_confirmDelete && !_choosingModel && !_busy;
+ private bool WideBrowser => Width >= 100;
+ private int SearchWidth => Math.Max(3, Width - (Width >= 50 ? 31 : 2));
+ private string Hint => BrowserMode ? "Tab sections · ↑/↓ navigate · Enter import/toggle · PgUp/PgDn scroll · Esc close" : "Tab select · ↑/↓ or ←/→ choose · Enter confirm · Esc back";
+ private int BodyHeight => Math.Max(8, Height - (Width >= 50 ? 5 : 6) - AgentSettingsDraft.Wrap(Hint, Math.Max(1, Width - 4)).Count() - AgentSettingsDraft.Wrap(_status, Math.Max(1, Width - 4)).Count());
+ private int ListWidth => WideBrowser ? Math.Min(48, Width * 2 / 5) : Width - 2;
+ private int PreviewWidth => WideBrowser ? Width - ListWidth - 2 : Width - 2;
+ private int ListHeight => WideBrowser ? BodyHeight : Math.Max(6, Math.Min(10, BodyHeight / 3));
+ private int SummaryHeight => WideBrowser ? BodyHeight : Math.Max(4, BodyHeight - ListHeight);
+ private string[] PreviewLines => AgentSettingsDraft.Wrap(Selected?.Recap ?? "", Math.Max(1, PreviewWidth - 4)).ToArray();
+ private int PreviewHeight => Math.Max(1, SummaryHeight - 4 - AgentSettingsDraft.Wrap(Selected?.Name ?? "", Math.Max(1, PreviewWidth - 4)).Count() - AgentSettingsDraft.Wrap($"{Selected?.MessageCount} messages · Summarized by {Selected?.SummarizerModel}", Math.Max(1, PreviewWidth - 4)).Count());
+ private BrowserRow[] DisplayRows => Matches.GroupBy(s => s.ProjectRoot, StringComparer.OrdinalIgnoreCase)
+  .OrderByDescending(g => g.Max(s => s.CapturedAt)).SelectMany(g => new[] { new BrowserRow(g.Key, null) }
+   .Concat(_collapsed.Contains(g.Key) ? [] : g.Select(s => new BrowserRow(g.Key, s)))).ToArray();
+ private IEnumerable<int> VisibleRows {
+  get {
+   var rows = DisplayRows; var height = 0;
+   for (var i = _listOffset; i < rows.Length; i++) { height += rows[i].Item is null ? 1 : 3; if (height > ListHeight - 2) yield break; yield return i; }
+  }
+ }
+ private RenderFragment WrappedTo(string text, int width, Color color) => @<Rows>@foreach (var line in AgentSettingsDraft.Wrap(text, Math.Max(1, width))) { @Literal(line, PaneColors.For(Pane, color)) }</Rows>;
+ private RenderFragment ActionButton(string label, Func<Task> click, int width) {
+  var cells = Math.Min(width, Math.Max(1, label == "Create Snapshot" ? Width - 11 : label == "Import into Agent" ? PreviewWidth - 12 : PreviewWidth / 3));
+  return @<Box Width="@cells">@Button(label, click, cells)</Box>;
+ }
+ private void ResetBrowser(Guid? preferred = null) {
+  var item = DisplayRows.Select(row => row.Item).FirstOrDefault(item => item is not null && item.Id == preferred)
+   ?? DisplayRows.Select(row => row.Item).FirstOrDefault(item => item is not null);
+  _selectionId = item?.Id;
+  _selected = item is null ? -1 : Array.FindIndex(Matches, s => s.Id == item.Id);
+  _listRow = item is null ? 0 : Array.FindIndex(DisplayRows, row => row.Item?.Id == item.Id);
+  _listOffset = _previewOffset = 0; EnsureListVisible();
+ }
+ private void EnsureListVisible() {
+  _listRow = Math.Clamp(_listRow, 0, Math.Max(0, DisplayRows.Length - 1));
+  _listOffset = Math.Min(_listOffset, _listRow);
+  while (_listOffset < _listRow && !VisibleRows.Contains(_listRow)) _listOffset++;
+ }
+ private void MoveList(int delta) {
+  _listRow = Math.Clamp(_listRow + delta, 0, Math.Max(0, DisplayRows.Length - 1));
+  var item = DisplayRows.ElementAtOrDefault(_listRow)?.Item;
+  _selected = item is null ? -1 : Array.FindIndex(Matches, s => s.Id == item.Id);
+  _selectionId = item?.Id;
+  _previewOffset = 0; EnsureListVisible();
+ }
+ private async Task ToggleProject(string project) {
+  _previewFocused = false; _listFocused = true;
+  if (!_collapsed.Add(project)) _collapsed.Remove(project);
+  _listRow = Array.FindIndex(DisplayRows, row => row.Item is null && row.Project == project);
+  _selected = -1; _selectionId = null; EnsureListVisible(); await FocusPanel();
+ }
+ private async Task FocusPreview() { _previewFocused = true; _listFocused = false; await FocusPanel(); }
+ private void ScrollPreview(int delta) => _previewOffset = Math.Clamp(_previewOffset + delta, 0, Math.Max(0, PreviewLines.Length - PreviewHeight));
+ private async Task PreviewWheel(WheelEventArgs args) { await FocusPreview(); ScrollPreview(Math.Sign(args.DeltaY) * 3); }
+ private bool ListFocused => DisplayRows.Length > 0 && _listFocused && !_previewFocused && !_create && !_offer && !_confirmDelete && !_choosingModel && !_busy && !_inputFocused;
+ private bool _create, _offer, _busy, _error, _inputFocused, _confirmDelete, _choosingModel, _disposed;
+ private int RowsVisible => Math.Max(1, Math.Min(6, (Height - 12) / 4));
+ private ContextSnapshot[] Matches => Store.Items.Where(s => ($"{s.Name} {s.ProjectRoot} {s.OriginModel} {s.SummarizerModel} {s.Recap}").Contains(_query.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(s => s.ProjectRoot, StringComparer.OrdinalIgnoreCase).ThenByDescending(s => s.CapturedAt).ToArray();
+ private ContextSnapshot? Selected => _selectionId is { } id ? Matches.FirstOrDefault(s => s.Id == id) : Matches.ElementAtOrDefault(_selected);
+ private string[] Actions => _busy ? ["Cancel"] : _offer ? ["Keep Memory", "Create Snapshot", "Dismiss"] : _confirmDelete ? ["Cancel", "Delete"] : _create ? ["Model: " + _model, "Create", "Back"] : ["Create Snapshot", "Import into Agent", "Delete", "Close"];
+ private RenderFragment Button(string label, Func<Task> click, int? cells = null) => @<div data-focusable="false" @onclick="@(() => Click(label, click))">@Literal(WorkspaceTabWindow.Fit((!_inputFocused && !ListFocused && !_previewFocused && Actions.ElementAtOrDefault(_action) == label ? "> " : "  ") + (cells < 20 && label == "Create Snapshot" ? "Create" : cells < 21 && label == "Import into Agent" ? "Import" : label), cells ?? (Width - 4)), !_inputFocused && !ListFocused && !_previewFocused && Actions.ElementAtOrDefault(_action) == label ? Color.Black : PaneColors.For(Pane, label == "Delete" ? Color.Red : Color.Grey85), !_inputFocused && !ListFocused && !_previewFocused && Actions.ElementAtOrDefault(_action) == label ? Color.DeepSkyBlue1 : new Color(22, 26, 30))</div>;
+ private RenderFragment Wrapped(string value, Color color) => @<Rows>@foreach (var line in AgentSettingsDraft.Wrap(value, Math.Max(1, Width - 4))) { @Literal(line, PaneColors.For(Pane, color)) }</Rows>;
+ private RenderFragment Literal(string text, Color color, Color? background = null) => @<RenderableContent Content="@(new Text(text, new Style(color, background)))" />;
+ private static string Escape(string text) => Spectre.Console.Markup.Escape(text);
+ private static string ProjectLabel(string path) => string.IsNullOrWhiteSpace(path) ? "No project" : Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+ protected override void OnInitialized() {
+  Store.Refresh();
+  ResetBrowser();
+  _model = CurrentModel; _models = [_model]; _create = StartCreating; _offer = SwitchOffer;
+  _inputFocused = _create && !_offer;
+  _status = Store.LoadError is { } error ? "Could not load saved snapshots: " + error : ""; _error = Store.LoadError is not null;
+  Store.Changed += StoreChanged; _ = LoadModels(); _ = Animate();
+ }
+ private void StoreChanged() { if (!_disposed) _ = InvokeAsync(() => { ResetBrowser(_selectionId); StateHasChanged(); }); }
+ protected override void OnParametersSet() { if (ExplorerFocus is not null) { ExplorerFocus.NavigateTab = Cycle; ExplorerFocus.FocusExplorer = FocusPanel; } }
+ protected override async Task OnAfterRenderAsync(bool firstRender) { if ((Pane is null || Pane.Active) && !Focus.IsFocused(_inputFocused ? _inputKey : _focusKey)) { if (_inputFocused) await FocusInput(); else await FocusPanel(); } }
+ private async Task FocusPanel() { _inputFocused = false; if (Pane is not null) Pane.FocusKey = _focusKey; ExplorerFocus?.SetPromptFocused(false); await Focus.FocusAsync(_focusKey); }
+ private async Task FocusInput() { if (_busy || _offer || _confirmDelete || _choosingModel) return; _previewFocused = false; _inputFocused = true; if (Pane is not null) Pane.FocusKey = _inputKey; await Focus.FocusAsync(_inputKey); }
+ private async Task Cycle(bool reverse) {
+  if (_busy || _offer || _confirmDelete || _choosingModel) { _action = (_action + (reverse ? Actions.Length - 1 : 1)) % Actions.Length; await FocusPanel(); return; }
+  if (BrowserMode) {
+   // Visual order: search, list, toolbar, preview, preview actions.
+   var position = _inputFocused ? 0 : ListFocused ? 1 : _previewFocused ? 4 : _action switch { 0 => 2, 3 => 3, 1 => 5, _ => 6 };
+   position = (position + (reverse ? 6 : 1)) % 7;
+   if (position == 1 && DisplayRows.Length == 0) position = reverse ? 0 : 2;
+   _listFocused = position == 1; _previewFocused = position == 4;
+   if (position == 0) await FocusInput();
+   else { _action = position switch { 2 => 0, 3 => 3, 5 => 1, 6 => 2, _ => _action }; await FocusPanel(); }
+   return;
+  }
+  var hasList = !_create && Matches.Length > 0;
+  if (_inputFocused) { _listFocused = !reverse && hasList; _action = reverse ? Actions.Length - 1 : 0; await FocusPanel(); }
+  else if (ListFocused) { _listFocused = false; if (reverse) await FocusInput(); else { _action = 0; await FocusPanel(); } }
+  else if (!reverse && _action == Actions.Length - 1) await FocusInput();
+  else if (reverse && _action == 0) { if (hasList) { _listFocused = true; await FocusPanel(); } else await FocusInput(); }
+  else { _action += reverse ? -1 : 1; await FocusPanel(); }
+ }
+ private void InputChanged() { if (!_create) { _query = _input.Text; _collapsed.Clear(); ResetBrowser(); } }
+ private async Task InputSubmitted(string _) { _previewFocused = false; _listFocused = !_create && Matches.Length > 0; await FocusPanel(); }
+ private async Task<bool> InputKey(KeyboardEventArgs key) {
+  // This is an inline field, not an Enter-to-edit/submit prompt.
+  if (_create && key.Key == "Enter") return true;
+  if (key.Key == "Tab") { await Cycle(key.ShiftKey); return true; }
+  if (key.Key == "ArrowDown") { _previewFocused = false; _listFocused = !_create && Matches.Length > 0; await FocusPanel(); return true; }
+  if (key.Key == "Escape") { if (_create) await Back(); else await Close(); return true; }
+  return false;
+ }
+ private async Task Key(KeyboardEventArgs key) {
+  if (Pane is not null && !Pane.Active) return;
+  if (_busy) { if (key.Key is "Enter" or "Escape") await Cancel(); return; }
+  if (key.Key == "Escape") { if (_confirmDelete) await CancelDelete(); else if (_choosingModel) _choosingModel = false; else if (_create) await Back(); else await Close(); return; }
+  if (_choosingModel) {
+   if (key.Key == "ArrowUp") _modelIndex = Math.Max(0, _modelIndex - 1);
+   if (key.Key == "ArrowDown") _modelIndex = Math.Min(_models.Length - 1, _modelIndex + 1);
+   if (key.Key == "Enter") await ChooseModel(_modelIndex);
+   return;
+  }
+  if (key.Key == "Tab") { await Cycle(key.ShiftKey); return; }
+  if (BrowserMode && _previewFocused) {
+   if (key.Key == "ArrowLeft") { _previewFocused = false; _listFocused = true; }
+   else if (key.Key == "ArrowUp") ScrollPreview(-1);
+   else if (key.Key == "ArrowDown") ScrollPreview(1);
+   else if (key.Key == "PageUp") ScrollPreview(-PreviewHeight);
+   else if (key.Key == "PageDown") ScrollPreview(PreviewHeight);
+   else if (key.Key == "Home") _previewOffset = 0;
+   else if (key.Key == "End") _previewOffset = Math.Max(0, PreviewLines.Length - PreviewHeight);
+   return;
+  }
+  if (key.Key is "ArrowLeft" or "ArrowRight") {
+   if (ListFocused && key.Key == "ArrowRight") { await FocusPreview(); return; }
+   if (ListFocused) { _listFocused = false; _action = Actions.Length - 1; }
+   else _action = (_action + (key.Key == "ArrowLeft" ? Actions.Length - 1 : 1)) % Actions.Length;
+   return;
+  }
+  if (key.Key is "ArrowUp" or "ArrowDown") {
+   if (!ListFocused) _action = (_action + (key.Key == "ArrowUp" ? Actions.Length - 1 : 1)) % Actions.Length;
+   else MoveList(key.Key == "ArrowUp" ? -1 : 1);
+  }
+  if (key.Key is "PageUp" or "PageDown") ScrollPreview(key.Key == "PageUp" ? -PreviewHeight : PreviewHeight);
+  if (key.Key == "Enter") {
+   if (ListFocused) { if (DisplayRows.ElementAtOrDefault(_listRow) is { Item: null } group) await ToggleProject(group.Project); else await Import(); return; }
+   if (_offer) { if (_action == 0) await KeepMemory(); else if (_action == 1) await BeginCreate(); else await Close(); }
+   else if (_confirmDelete) { if (_action == 1) await Delete(); else await CancelDelete(); }
+   else if (_create) { if (_action == 0) await ShowModels(); else if (_action == 1) await Create(); else await Back(); }
+   else { if (_action == 0) await BeginCreate(); else if (_action == 1) await Import(); else if (_action == 2) await ConfirmDelete(); else await Close(); }
+  }
+ }
+ private async Task Click(string label, Func<Task> click) { _previewFocused = false; _listFocused = false; _action = Array.IndexOf(Actions, label); await FocusPanel(); await click(); }
+ private async Task Select(int index) { _previewFocused = false; _listFocused = true; _selected = index; _selectionId = Matches.ElementAtOrDefault(index)?.Id; _listRow = Array.FindIndex(DisplayRows, row => row.Item?.Id == Selected?.Id); _previewOffset = 0; EnsureListVisible(); await FocusPanel(); }
+ private async Task BeginCreate() { if (!_offer) await OnCapture.InvokeAsync(); _offer = false; _listFocused = false; _create = true; _input.SetText(""); _status = ""; _action = 1; await FocusInput(); }
+ private async Task Back() { _listFocused = true; _create = false; _query = ""; _input.SetText(""); _action = 0; await FocusPanel(); }
+ private Task ShowModels() { _choosingModel = true; _modelIndex = Math.Max(0, Array.IndexOf(_models, _model)); return Task.CompletedTask; }
+ private Task ChooseModel(int index) { _model = _models[index]; _choosingModel = false; return Task.CompletedTask; }
+ private Task ConfirmDelete() { if (Selected is not null) { _confirmDelete = true; _action = 0; } return Task.CompletedTask; }
+ private Task CancelDelete() { _confirmDelete = false; _action = 0; return Task.CompletedTask; }
+ private Task Delete() {
+  try { if (Selected is { } item) Store.Remove(item.Id); _selected = Math.Min(_selected, Math.Max(0, Matches.Length - 1)); _confirmDelete = false; _action = 0; _previewOffset = 0; _status = "Snapshot deleted."; _error = false; }
+  catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status = ex.Message; _error = true; }
+  return Task.CompletedTask;
+ }
+ private async Task Import() { if (Selected is not { } item) return; Context.Queue(item); await Close(); }
+ private async Task KeepMemory() {
+  try { await OnKeepMemory.InvokeAsync(); await Close(); }
+  catch (IOException ex) { _status = ex.Message; _error = true; }
+ }
+ private async Task Close() { Context.ClearPending(); await OnClose.InvokeAsync(); }
+ private Task Cancel() { _operation?.Cancel(); return Task.CompletedTask; }
+ private Task Create() {
+  if (Context.Pending is not { } pending) { _status = "Send a message before creating a snapshot."; _error = true; return Task.CompletedTask; }
+  _busy = true; _inputFocused = false; _error = false; _status = "Creating snapshot…";
+  _operation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+  _ = Generate(pending, _input.Text.Trim(), _model, _operation); return Task.CompletedTask;
+ }
+ private async Task Generate(PendingContextSnapshot pending, string name, string model, CancellationTokenSource operation) {
+  try {
+   var recap = await SnapshotEnhancer.SummarizeAsync(Endpoint, model, pending.History, operation.Token);
+   if (string.IsNullOrWhiteSpace(recap)) throw new IOException("The model returned an empty summary. Try again or choose another model.");
+   if (name.Length == 0) name = await SnapshotEnhancer.SuggestNameAsync(Endpoint, model, recap, Store.Items.Select(s => s.Name).ToArray(), operation.Token) ?? "Conversation with " + pending.OriginModel;
+   operation.Token.ThrowIfCancellationRequested();
+   var snapshot = new ContextSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, SnapshotNaming.MakeUnique(name, Store.Items.Select(s => s.Name).ToArray()), pending.OriginModel, model, recap, pending.MessageCount, pending.ProjectRoot);
+   Store.Add(snapshot);
+   if (!_disposed) await InvokeAsync(() => { _previewFocused = false; _listFocused = true; _create = false; _input.SetText(""); _query = ""; _collapsed.Remove(snapshot.ProjectRoot); ResetBrowser(snapshot.Id); _action = 1; _status = "Snapshot saved. Import its summary into this agent's next message."; });
+  } catch (OperationCanceledException) { if (!_disposed) await InvokeAsync(() => _status = "Cancelled. Your conversation was kept."); }
+  catch (Exception ex) { if (!_disposed) await InvokeAsync(() => { _status = "Could not create snapshot: " + ex.Message; _error = true; }); }
+  finally { if (!_disposed) await InvokeAsync(() => { _busy = false; StateHasChanged(); }); _operation = null; operation.Dispose(); }
+ }
+ private async Task LoadModels() {
+  try {
+   using var response = await _http.GetAsync(Endpoint.TrimEnd('/') + "/api/tags", _shutdown.Token); response.EnsureSuccessStatusCode();
+   using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(_shutdown.Token));
+   var models = json.RootElement.GetProperty("models").EnumerateArray().Select(m => m.GetProperty("name").GetString() ?? "").Append(CurrentModel).Where(m => m.Length > 0).Distinct().OrderBy(m => m, StringComparer.OrdinalIgnoreCase).ToArray();
+   if (!_disposed) await InvokeAsync(() => { _models = models; _modelIndex = Math.Max(0, Array.IndexOf(_models, _model)); StateHasChanged(); });
+  } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException) { /* Current model remains selectable while Ollama is unavailable. */ }
+ }
+ private async Task Animate() { try { using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(120)); while (await timer.WaitForNextTickAsync(_shutdown.Token)) if (_busy) await InvokeAsync(() => { _frame++; StateHasChanged(); }); } catch (OperationCanceledException) { } }
+ public void Dispose() { _disposed = true; Store.Changed -= StoreChanged; if (ExplorerFocus?.NavigateTab == Cycle) ExplorerFocus.NavigateTab = null; if (ExplorerFocus?.FocusExplorer == FocusPanel) ExplorerFocus.FocusExplorer = null; _shutdown.Cancel(); _http.Dispose(); _shutdown.Dispose(); }
+}
