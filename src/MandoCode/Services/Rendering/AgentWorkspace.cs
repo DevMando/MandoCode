@@ -171,6 +171,10 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         switch (key.Key.ToLowerInvariant())
         {
+            case "k": case "m":
+                if (!key.ShiftKey && !key.CtrlKey && pane.Active && pane.IsBusy?.Invoke() != true && pane.IsAwaitingInput?.Invoke() != true && pane.SubmitCommand is not null)
+                    _ = pane.SubmitCommand(key.Key.Equals("k", StringComparison.OrdinalIgnoreCase) ? "/skills" : "/mcp");
+                return true;
             case "s":
                 if (!key.ShiftKey && pane.Active && pane.ToggleSettings is not null) _ = pane.ToggleSettings();
                 return true;
@@ -240,6 +244,7 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public Func<Task>? ToggleFileExplorer { get; set; }
     public Func<Task>? ToggleGitChanges { get; set; }
     public Func<Task>? ToggleSettings { get; set; }
+    public Func<Task>? ToggleSnapshots { get; set; }
     public Func<bool>? IsGitChangesOpen { get; set; }
     public Func<bool>? IsGitDiffOpen { get; set; }
     public Func<bool>? IsFileExplorerOpen { get; set; }

@@ -12,7 +12,7 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell SetupOpen="@_setupOpen" OnSetupComplete="SetupComplete" OllamaPullOpen="@_ollamaPullOpen" OllamaEndpoint="@Config.OllamaEndpoint" OnOllamaPullClose="CloseOllamaPull" IntegrationsOpen="@_integrationsOpen" IntegrationCoordinator="@(Services.GetRequiredService<CliIntegrationCoordinator>())" IntegrationKind="@_integrationKind" OnIntegrationsClose="CloseIntegrations" OnManageIntegrations="ManageIntegrations" SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell SnapshotsOpen="@_snapshotsOpen" SnapshotCreate="@_snapshotCreate" SnapshotOffer="@_snapshotOffer" SnapshotContext="@Snapshots" OnSnapshotsClose="CloseSnapshots" OnSnapshotCapture="CaptureSnapshot" OnSnapshotKeepMemory="KeepSnapshotMemory" SetupOpen="@_setupOpen" OnSetupComplete="SetupComplete" OllamaPullOpen="@_ollamaPullOpen" OllamaEndpoint="@Config.OllamaEndpoint" OnOllamaPullClose="CloseOllamaPull" IntegrationsOpen="@_integrationsOpen" IntegrationCoordinator="@(Services.GetRequiredService<CliIntegrationCoordinator>())" IntegrationKind="@_integrationKind" OnIntegrationsClose="CloseIntegrations" OnManageIntegrations="ManageIntegrations" SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
@@ -40,7 +40,7 @@
 {
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !_setupOpen && !_settingsOpen && !_ollamaPullOpen && !_integrationsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+@if (_showPrompt && !_snapshotsOpen && !_setupOpen && !_settingsOpen && !_ollamaPullOpen && !_integrationsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
@@ -151,6 +151,43 @@
     private bool _fileExplorerOpen;
     private bool _gitChangesOpen;
     private bool _settingsOpen;
+    private SnapshotContext Snapshots => (Pane?.Services ?? Services).GetRequiredService<SnapshotContext>();
+    private bool _snapshotsOpen, _snapshotCreate, _snapshotOffer;
+    private TaskCompletionSource? _snapshotCompletion;
+    private Task CaptureSnapshot() => Snapshots.CaptureAsync(AI, Config.GetEffectiveModelName(), ProjectRoot.ProjectRoot);
+    private Task KeepSnapshotMemory()
+    {
+        if (Snapshots.Pending?.HistoryJson is not { } history || AI.TryRestoreHistoryJson(history) == 0)
+            throw new IOException("Memory could not be restored. Create a snapshot instead to save the buffered conversation.");
+        return Task.CompletedTask;
+    }
+    private async Task ShowSnapshots(bool create, bool offer = false)
+    {
+        _snapshotCreate = create; _snapshotOffer = offer;
+        _fileExplorerOpen = _gitChangesOpen = _directoryBrowserOpen = _historyActive = _settingsOpen = false;
+        _snapshotsOpen = true;
+        _snapshotCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(StateHasChanged);
+        await _snapshotCompletion.Task;
+        _snapshotCompletion = null;
+    }
+    private async Task ToggleSnapshots()
+    {
+        if (_snapshotsOpen) { await CloseSnapshots(); return; }
+        if (Pane?.IsBusy?.Invoke() == true || _showWizardInput || _showWizardSelect) return;
+        await CaptureSnapshot();
+        _ = ShowSnapshots(false);
+    }
+    private async Task CloseSnapshots()
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        _snapshotsOpen = false;
+        Snapshots.ClearPending();
+        _snapshotCompletion?.TrySetResult();
+        await InvokeAsync(StateHasChanged);
+        if (Snapshots.QueuedCount > 0) AnsiConsole.MarkupLine($"[green]Context queued: {Snapshots.QueuedCount} snapshot(s) for your next message.[/]");
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    }
     private bool _ollamaPullOpen;
     private TaskCompletionSource? _ollamaPullCompletion;
     private async Task ShowOllamaPull()
@@ -223,7 +260,7 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     private bool _paneStopped;
     private string? _headerModel;
-    private void StopPane() { _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
+    private void StopPane() { _snapshotCompletion?.TrySetResult(); _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -433,11 +470,11 @@
             McpGate = agentServices.GetRequiredService<McpApprovalGate>();
             PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
             UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
-            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _setupOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen;
+            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _snapshotsOpen || _setupOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen;
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
             if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
-            if (Pane is not null) { Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
+            if (Pane is not null) { Pane.ToggleSnapshots = ToggleSnapshots; Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
         // Get project root from command line args if available. Flags (--continue/-c, and
@@ -638,6 +675,8 @@
     /// </summary>
     private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
     {
+        if (forceInteractive) await CaptureSnapshot();
+        var contextCleared = false;
         _setupCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _setupOpen = true;
         _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
@@ -648,6 +687,7 @@
             if (result.Connected && !string.IsNullOrEmpty(result.FinalModel))
             {
                 await AI.ReinitializeAsync(Config);
+                contextCleared = true;
             }
         }
         finally
@@ -656,6 +696,8 @@
             _setupCompletion = null;
             SetOnboardingStatus("");
         }
+        if (forceInteractive && contextCleared && Snapshots.Pending is not null) await ShowSnapshots(false, true);
+        else Snapshots.ClearPending();
     }
     private bool _setupOpen;
     private TaskCompletionSource<OnboardingFlow.FlowResult>? _setupCompletion;
@@ -774,6 +816,7 @@
         }
 
         var previousModel = Config.GetEffectiveModelName();
+        if (!fromSettings && !string.Equals(previousModel, modelTag, StringComparison.Ordinal)) await CaptureSnapshot();
         Config.ModelName = modelTag;
         Config.ModelPath = null;
 
@@ -793,12 +836,13 @@
         Spinner.Start($"Loading {modelTag}…");
         try
         {
-            if (fromSettings) await AI.RefreshSettingsAsync(Config);
+            if (fromSettings || string.Equals(previousModel, modelTag, StringComparison.Ordinal)) await AI.RefreshSettingsAsync(Config);
             else await AI.ReinitializeAsync(Config);
         }
         finally { Spinner.Stop(); }
 
         await ValidateCurrentModelAsync();
+        if (!fromSettings && Snapshots.Pending is not null) await ShowSnapshots(false, true);
         if (_modelError || fromSettings) return;
         var defaultChoice = await WizardPromptSelectCoreAsync(
             $"Make {modelTag} the default model for new agents?",
@@ -1234,7 +1278,7 @@
 
     private Task ToggleFileExplorer() => InvokeAsync(async () =>
     {
-        if (_settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
+        if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
         if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         if (_isProcessing && !_fileExplorerOpen) return;
         _fileExplorerOpen = !_fileExplorerOpen;
@@ -1245,7 +1289,7 @@
     private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
     private Task ToggleGitChanges() => InvokeAsync(async () =>
     {
-        if (_settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
+        if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
         if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
         _gitChangesOpen = !_gitChangesOpen;
         _fileExplorerOpen = false;
@@ -1255,7 +1299,7 @@
     private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
     private Task ToggleSettings() => InvokeAsync(() =>
     {
-        if (_integrationsOpen || Services.GetRequiredService<CliIntegrationCoordinator>().IsUpdating || !_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
+        if (_snapshotsOpen || _integrationsOpen || Services.GetRequiredService<CliIntegrationCoordinator>().IsUpdating || !_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
         _settingsOpen = !_settingsOpen;
         _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
         StateHasChanged();
@@ -1509,6 +1553,7 @@
                     continue;
                 }
 
+                if (command is "snapshot-context-create" or "snapshot-context-import") { await CaptureSnapshot(); await ShowSnapshots(command == "snapshot-context-create"); continue; }
                 if (command == "agent-settings") { _isProcessing = false; await ToggleSettings(); continue; }
                 if (command == "agent-file-explorer")
                 {
@@ -1715,7 +1760,16 @@
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
 
-            await ProcessDirectRequestAsync(processedInput);
+            var requestWithContext = Snapshots.WithImports(processedInput);
+            try { await ProcessDirectRequestAsync(requestWithContext); }
+            finally
+            {
+                // A failed provider request can still leave its user message in AI history.
+                // Once accepted into history, the context is already there for the retry.
+                if (Snapshots.QueuedCount > 0 && (await AI.GetHistoryAsync()).Any(m =>
+                    m.Role == Microsoft.Extensions.AI.ChatRole.User && m.Text == requestWithContext))
+                    Snapshots.ClearImports();
+            }
         }
     }
 
@@ -2211,7 +2265,7 @@
                     if (!AI.TryAttachImage(image.Bytes, image.MediaType, $"Referenced image: {filePath}", out var error))
                         throw new IOException(error);
                     contextBlocks.AppendLine($"Image: {filePath} — attached as image input. Inspect the supplied image directly, rather than reading its binary bytes as text.");
-                    AnsiConsole.MarkupLine($"🖼️ {Spectre.Console.Markup.Escape(filePath)}");
+                    AnsiConsole.MarkupLine($"📷  {Spectre.Console.Markup.Escape(filePath)}");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
                 {
@@ -2395,6 +2449,7 @@
                 if (await enumerator.MoveNextAsync())
                 {
                     receivedFirstChunk = true;
+                    Snapshots.ClearImports();
                 }
 
                 Spinner.Stop();
@@ -4138,6 +4193,7 @@
         switch (choice)
         {
             case "Run configuration wizard":
+                await CaptureSnapshot();
                 var updatedConfig = await ConfigurationWizard.RunAsync(
                     Config,
                     prompts: prompts);
@@ -4148,6 +4204,7 @@
                 defaults.UpdateSettings(updatedConfig, configuredAgents);
                 defaults.UpdateSetting("model", updatedConfig.GetEffectiveModelName(), configuredAgents);
                 await AI.ReinitializeAsync(updatedConfig);
+                if (Snapshots.Pending is not null) await ShowSnapshots(false, true);
                 TuiConsole.Clear();
                 AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
 

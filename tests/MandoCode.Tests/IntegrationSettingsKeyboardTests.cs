@@ -51,6 +51,11 @@ public sealed class IntegrationSettingsKeyboardTests
                 const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
                 T Value<T>(string name) => (T)typeof(IntegrationSettingsPanel).GetField(name, flags)!.GetValue(panel)!;
                 async Task Key(string key) { await (Task)typeof(IntegrationSettingsPanel).GetMethod("Key", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = key } })!; typeof(ComponentBase).GetMethod("StateHasChanged", flags)!.Invoke(panel, null); }
+                {
+                    Assert.True((bool)typeof(IntegrationSettingsPanel).GetProperty("SearchSelected", flags)!.GetValue(panel)!);
+                    Assert.Contains(tab == 0 ? "Search MCP Servers" : "Search Skills", rendered.ToHtmlString());
+                    await (Task<bool>)typeof(IntegrationSettingsPanel).GetMethod("SearchKey", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "ArrowDown" } })!;
+                }
                 await (Task)typeof(IntegrationSettingsPanel).GetMethod("Key", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "ArrowRight", CtrlKey = true } })!; Assert.Equal(tab, Value<int>("_kind")); Assert.DoesNotContain(tab == 0 ? "New Skill" : "MCP Servers", rendered.ToHtmlString()); var document = new HtmlDocument(); document.LoadHtml(rendered.ToHtmlString());
                 var deletes = document.DocumentNode.SelectNodes("//*[@data-integration-action='Remove']");
                 Assert.InRange(deletes.Count, 1, 2);
@@ -65,14 +70,14 @@ public sealed class IntegrationSettingsKeyboardTests
                 Assert.Contains(tab == 0 ? "Global MCP settings" : "Global skills", painted);
                 Assert.DoesNotContain("Shared user settings", painted);
                 Assert.DoesNotContain("Per-agent access", painted);
-                Assert.True(painted.IndexOf(tab == 0 ? "Add Server" : "New Skill", StringComparison.Ordinal) < painted.IndexOf(tab == 0 ? "Type / Status" : "Alpha", StringComparison.Ordinal), painted);
+                Assert.True(painted.IndexOf(tab == 0 ? "+MCP Server" : "+Skill", StringComparison.Ordinal) < painted.IndexOf(tab == 0 ? "Type / Status" : "Alpha", StringComparison.Ordinal), painted);
                 Assert.True(painted.IndexOf("Search", StringComparison.Ordinal) < painted.IndexOf(tab == 0 ? "Type / Status" : "Alpha", StringComparison.Ordinal), painted);
                 if (tab == 1) Assert.Contains("First description", painted);
                 Assert.All(painted.Split('\n'), line => Assert.True(RazorConsole.Core.Input.TextSelectionState.CellWidth(line.TrimEnd('\r')) <= width, line));
                 if (width >= 70)
                 {
                     var line = painted.Split('\n').Single(text => text.Contains(tab == 0 ? "alpha" : "Alpha", StringComparison.Ordinal) && text.Contains("Delete", StringComparison.Ordinal));
-                    Assert.True(line.IndexOf("Disable", StringComparison.Ordinal) < line.IndexOf("Edit", StringComparison.Ordinal), line);
+                    Assert.True(line.IndexOf("Active", StringComparison.Ordinal) < line.IndexOf("Edit", StringComparison.Ordinal), line);
                     Assert.True(line.IndexOf("Edit", StringComparison.Ordinal) < line.IndexOf("Delete", StringComparison.Ordinal), line);
                 }
                 await Key("ArrowDown");
@@ -85,17 +90,42 @@ public sealed class IntegrationSettingsKeyboardTests
                 Assert.Equal(1, Value<int>("_row")); // Disabled rows move after enabled rows, focus stays on Alpha.
                 if (tab == 0) Assert.True(coordinator.Servers["alpha"].Disabled);
                 else Assert.False(coordinator.Skills.List().Single(skill => skill.Folder == alpha).Enabled);
+                var statusDocument = new HtmlDocument(); statusDocument.LoadHtml(rendered.ToHtmlString());
+                Assert.Contains("Disabled", Paint(services, statusDocument, width, 24));
                 await Key("ArrowUp"); await Key("ArrowRight"); await Key("Enter");
                 Assert.Equal(tab == 0 ? "beta" : "Beta", Value<string>("_name"));
                 Assert.Equal(tab == 0 ? "mcp" : "skill", Value<string>("_mode"));
+                var inlineBuffer = (RazorConsole.Core.Input.TextSelectionState)typeof(IntegrationSettingsPanel).GetProperty("InlineBuffer", flags)!.GetValue(panel)!;
+                Assert.Equal(tab == 0 ? "beta" : "Beta", inlineBuffer.Text);
+                inlineBuffer.SetText("Edited name");
+                typeof(IntegrationSettingsPanel).GetMethod("InlineChanged", flags)!.Invoke(panel, null);
+                Assert.Equal("Edited name", Value<string>("_name"));
+                Assert.Null(Value<object?>("_input"));
+                Assert.True(await (Task<bool>)typeof(IntegrationSettingsPanel).GetMethod("InlineKey", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "Enter" } })!);
+                Assert.Equal(0, Value<int>("_selected"));
+                Assert.False(await (Task<bool>)typeof(IntegrationSettingsPanel).GetMethod("InlineKey", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "ArrowLeft" } })!);
+                await Key("Enter");
+                var formDocument = new HtmlDocument(); formDocument.LoadHtml(rendered.ToHtmlString());
+                var formFrame = Paint(services, formDocument, width, 24);
+                Assert.Contains("Edited name", formFrame);
+                Assert.All(formFrame.Split('\n'), line => Assert.True(RazorConsole.Core.Input.TextSelectionState.CellWidth(line.TrimEnd('\r')) <= width, line));
                 var fields = (int)typeof(IntegrationSettingsPanel).GetProperty("OptionCount", flags)!.GetValue(panel)!;
                 var actions = (string[])typeof(IntegrationSettingsPanel).GetProperty("Actions", flags)!.GetValue(panel)!;
+                Assert.DoesNotContain("Details", actions);
                 typeof(IntegrationSettingsPanel).GetField("_selected", flags)!.SetValue(panel, fields);
                 await Key("ArrowRight"); Assert.Equal(fields + 1, Value<int>("_selected"));
                 await Key("ArrowLeft"); Assert.Equal(fields, Value<int>("_selected"));
                 await Key("ArrowLeft"); Assert.Equal(fields + actions.Length - 1, Value<int>("_selected"));
                 await Key("ArrowRight"); Assert.Equal(fields, Value<int>("_selected"));
-                await Key("Escape"); await Key("ArrowDown"); await Key("Enter");
+                if (tab == 0)
+                {
+                    await (Task)typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!.Invoke(panel, new object[] { "Cancel" })!;
+                    Assert.Equal("list", Value<string>("_mode"));
+                    Assert.Null(Value<string?>("_confirmAction"));
+                    Assert.True(coordinator.Servers.ContainsKey("beta"));
+                    Assert.False(coordinator.Servers.ContainsKey("Edited name"));
+                }
+                else { await Key("Escape"); await Key("ArrowDown"); await Key("Enter"); }
                 await Key("ArrowRight"); await Key("ArrowRight"); await Key("ArrowRight"); await Key("Enter");
                 Assert.StartsWith("delete ", Value<string>("_confirmAction"));
                 await Key("Enter"); // Cancel is selected by default; return to this item's Delete button.
@@ -104,6 +134,49 @@ public sealed class IntegrationSettingsKeyboardTests
                 await Key("Enter"); await Key("ArrowDown"); await Key("Enter");
                 if (tab == 0) { Assert.False(coordinator.Servers.ContainsKey("beta")); Assert.True(coordinator.Servers.ContainsKey("alpha")); }
                 else { Assert.Equal(alpha, Assert.Single(coordinator.Skills.List()).Folder); Assert.True(Directory.Exists(alpha)); }
+                if (tab == 0)
+                {
+                    var perform = typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!;
+                    await (Task)perform.Invoke(panel, new object[] { "Add Server" })!;
+                    var draft = (RazorConsole.Core.Input.TextSelectionState)typeof(IntegrationSettingsPanel).GetProperty("InlineBuffer", flags)!.GetValue(panel)!;
+                    draft.SetText("unsaved-server");
+                    typeof(IntegrationSettingsPanel).GetMethod("InlineChanged", flags)!.Invoke(panel, null);
+                    await (Task)perform.Invoke(panel, new object[] { "Cancel" })!;
+                    Assert.Equal("list", Value<string>("_mode"));
+                    Assert.Null(Value<string?>("_confirmAction"));
+                    Assert.Equal("", Value<string>("_name"));
+                    Assert.False(coordinator.Servers.ContainsKey("unsaved-server"));
+                    typeof(IntegrationSettingsPanel).GetMethod("SelectSearch", flags)!.Invoke(panel, null);
+                    var search = Value<RazorConsole.Core.Input.TextSelectionState>("_searchBuffer");
+                    search.SetText("no-match");
+                    typeof(IntegrationSettingsPanel).GetMethod("SearchChanged", flags)!.Invoke(panel, null);
+                    Assert.Empty((string[])typeof(IntegrationSettingsPanel).GetProperty("Rows", flags)!.GetValue(panel)!);
+                    Assert.True((bool)typeof(IntegrationSettingsPanel).GetProperty("SearchSelected", flags)!.GetValue(panel)!);
+                    Assert.Null(Value<object?>("_input"));
+                    search.SetText("");
+                    typeof(IntegrationSettingsPanel).GetMethod("SearchChanged", flags)!.Invoke(panel, null);
+                    Assert.Single((string[])typeof(IntegrationSettingsPanel).GetProperty("Rows", flags)!.GetValue(panel)!);
+                    Assert.True(await (Task<bool>)typeof(IntegrationSettingsPanel).GetMethod("SearchKey", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "ArrowDown" } })!);
+                    Assert.Equal(0, Value<int>("_selected"));
+                }
+                else
+                {
+                    var perform = typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!;
+                    foreach (var mode in new[] { "Write Manually", "Create with AI" })
+                    {
+                        await (Task)perform.Invoke(panel, new object[] { "New Skill" })!;
+                        await (Task)perform.Invoke(panel, new object[] { mode })!;
+                        var draft = (RazorConsole.Core.Input.TextSelectionState)typeof(IntegrationSettingsPanel).GetProperty("InlineBuffer", flags)!.GetValue(panel)!;
+                        draft.SetText("Unsaved skill");
+                        typeof(IntegrationSettingsPanel).GetMethod("InlineChanged", flags)!.Invoke(panel, null);
+                        await (Task)perform.Invoke(panel, new object[] { "Cancel" })!;
+                        Assert.Equal("list", Value<string>("_mode"));
+                        Assert.Null(Value<string?>("_confirmAction"));
+                        Assert.Equal("", Value<string>("_name"));
+                        Assert.Equal("", Value<string>("_intent"));
+                        Assert.Equal(alpha, Assert.Single(coordinator.Skills.List()).Folder);
+                    }
+                }
             });
         }
         finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
@@ -138,7 +211,7 @@ public sealed class IntegrationSettingsKeyboardTests
                 await scope.ToggleAsync(); Assert.Equal(1, Value<int>("_selected"));
                 await scope.ToggleAsync(true); Assert.Equal(0, Value<int>("_selected"));
                 Assert.Equal(1, Value<int>("_kind")); Assert.DoesNotContain("MCP Servers", rendered.ToHtmlString());
-                await Key("Enter"); Assert.Equal("skill-choice", Value<string>("_mode"));
+                await (Task)typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!.Invoke(panel, new object[] { "New Skill" })!; await Key("Unidentified"); Assert.Equal("skill-choice", Value<string>("_mode"));
                 Assert.Contains("Write Manually", rendered.ToHtmlString());
                 Assert.Contains("Create with AI", rendered.ToHtmlString());
                 var choiceDocument = new HtmlDocument(); choiceDocument.LoadHtml(rendered.ToHtmlString());
@@ -146,8 +219,11 @@ public sealed class IntegrationSettingsKeyboardTests
                 Assert.InRange(Array.FindIndex(choiceLines, line => line.Contains("Write Manually", StringComparison.Ordinal)), 1, 10);
                 await Key("ArrowRight"); await Key("Enter"); Assert.Equal("skill-ai", Value<string>("_mode"));
                 Assert.Contains("What should this skill do?", rendered.ToHtmlString());
-                await Key("Enter");
-                await (Task)typeof(IntegrationSettingsPanel).GetMethod("SubmitInput", flags)!.Invoke(panel, new object[] { "Review code for bugs" })!;
+                var intentBuffer = (RazorConsole.Core.Input.TextSelectionState)typeof(IntegrationSettingsPanel).GetProperty("InlineBuffer", flags)!.GetValue(panel)!;
+                intentBuffer.SetText("Review code for bugs");
+                typeof(IntegrationSettingsPanel).GetMethod("InlineChanged", flags)!.Invoke(panel, null);
+                Assert.True(await (Task<bool>)typeof(IntegrationSettingsPanel).GetMethod("InlineKey", flags)!.Invoke(panel, new object[] { new KeyboardEventArgs { Key = "Enter" } })!);
+                Assert.Null(Value<object?>("_input"));
                 Assert.Equal("Review code for bugs", Value<string>("_intent"));
                 typeof(IntegrationSettingsPanel).GetField("_modelReturnMode", flags)!.SetValue(panel, "skill-ai");
                 typeof(IntegrationSettingsPanel).GetField("_modelReturnSelection", flags)!.SetValue(panel, 1);
@@ -158,17 +234,21 @@ public sealed class IntegrationSettingsKeyboardTests
                 Assert.Equal(1, Value<int>("_selected"));
                 Assert.Equal("Review code for bugs", Value<string>("_intent"));
                 await Key("Escape"); await Key("ArrowDown"); await Key("Enter");
-                await Key("Enter"); await Key("Enter"); Assert.Equal("skill", Value<string>("_mode"));
-                await Key("Enter"); Assert.NotNull(Value<object?>("_input"));
-                await (Task)typeof(IntegrationSettingsPanel).GetMethod("SubmitInput", flags)!.Invoke(panel, new object[] { "My skill" })!;
+                await (Task)typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!.Invoke(panel, new object[] { "New Skill" })!;
+                await Key("Enter"); Assert.Equal("skill", Value<string>("_mode"));
+                await Key("Enter"); Assert.Null(Value<object?>("_input"));
+                var nameBuffer = (RazorConsole.Core.Input.TextSelectionState)typeof(IntegrationSettingsPanel).GetProperty("InlineBuffer", flags)!.GetValue(panel)!;
+                nameBuffer.SetText("My skill");
+                typeof(IntegrationSettingsPanel).GetMethod("InlineChanged", flags)!.Invoke(panel, null);
                 Assert.Equal("My skill", Value<string>("_name"));
                 await Key("Escape"); Assert.Equal("discard draft", Value<string>("_confirmAction"));
                 await Key("Enter"); Assert.Null(Value<string?>("_confirmAction"));
                 Assert.Equal("My skill", Value<string>("_name"));
-                Assert.Contains("Save Skill", rendered.ToHtmlString());
+                Assert.Contains("Save", rendered.ToHtmlString());
                 var perform = typeof(IntegrationSettingsPanel).GetMethod("PerformAction", flags)!;
                 var manualFields = (string[])typeof(IntegrationSettingsPanel).GetProperty("SkillFields", flags)!.GetValue(panel)!;
                 Assert.Equal(new[] { "Name", "Description", "Instructions" }, manualFields);
+                Assert.Equal(new[] { "Save", "Cancel", "Refine with AI" }, (string[])typeof(IntegrationSettingsPanel).GetProperty("Actions", flags)!.GetValue(panel)!);
                 await (Task)perform.Invoke(panel, new object[] { "Refine with AI" })!;
                 Assert.Equal("skill-refine", Value<string>("_mode"));
                 await (Task)perform.Invoke(panel, new object[] { "Back to Form" })!;

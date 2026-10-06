@@ -1,6 +1,7 @@
 @using MandoCode.Models
 @using Spectre.Console
 @using RazorConsole.Core.Renderables
+@using RazorConsole.Core.Input
 @using Microsoft.Extensions.DependencyInjection
 @inject RazorConsole.Core.Focus.FocusManager Focus
 @implements IDisposable
@@ -25,8 +26,17 @@
      { <Markup Content="@Escape(line)" Foreground="Color.Grey70" /> }
      @if (_mode == "list")
      {
-      @if (IsTable) { @ActionButtons(true) }
-      @if (_query.Length > 0) { <Markup Content="@Escape("Filter: " + _query)" Foreground="Color.Purple" /> }
+      @if (IsTable) {
+       <Flex Direction="FlexDirection.Row" Height="3">
+        <Box Width="@SearchWidth" Height="3" Border="BoxBorder.Rounded" Title="@(_kind == 0 ? "Search MCP Servers" : "Search Skills")" BorderColor="@(SearchSelected ? Color.Green : Color.Grey50)">
+         <div data-focusable="false" @onclick="SelectSearch"><TextArea Buffer="@_searchBuffer" Editable="true" Width="@Math.Max(1, SearchWidth - 2)" Height="1" WordWrap="false" CharacterStyle="@(_ => new Style(ValueColor))" Hook="@_searchKey" OnPreviewKey="SearchKey" OnChanged="SearchChanged" /></div>
+        </Box>
+        <Box Width="2"><Markup Content=" " /></Box>
+        @ToolbarButton(_kind == 0 ? "Add Server" : "New Skill", _kind == 0 ? "+MCP Server" : "+Skill", AddServerWidth)
+        @if (_kind == 1) { <Box Width="2"><Markup Content=" " /></Box>@ToolbarButton("Install from Git / ZIP / Folder", "Install", InstallWidth) }
+       </Flex>
+      }
+
       @if (IsTable)
       {
        <Flex Direction="FlexDirection.Row">
@@ -37,7 +47,7 @@
        </Flex>
        <Markup Content="@(new string('─', TableWidth))" Foreground="Color.Grey50" />
       }
-      @if (Rows.Length == 0) { <Markup Content="@(_kind == 0 ? "No matching servers. Use Add Server to get started." : "No matching skills. Use New Skill or Install to get started.")" Foreground="Color.Grey70" /> }
+      @if (Rows.Length == 0) { <Markup Content="@(_kind == 0 ? "No matching servers. Clear the search or choose +MCP Server." : "No matching skills. Use New Skill or Install to get started.")" Foreground="Color.Grey70" /> }
      }
      @foreach (var index in VisibleRows)
      {
@@ -46,7 +56,7 @@
        var selection = index * RowSlots;
        <Rows>
         <Flex Direction="FlexDirection.Row">
-         <Box Width="@NameWidth"><div data-focusable="false" @onclick="@(() => Activate(selection))"><Markup Content="@Escape(WorkspaceTabWindow.Fit((_selected == selection ? "> " : "  ") + RowName(index), NameWidth))" Foreground="@(_selected == selection ? Color.Black : RowColor(index))" Background="@(_selected == selection ? Color.DeepSkyBlue1 : Color.Default)" /></div></Box>
+         <Box Width="@NameWidth"><div data-focusable="false" @onclick="@(() => Activate(selection))"><Markup Content="@Escape(WorkspaceTabWindow.Fit((_selected == selection ? "> " : "  ") + RowName(index), NameWidth))" Foreground="@(_selected == selection ? SelectionForeground : RowColor(index))" Background="@(_selected == selection ? SelectionBackground : Color.Default)" /></div></Box>
          @if (_kind == 0) { <Box Width="@ColumnGap"><Markup Content=" " /></Box><Box Width="@InfoWidth"><Markup Content="@Escape(WorkspaceTabWindow.Fit(RowInfo(index), InfoWidth))" Foreground="@RowColor(index)" /></Box> }
          @if (InlineRowActions) { <Box Width="@ColumnGap"><Markup Content=" " /></Box> }
          @if (InlineRowActions) { @RowButtons(index, 1, RowSlots - 1) }
@@ -64,14 +74,28 @@
       }
       else
       {
+       @if (InlineField(index) is { } field) {
+        <Box Border="BoxBorder.Rounded" Title="@field" Height="3" Width="@TableWidth" BorderColor="@(index == _selected ? Color.Green : Color.Grey50)">
+         @if (index == _selected) {
+          <div data-focusable="false" @onclick="@(() => Select(index))"><TextArea @key="InlineIdentity" Buffer="@InlineBuffer" Editable="true" Width="@Math.Max(1, TableWidth - 2)" Height="1" WordWrap="false" CharacterStyle="@(_ => new Style(ValueColor))" Hook="@_inlineKey" OnPreviewKey="InlineKey" OnChanged="InlineChanged" /></div>
+         } else {
+          <div data-focusable="false" @onclick="@(() => Select(index))"><RenderableContent Content="@(new Text(InlineValue(field), new Style(ValueColor)))" /></div>
+         }
+        </Box>
+        @if (_kind == 1) { @foreach (var hint in Wrap(SkillFieldHelp(field))) { <Markup Content="@Escape(hint)" Foreground="Color.Grey62" /> } }
+       } else {
        <div data-focusable="false" @onclick="@(() => Activate(index))"><Rows>
         @foreach (var line in Wrap(RowLabels[index], 2).Take(PageSize).Select((text, row) => (text, row)))
-        { <Markup Content="@Escape((line.row == 0 && index == _selected ? "> " : "  ") + line.text)" Foreground="@(index == _selected ? Color.Black : RowColor(index))" Background="@(index == _selected ? Color.DeepSkyBlue1 : Color.Default)" /> }
+        {
+         @if (_mode == "mcp") { <RenderableContent Content="@McpFieldLine(index, line.text, line.row)" /> }
+         else { <Markup Content="@Escape((line.row == 0 && index == _selected ? "> " : "  ") + line.text)" Foreground="@(index == _selected ? SelectionForeground : RowColor(index))" Background="@(index == _selected ? SelectionBackground : Color.Default)" /> }
+        }
         @if (_mode is "skill" or "skill-ai" or "skill-refine") {
          @foreach (var hint in Wrap(SkillFieldHelp(SkillFields[index]), 2)) { <Markup Content="@Escape("  " + hint)" Foreground="Color.Grey62" /> }
          <Markup Content=" " />
         }
        </Rows></div>
+       }
       }
      }
     </Rows>
@@ -88,6 +112,7 @@
    @if (_busy) { <Markup Content="@($"{Frames[_frame % Frames.Length]} {_status}")" Foreground="Color.Purple" /> }
    else { <Box Height="@StatusLines.Length"><Rows>@foreach (var line in StatusLines) { <Markup Content="@Escape(line)" Foreground="Color.Green" /> }</Rows></Box> }
    @ActionButtons(false)
+   @if ((_kind == 1 && !IsTable) || _mode == "mcp") { <Markup Content="@(new string('─', TableWidth))" Foreground="Color.Grey50" /> }
    @if (_mode == "list") { <Markup Content="@(_kind == 0 ? "Global MCP settings" : "Global skills")" Foreground="Color.Grey62" /> }
    @if (Config.ShowTips) { <Rows>@foreach (var line in Wrap(Tip)) { <Markup Content="@line" Foreground="Color.Grey62" /> }</Rows> }
    @if (!IsTable) { <Box FillHeight="true"><Markup Content=" " /></Box> }
@@ -121,6 +146,59 @@
  private string? _confirmAction;
  private int _confirmationSelection;
  private readonly string _focusKey = "integrations-" + Guid.NewGuid().ToString("N");
+ private readonly string _inlineKey = "integration-field-" + Guid.NewGuid().ToString("N");
+ private static readonly Color ValueColor = new(255, 200, 80);
+ private Spectre.Console.Markup McpFieldLine(int index, string line, int row)
+ {
+  var label = McpFields[index] + ": ";
+  var start = Math.Max(0, RowLabels[index].IndexOf(line, StringComparison.Ordinal));
+  var count = Math.Clamp(label.Length - start, 0, line.Length);
+  string Paint(string text, Color color) => $"[{color.ToMarkup()}{(index == _selected ? " on " + SelectionBackground.ToMarkup() : "")}]" + Escape(text) + "[/]";
+  return new Spectre.Console.Markup(
+   Paint(row == 0 && index == _selected ? "> " : "  ", index == _selected ? SelectionForeground : Color.Green)
+   + Paint(line[..count], index == _selected ? SelectionForeground : Color.Green)
+   + Paint(line[count..], index == _selected ? SelectionForeground : ValueColor));
+ }
+ private Color SelectionForeground => _kind == 1 && !IsTable ? Color.White : Color.Black;
+ private Color SelectionBackground => _kind == 1 && !IsTable ? new Color(80, 55, 101) : Color.DeepSkyBlue1;
+ private readonly string _searchKey = "mcp-search-" + Guid.NewGuid().ToString("N");
+ private readonly TextSelectionState _searchBuffer = new();
+ private int AddServerWidth => Math.Min(_kind == 0 ? 16 : 10, Math.Max(1, TableWidth / 3));
+ private int InstallWidth => Math.Min(11, Math.Max(1, TableWidth / 3));
+ private int SearchWidth => Math.Max(3, TableWidth - AddServerWidth - 2 - (_kind == 1 ? InstallWidth + 2 : 0));
+ private RenderFragment ToolbarButton(string action, string label, int width) => @<Box Width="@width" Height="3" Border="BoxBorder.Rounded" BorderColor="Color.Grey50"><div data-focusable="false" @onclick="@(() => Activate(OptionCount + Array.IndexOf(Actions, action)))"><Markup Content="@Escape(WorkspaceTabWindow.Fit((_selected == OptionCount + Array.IndexOf(Actions, action) ? "> " : "  ") + label, Math.Max(1, width - 2)))" Foreground="@(_selected == OptionCount + Array.IndexOf(Actions, action) ? SelectionForeground : Color.Grey85)" Background="@(_selected == OptionCount + Array.IndexOf(Actions, action) ? SelectionBackground : new Color(22, 26, 30))" /></div></Box>;
+ private bool SearchSelected => IsTable && _selected == OptionCount + Array.IndexOf(Actions, "Search");
+ private void SelectSearch() { Select(OptionCount + Array.IndexOf(Actions, "Search")); }
+ private void SearchChanged() { _query = _searchBuffer.Text; _row = 0; _rowKey = Rows.FirstOrDefault(); _selected = OptionCount + Array.IndexOf(Actions, "Search"); }
+ private async Task<bool> SearchKey(KeyboardEventArgs key) {
+  if (key.Key == "Tab") { await Cycle(key.ShiftKey); return true; }
+  if (key.Key is "ArrowDown" or "Enter" or "Return") { Select(OptionCount > 0 ? 0 : OptionCount + Array.IndexOf(Actions, _kind == 0 ? "Add Server" : "New Skill")); return true; }
+  if (key.Key == "Escape") { await OnClose.InvokeAsync(); return true; }
+  return false;
+ }
+ private string FocusTarget => SearchSelected && !_busy ? _searchKey : InlineField(_selected) is null || _busy ? _focusKey : _inlineKey;
+ private readonly TextSelectionState _inlineBuffer = new();
+ private string _inlineIdentity = "";
+ private string InlineIdentity => _mode + ":" + _selected;
+ private string? InlineField(int index) => _confirmAction is not null ? null : _mode == "mcp" ? McpFields.ElementAtOrDefault(index) is "Name" or "URL" or "Command" ? McpFields[index] : null : _mode is "skill" or "skill-ai" or "skill-refine" ? SkillFields.ElementAtOrDefault(index) is { } field && field is not "Model" and not "Instructions" ? field : null : null;
+ private string InlineValue(string field) => _mode == "mcp" ? McpValue(field) : SkillValue(field);
+ private TextSelectionState InlineBuffer { get { if (_inlineIdentity != InlineIdentity) { _inlineIdentity = InlineIdentity; _inlineBuffer.SetText(InlineValue(InlineField(_selected)!)); } return _inlineBuffer; } }
+ private void InlineChanged() {
+  var value = _inlineBuffer.Text;
+  switch (InlineField(_selected)) {
+   case "Name": _name = value; break;
+   case "URL": _server.Url = value; break;
+   case "Command": _server.Command = value; break;
+   case "Description": _description = value; break;
+   default: _intent = value; break;
+  }
+  _status = "";
+ }
+ private async Task<bool> InlineKey(KeyboardEventArgs key) {
+  if (key.Key is "Enter" or "Return") return true;
+  if (key.Key is "Tab" or "Escape" or "ArrowUp" or "ArrowDown") { await Key(key); return true; }
+  return false;
+ }
  private readonly CancellationTokenSource _shutdown = new();
  private static readonly string[] Frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
  private AgentPane[] Agents => (Pane?.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane?.Workspace.Panes ?? Array.Empty<AgentPane>()).ToArray();
@@ -137,9 +215,9 @@
  private string[] RowLabels => _confirmAction is not null ? [] : _mode is "skill-choice" or "skill-install" ? [] : _mode == "models" ? _modelChoices : _mode == "mcp" ? McpFields.Select(label => label + ": " + McpValue(label)).ToArray()
   : _mode is "skill" or "skill-ai" or "skill-refine" ? SkillFields.Select(label => label + ": " + SkillValue(label)).ToArray()
   : Rows.Select(row => _kind == 0 ? row + " · " + (_servers[row].IsHttp ? "http" : "stdio") + " · " + McpStatus(row) : _skills.First(s => s.Folder == row).Name + " · " + (_skills.First(s => s.Folder == row).Enabled ? "enabled" : "disabled")).ToArray();
- private string[] Actions => _confirmAction is not null ? ["Cancel", "Confirm " + _confirmAction] : _mode == "models" ? ["Cancel"] : _mode == "mcp" ? ["Test Connection", "Save & Connect", "Details", "Cancel"] : _mode == "skill-install" ? ["Choose Folder", "Git URL or ZIP", "Cancel"] : _mode == "skill-refine" ? ["Apply Refinement", "Back to Form"] : _mode == "skill-choice" ? ["Write Manually", "Create with AI", "Cancel"] : _mode == "skill-ai" ? ["Generate Skill", "Cancel"] : _mode == "skill" ? ["Refine with AI", "Save Skill", "Details", "Cancel"]
-  : _kind == 0 ? ["Add Server", "Enable All / Disable All", "Search", "Refresh", "Close"]
-  : ["New Skill", "Install from Git / ZIP / Folder", "Enable All / Disable All", "Search", "Refresh", "Close"];
+ private string[] Actions => _confirmAction is not null ? ["Cancel", "Confirm " + _confirmAction] : _mode == "models" ? ["Cancel"] : _mode == "mcp" ? ["Test Connection", "Save & Connect", "Cancel"] : _mode == "skill-install" ? ["Choose Folder", "Git URL or ZIP", "Cancel"] : _mode == "skill-refine" ? ["Apply Refinement", "Back to Form"] : _mode == "skill-choice" ? ["Write Manually", "Create with AI", "Cancel"] : _mode == "skill-ai" ? ["Generate Skill", "Cancel"] : _mode == "skill" ? ["Save", "Cancel", "Refine with AI"]
+  : _kind == 0 ? ["Search", "Add Server", "Close", "Enable All / Disable All", "Refresh"]
+  : ["Search", "New Skill", "Install from Git / ZIP / Folder", "Enable All / Disable All", "Refresh", "Close"];
  private bool IsTable => _mode == "list" && _confirmAction is null;
  private string[] RowActions => _kind == 0 ? ["Details", "Enable / Disable", "Edit", "Remove", "Tools"] : ["Details", "Enable / Disable", "Edit", "Remove"];
  private int RowSlots => RowActions.Length;
@@ -157,8 +235,8 @@
  private string RowInfo(int index) => _kind == 0 ? (_servers[Rows[index]].IsHttp ? "http" : "stdio") + " / " + McpStatus(Rows[index]) : _skills.First(skill => skill.Folder == Rows[index]).Description;
  private bool RowEnabled(int index) => _kind == 0 ? !_servers[Rows[index]].Disabled : _skills.First(skill => skill.Folder == Rows[index]).Enabled;
  private RenderFragment RowButtons(int row, int start, int count) => @<Flex Direction="FlexDirection.Row">
-  @for (var cell = start; cell < start + count; cell++) { var index = row * RowSlots + cell; var action = RowActions[cell]; var label = action == "Enable / Disable" ? RowEnabled(row) ? "Disable" : "Enable" : action == "Remove" ? "Delete" : action;
-   <Box Width="@RowButtonWidth"><div data-focusable="false" data-integration-action="@action" data-integration-item="@Rows[row]" @onclick="@(() => Activate(index))"><Markup Content="@Escape(WorkspaceTabWindow.Fit((_selected == index ? "> " : "  ") + label, RowButtonWidth))" Foreground="@(_selected == index ? Color.Black : action == "Remove" ? Color.Red : action == "Enable / Disable" ? Color.Green : Color.Grey85)" Background="@(_selected == index ? Color.DeepSkyBlue1 : new Color(22, 26, 30))" /></div></Box>
+  @for (var cell = start; cell < start + count; cell++) { var index = row * RowSlots + cell; var action = RowActions[cell]; var label = action == "Enable / Disable" ? RowEnabled(row) ? "Active" : "Disabled" : action == "Remove" ? "Delete" : action;
+   <Box Width="@RowButtonWidth"><div data-focusable="false" data-integration-action="@action" data-integration-item="@Rows[row]" @onclick="@(() => Activate(index))"><Markup Content="@Escape(WorkspaceTabWindow.Fit((_selected == index ? "> " : "  ") + label, RowButtonWidth))" Foreground="@(_selected == index ? SelectionForeground : action == "Remove" ? Color.Red : action == "Enable / Disable" ? RowEnabled(row) ? Color.Green : Color.White : Color.Grey85)" Background="@(_selected == index ? SelectionBackground : new Color(22, 26, 30))" /></div></Box>
   }
  </Flex>;
  private bool IsTopAction(string action) => action is "Add Server" or "New Skill" or "Install from Git / ZIP / Folder" or "Search";
@@ -167,13 +245,13 @@
   @for (var row = 0; row < (indices.Length + ActionColumns - 1) / ActionColumns; row++) { var offset = row * ActionColumns;
    <Box Height="1"><Flex Direction="FlexDirection.Row">
     @foreach (var i in indices.Skip(offset).Take(ActionColumns)) { var index = OptionCount + i; var action = Actions[i];
-     <Box Width="@ActionWidth"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@Escape((index == _selected ? "> " : "  ") + ActionLabel(action))" Foreground="@(index == _selected ? Color.Black : Color.Grey85)" Background="@(index == _selected ? Color.DeepSkyBlue1 : new Color(22, 26, 30))" /></div></Box>
+     <Box Width="@ActionWidth"><div data-focusable="false" @onclick="@(() => Activate(index))"><Markup Content="@Escape((index == _selected ? "> " : "  ") + ActionLabel(action))" Foreground="@(index == _selected ? SelectionForeground : Color.Grey85)" Background="@(index == _selected ? SelectionBackground : new Color(22, 26, 30))" /></div></Box>
     }
    </Flex></Box>
   }
  </Rows>;
  private string SelectedTitle => _kind == 0 ? SelectedRow ?? "" : SelectedSkill?.Name ?? "";
- private string Tip => IsTable ? "↑/↓ rows · ←/→ actions · Tab next · Enter choose · Esc back" : "↑/↓ or Tab select · ←/→ buttons · Enter choose · Esc back";
+ private string Tip => IsTable ? "↑/↓ rows · ←/→ actions · Tab next · Enter choose/toggle status · Esc back" : "Type in outlined fields · ↑/↓ or Tab next · ←/→ buttons · Enter choose · Esc back";
  private string McpValue(string field) => field switch {
   "Name" => _name, "Transport" => _server.IsHttp ? "http" : "stdio", "URL" => _server.Url ?? "", "Command" => _server.Command ?? "", "Arguments" => string.Join(" ", _server.Args), "Headers" => _server.Headers.Count + " entries", "Environment" => _server.Env.Count + " entries", _ => _server.Disabled ? "Off" : "On" };
  private string SkillFieldHelp(string field) => field switch {
@@ -184,7 +262,7 @@
   "What should this skill do?" => "Example: Review C# code for bugs and readability. Explain each issue and suggest a fix.",
   _ => "Optional: describe changes you want, then choose Refine with AI."
  };
- private int FieldHeight(int index) => Wrap(RowLabels[index], 2).Length + (_mode is "skill" or "skill-ai" or "skill-refine" ? Wrap(SkillFieldHelp(SkillFields[index]), 2).Length + 1 : 0);
+ private int FieldHeight(int index) => InlineField(index) is { } field ? 3 + (_kind == 1 ? Wrap(SkillFieldHelp(field)).Length : 0) : Wrap(RowLabels[index], 2).Length + (_mode is "skill" or "skill-ai" or "skill-refine" ? Wrap(SkillFieldHelp(SkillFields[index]), 2).Length + 1 : 0);
  private string SkillValue(string field) => field switch { "Name" => _name, "Description" => _description, "Instructions" => _body.Length + " characters", "Model" => _model, _ => _intent };
  private string Escape(string text) => Spectre.Console.Markup.Escape(text);
  private string[] Wrap(string text, int reserve = 0) => AgentSettingsDraft.Wrap(text, Math.Max(1, Width - 4 - reserve));
@@ -196,12 +274,12 @@
  private bool SelectedEnabled => _kind == 0 ? SelectedRow is { } name && !_servers[name].Disabled : SelectedSkill?.Enabled == true;
  private bool AnyEnabled => _kind == 0 ? Rows.Any(name => !_servers[name].Disabled) : _skills.Any(skill => Rows.Contains(skill.Folder) && skill.Enabled);
  private string ActionLabel(string action) => action switch { "Install from Git / ZIP / Folder" => "Install", "Enable All / Disable All" => AnyEnabled ? "Disable All" : "Enable All", "Enable / Disable" => SelectedEnabled ? "Disable" : "Enable", _ when action.StartsWith("Confirm ") => "Confirm", _ => action };
- private string Description => _confirmAction is not null ? "Confirm " + _confirmAction + "?" : _mode == "models" ? "Choose the model used to generate/refine this skill. Your agent's model stays unchanged." : _mode == "skill-install" ? "Browse to a folder containing a skill or a collection of skills, or install from a Git URL or ZIP file." : _mode == "skill-refine" ? "Describe the changes you want. Apply Refinement updates the draft; it does not save or install it." : _mode == "skill-choice" ? "Write the fields yourself, or describe your task and let AI create a draft. Nothing is installed until you choose Save Skill." : _mode == "skill-ai" ? "Describe the task, when to use the skill, and the result you want. Generate Skill creates an editable draft for your review." : _mode == "skill" ? "Instructions are loaded when a request matches the description. Generate/Refine changes only this draft; Save installs it."
+ private string Description => _confirmAction is not null ? "Confirm " + _confirmAction + "?" : _mode == "models" ? "Choose the model used to generate/refine this skill. Your agent's model stays unchanged." : _mode == "skill-install" ? "Browse to a folder containing a skill or a collection of skills, or install from a Git URL or ZIP file." : _mode == "skill-refine" ? "Describe the changes you want. Apply Refinement updates the draft; it does not save or install it." : _mode == "skill-choice" ? "Write the fields yourself, or describe your task and let AI create a draft. Nothing is installed until you choose Save." : _mode == "skill-ai" ? "Describe the task, when to use the skill, and the result you want. Generate Skill creates an editable draft for your review." : _mode == "skill" ? "Instructions are loaded when a request matches the description. Generate/Refine changes only this draft; Save installs it."
   : _mode == "mcp" ? _selected < McpFields.Length ? McpFields[_selected] switch {
    "Arguments" => "One argument per line. Keep an argument containing spaces on a single line; do not add quotes.", "Environment" or "Headers" => "One KEY=value per line. Values are saved in your local configuration.", "Transport" => "Enter toggles between a local stdio process and a remote HTTP server.", "Enabled" => "Off saves the server without starting it.", _ => "Edit this field, then Save & Connect. Testing starts/connects the server without saving it." } : "Test starts/connects this server without saving. Save makes its definition available to all agents."
   : _kind == 1 ? SelectedSkill?.Error ?? SelectedSkill?.Description ?? "Install skills from a Git repository, ZIP archive, or local folder."
   : SelectedRow is { } name && Pane?.Services.GetRequiredService<McpClientManager>().StartupErrors.TryGetValue(name, out var error) == true ? error : "";
- private int PageSize => Math.Max(1, Height - (IsTable ? 9 + Wrap(SelectedTitle).Length : 7) - ActionRows - DescriptionLines.Length - StatusLines.Length - (Config.ShowTips ? Wrap(Tip).Length : 0) - (_query.Length > 0 ? 1 : 0));
+ private int PageSize => Math.Max(1, Height - (IsTable ? 11 + Wrap(SelectedTitle).Length : 7) - ActionRows - DescriptionLines.Length - StatusLines.Length - (Config.ShowTips ? Wrap(Tip).Length : 0));
  private int[] VisibleRows {
   get {
    var count = RowLabels.Length; if (count == 0) return [];
@@ -221,13 +299,15 @@
  }
  private Color RowColor(int index) => _mode != "list" ? Color.Grey85 : _kind == 0 ? McpStatus(Rows[index]) == "connected" ? Color.Green : McpStatus(Rows[index]) == "failed" ? Color.Red : Color.Grey70 : _skills.First(s => s.Folder == Rows[index]).Error is not null ? Color.Red : _skills.First(s => s.Folder == Rows[index]).Enabled ? Color.Green : Color.Grey70;
  protected override void OnInitialized() {
-  _kind = Kind; Refresh();
+  _kind = Kind; Refresh(); SelectSearch();
   _ = AnimateAsync();
  }
  protected override void OnParametersSet() { if (ExplorerFocus is not null) { ExplorerFocus.NavigateTab = Cycle; ExplorerFocus.FocusExplorer = FocusPanel; } }
- protected override async Task OnAfterRenderAsync(bool firstRender) { if (_input is null && _tools is null && !_installBrowser && (Pane is null || Pane.Active) && !Focus.IsFocused(_focusKey)) await FocusPanel(); }
- private async Task FocusPanel() { if (Pane is not null && !Pane.Active || _input is not null || _tools is not null || _installBrowser) return; if (Pane is not null) Pane.FocusKey = _focusKey; await Focus.FocusAsync(_focusKey); ExplorerFocus?.SetPromptFocused(false); }
+ protected override async Task OnAfterRenderAsync(bool firstRender) { if (_input is null && _tools is null && !_installBrowser && (Pane is null || Pane.Active) && !Focus.IsFocused(FocusTarget)) await FocusPanel(); }
+ private async Task FocusPanel() { if (Pane is not null && !Pane.Active || _input is not null || _tools is not null || _installBrowser) return; var target = FocusTarget; if (Pane is not null) Pane.FocusKey = target; await Focus.FocusAsync(target); ExplorerFocus?.SetPromptFocused(false); }
  private void Select(int index) {
+  if (_busy) return;
+  _inlineIdentity = "";
   _selected = Math.Clamp(index, 0, Math.Max(0, OptionCount + Actions.Length - 1));
   if (IsTable && _selected < OptionCount) { _row = _selected / RowSlots; _rowKey = Rows[_row]; }
  }
@@ -285,7 +365,7 @@
   _rowKey = Rows.ElementAtOrDefault(_row);
   _selected = rowSelected && Rows.Length > 0 ? _row * RowSlots + cell : Math.Clamp(_selected, 0, OptionCount + Actions.Length - 1);
  }
- private void Back() { _mode = "list"; _confirmAction = null; _selected = _row * RowSlots; Refresh(); }
+ private void Back() { _inlineIdentity = ""; _mode = "list"; _confirmAction = null; _selected = _row * RowSlots; Refresh(); }
  private void AskDiscard() { _confirmationSelection = _selected; _confirmAction = "discard draft"; _selected = 0; }
  private void NewServer() { _mode = "mcp"; _name = _originalName = ""; _server = new(); _selected = 0; _status = ""; }
  private void EditServer() { if (SelectedRow is not { } name) return; _mode = "mcp"; _name = _originalName = name; _server = CliIntegrationCoordinator.Clone(_servers)[name]; _selected = 0; _status = ""; }
@@ -323,6 +403,7 @@
   if (_busy || _input is not null || _tools is not null || _installBrowser) return;
   if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
   Select(index);
+  if (InlineField(index) is not null) return;
   if (IsTable && index < OptionCount) { await PerformAction(RowActions[index % RowSlots]); return; }
   if (index < RowLabels.Length) { if (_mode == "models") { _model = _modelChoices[index]; _mode = _modelReturnMode; _selected = _modelReturnSelection; } else if (_mode == "mcp") EditMcpField(McpFields[index]); else await EditSkillField(SkillFields[index]); return; }
   var action = Actions.ElementAtOrDefault(index - OptionCount); if (action is not null) await PerformAction(action);
@@ -337,12 +418,23 @@
    return;
   }
   if (action == "Close") { await OnClose.InvokeAsync(); return; }
-  if (action == "Cancel") { if (_mode == "models") { _mode = _modelReturnMode; _selected = _modelReturnSelection; } else if (_mode == "skill-refine") { _mode = "skill"; _selected = 0; } else if (_mode is "skill-choice" or "skill-install") Back(); else AskDiscard(); return; }
+  if (action == "Cancel") {
+   if (_mode == "models") { _mode = _modelReturnMode; _selected = _modelReturnSelection; }
+   else if (_mode is "skill" or "skill-ai" or "skill-refine" or "skill-choice" or "skill-install") {
+    _name = _description = _body = _intent = _status = "";
+    _skillFolder = null;
+    Back();
+   }
+   else if (_mode == "mcp") { _name = ""; _server = new(); _status = ""; Back(); }
+   else AskDiscard();
+   return;
+  }
   if (action == "Add Server") { NewServer(); return; }
   if (action == "New Skill") { EditSkill(true); _mode = "skill-choice"; return; }
   if (action is "Write Manually" or "Create with AI") { _mode = action == "Write Manually" ? "skill" : "skill-ai"; _selected = 0; return; }
   if (action == "Edit") { if (_kind == 0) EditServer(); else EditSkill(false); return; }
   if (action == "Details") { EditInput("Details", (_mode == "list" && _kind == 0 && SelectedRow is { } server ? server + "\n" + (_servers[server].IsHttp ? "HTTP" : "stdio") + " / " + McpStatus(server) + "\n\n" : "") + Description + "\n\n" + _status + (_mode == "list" && _kind == 1 && SelectedSkill is { } detail ? "\n\n" + detail.Name + "\n" + detail.Folder + "\n\n" + detail.Error + "\n\n" + detail.Body : ""), _ => Task.CompletedTask, true); return; }
+  if (action == "Search") { SelectSearch(); return; }
   if (action == "Search") { EditInput("Search by name or description (empty shows all)", _query, value => Assign(() => { _query = value.Trim(); _row = _selected = 0; _rowKey = null; Refresh(); })); return; }
   if (action == "Remove") { if (SelectedRow is not null) { _confirmationSelection = _selected; _confirmAction = "delete " + (_kind == 0 ? SelectedRow : SelectedSkill?.Name); _selected = 0; } return; }
   if (action == "Install from Git / ZIP / Folder") { _mode = "skill-install"; _selected = 0; return; }
@@ -356,10 +448,11 @@
    if (action == "Generate Skill") { var draft = await SkillAuthor.GenerateAsync(Config.OllamaEndpoint, _model, _intent, token); _name = draft.Name; _description = draft.Description; _body = draft.Body; }
    else { if (string.IsNullOrWhiteSpace(_body)) throw new ArgumentException("Add instructions before refining."); _body = await SkillAuthor.RefineAsync(Config.OllamaEndpoint, _model, _body, _intent, token); }
    _mode = "skill"; _selected = 0;
-   _status = "Draft ready. Select Instructions to review/edit it, then Save Skill.";
+   _status = "Draft ready. Select Instructions to review/edit it, then Save.";
   }, false); return; }
-  if (action == "Save Skill") { await Run("Saving skill", async _ => { _skillFolder = Coordinator.Skills.Save(_skillFolder, _name, _description, _body); _rowKey = _skillFolder; await Coordinator.ReloadSkillsAsync(Agents); _status = "Skill saved."; Back(); }); return; }
+  if (action == "Save") { await Run("Saving skill", async _ => { _skillFolder = Coordinator.Skills.Save(_skillFolder, _name, _description, _body); _rowKey = _skillFolder; await Coordinator.ReloadSkillsAsync(Agents); _status = "Skill saved."; Back(); }); return; }
   if (action is "Test Connection" or "Save & Connect") { await Run(action == "Test Connection" ? "Testing server" : "Saving and connecting", async token => {
+   _name = _name.Trim().ToLowerInvariant(); _server.Url = _server.Url?.Trim(); _server.Command = _server.Command?.Trim();
    CliIntegrationCoordinator.ValidateServer(_name, _server);
    if (action == "Test Connection") {
     var test = CliIntegrationCoordinator.Clone(new() { [_name] = _server }); test[_name].Disabled = false;

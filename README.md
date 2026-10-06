@@ -137,6 +137,14 @@ Every file write and delete is intercepted with a color-coded diff. You approve,
 
 Type `@` to autocomplete any project file and attach it as context. The AI sees the full file content alongside your prompt. Reference multiple files in a single message.
 
+Type an emoji alias in the chat prompt, such as `:cool:`, `:brain:`, or `:rocket:`. Completing the closing colon replaces it with the emoji immediately. All desktop shortcodes and synonyms are supported, including `:coolglasses:`, `:mind_blown:`, `:idea:`, and `:+1:`. Names are case-insensitive; unknown aliases stay as typed.
+
+The 😀 button beside the prompt opens the desktop emoji quick-pick set. Click an emoji or navigate with arrows and press Enter to insert it at the cursor. Escape closes the picker without inserting. Tab also opens it when file/command autocomplete and explorer navigation are inactive.
+
+You can keep typing, pasting, and deleting in the prompt while the picker is open. Arrow keys navigate the emoji grid until you close it.
+
+Type `:` at the start of a word to open emoji suggestions, then continue with a name such as `:cool` to filter them. Arrows and Enter (or a click) replace the partial shortcode with an emoji. Typing the closing `:` also closes the picker and converts recognized aliases; unknown aliases remain literal. Escape dismisses suggestions for that token.
+
 <img src="docs/images/file-autocomplete.gif" alt="File autocomplete" width="400">
 
 </td>
@@ -226,6 +234,8 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/config` | Adjust settings — guided wizard |
 | `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
+| `/snapshot-context-create` | Save an AI summary of this conversation |
+| `/snapshot-context-import` | Browse and import saved context snapshots |
 | `/ollama-pull` | Browse the Ollama library and download a model |
 | `/ollama-serve` | Start local Ollama if unavailable and retry the connection twice |
 | `/learn` | Interactive guide to LLMs and local AI |
@@ -240,10 +250,10 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/music-lofi` | Switch to lofi |
 | `/music-synthwave` | Switch to synthwave |
 | `/music-list` | List available tracks |
-| `/mcp` | Open the shared MCP manager: add/edit, test, enable/disable, and inspect tools |
+| `/mcp` | Open the shared MCP manager: add/edit, test, enable/disable, and inspect tools (Alt+M) |
 | `/mcp tools <server>` | List tools exposed by connected MCP servers (server optional) |
 | `/mcp-reload` | Restart all MCP servers and re-register their tools |
-| `/skills` | Manage user skills: install from Git/ZIP/folder, edit, generate/refine, and enable/disable |
+| `/skills` | Manage user skills: install from Git/ZIP/folder, edit, generate/refine, and enable/disable (Alt+K) |
 | `/clear` | Clear conversation history |
 | `/history` | Search and restore closed agents, including transcripts and conversation context (Alt+H) |
 | `/exit` | Exit MandoCode |
@@ -256,13 +266,17 @@ First-run setup and `/setup` use a guided panel: **Connect → Choose model → 
 
 Use `/ollama-pull` anytime to browse the Ollama library, choose a model tag, and download it with progress. Use the search box to filter model names; choose Popular, Name A–Z, or Newest (the default) (Ctrl+S cycles sorting). The table shows model names, capabilities, and hosting. Toggle Cloud to show only models marked for cloud hosting. Tab cycles through search, sorting/filter buttons, and the list. Left/Right selects a sorting button; Enter applies it. Ctrl+P pulls the model name typed in the search field. Enter, Escape, or the Cancel button cancels a download. Use `/model` afterwards to switch to the downloaded model.
 
+### Context snapshots
+
+Open **Context Snapshots** beside Agent Settings, or use `/snapshot-context-create` to save a conversation summary. The outlined name textbox is ready to type into as soon as the form opens; no Enter-to-edit step is needed. Tab moves to the model and buttons. Enter a name or leave it blank for an AI title, choose a summarizer model (initially the current agent model), then Create. The separate summarizer does not change your agent context or run tools. Saved snapshots persist in `~/.mandocode/snapshots.json` and are shared across CLI agents and workspaces. The browser has a search/Create/Close toolbar, collapsible project groups with newest snapshots first, and a summary pane with Import into Agent/Delete actions. Wide terminals show the list and summary side by side; narrow terminals stack them. Tab moves through search, list, toolbar, summary, and actions. The selected snapshot stays subtly shaded while another control has keyboard focus. Click project headings or press Enter on them to collapse/expand. Click the summary to focus it; mouse wheel, arrows, Home/End, and Page Up/Page Down scroll it. Enter on a snapshot imports it, while Enter on Close or Escape closes without importing. Import queues a summary for the next message; multiple imports stack without duplicating the same snapshot. Delete requires confirmation. When `/model`, `/setup`, or the configuration wizard clears an existing conversation, a prompt offers Keep Memory, Create Snapshot, or Dismiss. Changing models in Agent Settings already keeps memory.
+
 ### MCP and Skills managers
 
-Open `/mcp` for MCP Servers or `/skills` for Skills, or choose **Manage MCP Servers** / **Manage Skills** in Agent Settings → Integrations. Each table row has Enable/Disable, Edit, and Delete buttons; MCP rows also have Tools. Click an item's name or press Enter on it to view full details. Up/Down moves between rows, Left/Right selects row actions, Tab visits all controls, and Escape returns or closes. Buttons wrap beneath their item in narrow panes. New Skill offers Write Manually with field explanations, or Create with AI with a task description and model picker. Manual forms contain only Name, Description, and Instructions; AI refinement is optional and opens separately. Generated drafts remain editable until Save Skill. Install offers a folder browser or Git URL/ZIP input. Add/New, Install, and Search appear above the table. The selected item has its full name and wrapped details directly below the table; bulk toggles, Refresh, Close, and operation feedback stay in the footer. These managers edit shared user settings; Agent Settings still controls whether a particular agent can use MCP tools.
+Open `/mcp` (Alt+M) for MCP Servers or `/skills` (Alt+K) for Skills, or choose **Manage MCP Servers** / **Manage Skills** in Agent Settings → Integrations. Each table row has an Active/Disabled status toggle, Edit, and Delete buttons; MCP rows also have Tools. Click an item's name or press Enter on it to view full details. Up/Down moves between rows, Left/Right selects row actions, Tab visits all controls, and Escape returns or closes. Buttons wrap beneath their item in narrow panes. New Skill offers Write Manually with field explanations, or Create with AI with a task description and model picker. Names, URLs, commands, skill descriptions, and AI requests use outlined textboxes you can type into directly. Tab or Up/Down moves between fields; Left/Right moves the text cursor. Instructions, arguments, headers, and environment variables open dedicated multiline editors. Manual forms contain only Name, Description, and Instructions; AI refinement is optional and opens separately. Generated drafts remain editable until Save. Install offers a folder browser or Git URL/ZIP input. The MCP table has a live search textbox with +MCP Server to its right; Down or Enter from search moves into the results. Skills has a focused Search Skills textbox beside +Skill and Install. Both search fields use gold text and filter as you type. The selected item has its full name and wrapped details directly below the table; bulk toggles, Refresh, Close, and operation feedback stay in the footer. These managers edit shared user settings; Agent Settings still controls whether a particular agent can use MCP tools.
 
-For MCP, choose **Add Server**, select stdio or HTTP, fill in the executable/URL, then **Test Connection** or **Save & Connect**. Enter stdio arguments one per line, keeping arguments with spaces together without extra quotes. Environment variables and HTTP headers use one `KEY=value` per line. Enable/Disable and Enable All/Disable All persist the selection and reconnect open agents without clearing their conversations. Connection failures remain visible in the list; Details shows the complete error. Installing a stdio server means configuring its launch command, such as `npx` or `uvx`; the executable must be available on your system.
+For MCP, choose **+MCP Server**, select stdio or HTTP, fill in the executable/URL, then **Test Connection** or **Save & Connect**. Enter stdio arguments one per line, keeping arguments with spaces together without extra quotes. Environment variables and HTTP headers use one `KEY=value` per line. Enable/Disable and Enable All/Disable All persist the selection and reconnect open agents without clearing their conversations. Connection failures remain visible in the list; Details shows the complete error. Installing a stdio server means configuring its launch command, such as `npx` or `uvx`; the executable must be available on your system.
 
-For Skills, **Install** accepts a Git repository URL, local ZIP archive, or folder containing one or more `SKILL.md` directories. It copies the skill's bundled files, skips existing names, and does not alter project skills. **New Skill** and **Edit** provide name, description, and instructions fields. To generate a draft, enter a Generation request, choose the authoring model, and select **Generate**; **Refine** revises existing instructions. Review the Instructions before **Save Skill**. Authoring uses a separate conversation with no tools and leaves the agent's conversation and model unchanged.
+For Skills, **Install** accepts a Git repository URL, local ZIP archive, or folder containing one or more `SKILL.md` directories. It copies the skill's bundled files, skips existing names, and does not alter project skills. **+Skill** offers Write Manually or Create with AI. Manual creation and Edit provide name, description, and instructions fields; AI creation takes a task description and authoring model before generating a draft. Review the Instructions before **Save**. Form actions are Save, Cancel, and Refine with AI. Cancel immediately discards the draft and returns to the list, as it does when creating or editing MCP servers. Authoring uses a separate conversation with no tools and leaves the agent's conversation and model unchanged.
 
 Skills use the same enable/disable convention as Desktop (`SKILL.md` / `SKILL.md.disabled`). Removing a skill moves it into `.trash` inside your user skills directory, with its recovery path shown in Details. Shared changes wait until other agents finish their requests and close their settings menus. Project skills keep their existing precedence over user skills.
 
