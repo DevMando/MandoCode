@@ -260,7 +260,7 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     private bool _paneStopped;
     private string? _headerModel;
-    private void StopPane() { _snapshotCompletion?.TrySetResult(); _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _inputTcs?.TrySetResult(string.Empty); }
+    private void StopPane() { _snapshotCompletion?.TrySetResult(); _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _peerRequest?.Completion.TrySetResult(new(false, "Agent closed.")); _runningPeerRequest?.Completion.TrySetResult(new(false, "Agent closed.")); if (Pane?.AskPeer == AskPeerAsync) { Pane.AskPeer = null; Pane.ReadConversation = null; } _inputTcs?.TrySetResult(string.Empty); }
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -331,6 +331,38 @@
     private IReadOnlyList<ApprovalSelect.Option> _approvalMenuOptions = Array.Empty<ApprovalSelect.Option>();
 
     private bool _isProcessing = false;
+    private CliPeerRequest? _peerRequest;
+    private CliPeerRequest? _runningPeerRequest;
+    private string? _lastRequestError;
+    private string? _lastCompletedReply;
+    private async Task<CliPeerAnswer> AskPeerAsync(CliPeerRequest request)
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_paneStopped || Pane?.IsBusy?.Invoke() != false || Pane.IsAwaitingInput?.Invoke() == true ||
+                    _inputTcs is null || _inputTcs.Task.IsCompleted || request.Cancellation.IsCancellationRequested)
+                {
+                    request.Accepted.TrySetResult(false);
+                    request.Completion.TrySetResult(new(false, "Agent is busy, starting, awaiting input, or closed."));
+                    return;
+                }
+                _peerRequest = request;
+                _isProcessing = true;
+                Pane.Session.AppendAgentExchange($"{CliAgentPresentation.PlainName(request.From)} · Request from{(request.IsDelegation ? " · " + request.InteractionId : "")}\n{CliAgentPresentation.PlainName(request.From)} → {CliAgentPresentation.PlainName(Pane.Name)}\n\n{request.Question}", Spectre.Console.Color.Purple, request.InteractionId, "Working");
+                _inputTcs.TrySetResult($"A request from agent {request.From}:\n{request.Question}\n\nReturn your answer normally: it is automatically delivered to the requesting agent. Do not also send the same answer with send_agent_message.");
+                request.Accepted.TrySetResult(true);
+                StateHasChanged();
+            });
+            return await request.Completion.Task;
+        }
+        catch (Exception ex)
+        {
+            request.Accepted.TrySetResult(false);
+            return new(false, ex.Message);
+        }
+    }
     private string _promptInitialValue = "";
 
 
@@ -474,6 +506,17 @@
             if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
             if (Pane is not null) Pane.Stop = StopPane;
             if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
+            if (Pane is not null)
+            {
+                Pane.AskPeer = AskPeerAsync;
+                Pane.ReadConversation = async () =>
+                {
+                    IReadOnlyList<ChatMsg> result = [];
+                    await InvokeAsync(() => result = _messages.Select(m => new ChatMsg { Role = m.Role, Text = m.Text }).ToArray());
+                    return result;
+                };
+                AI.SetHostTools(new CliAgentTools(Pane, Services.GetRequiredService<CliDelegations>()).Functions);
+            }
             if (Pane is not null) { Pane.ToggleSnapshots = ToggleSnapshots; Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
         }
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
@@ -1095,10 +1138,11 @@
         // Track operation type for contextual spinner messages
         _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
 
-        AnsiConsole.MarkupLine($"[#56b6c2]{ToolActivityIcons.For(call.FunctionName, call.McpServerName is not null)} {Spectre.Console.Markup.Escape(call.Description)}[/]");
+        var activityLabel = call.McpServerName is null ? ToolActivityIcons.Label(call.FunctionName, call.Description) : call.Description;
+        AnsiConsole.MarkupLine($"[#56b6c2]{ToolActivityIcons.For(call.FunctionName, call.McpServerName is not null)} {Spectre.Console.Markup.Escape(activityLabel)}[/]");
 
         // Show what the model is doing above the spinner in grey
-        Spinner.Start(call.Description);
+        Spinner.Start(activityLabel);
     }
 
     private void OpenReply()
@@ -1408,6 +1452,34 @@
             // Await user input via VDOM PromptInput component.
             var input = await WaitForVdomInputAsync();
             if (_paneStopped) return;
+            var peerRequest = _peerRequest;
+            _peerRequest = null;
+            using var callChain = Pane is null ? null : CliAgentCallChain.Enter(Pane.PersistKey, peerRequest?.Chain, peerRequest?.Kind == "review");
+
+            if (peerRequest is not null)
+            {
+                _runningPeerRequest = peerRequest;
+                using var peerTranscript = Pane!.Session.CaptureAgentExchange(peerRequest.InteractionId, peerRequest.From);
+                try
+                {
+                    input = Services.GetRequiredService<CliDelegations>().WithInbox(Pane!.PersistKey, input);
+                    _messages.Add(new ChatMsg { Role = "user", Text = input });
+                    var before = _messages.Count;
+                    await ProcessDirectRequestAsync(input, cancellationToken: peerRequest.Cancellation);
+                    var answer = _lastCompletedReply ?? string.Join("\n", _messages.Skip(before).Where(m => m.Role == "assistant").Select(m => m.Text));
+                    var outcome = _lastRequestError is not null ? new CliPeerAnswer(false, _lastRequestError) :
+                        string.IsNullOrWhiteSpace(answer) ? new(false, "The model returned no answer.") : new(true, answer);
+                    Pane?.Session.AppendAgentDetail(peerRequest.InteractionId, $"{CliAgentPresentation.PlainName(peerRequest.From)} · Request from", new Spectre.Console.Text(outcome.Answered ? "Response delivered to the requesting agent." : outcome.Text, new Spectre.Console.Style(outcome.Answered ? Spectre.Console.Color.Green : Spectre.Console.Color.Yellow)), outcome.Answered ? "Completed" : "Failed", problem: !outcome.Answered);
+                    peerRequest.Completion.TrySetResult(outcome);
+                }
+                catch (Exception ex)
+                {
+                    Pane!.Session.AppendAgentDetail(peerRequest.InteractionId, $"{CliAgentPresentation.PlainName(peerRequest.From)} · Request", new Spectre.Console.Text(ex.Message), "Failed", problem: true);
+                    peerRequest.Completion.TrySetResult(new(false, ex.Message));
+                }
+                finally { _runningPeerRequest = null; }
+                continue;
+            }
 
             if (string.IsNullOrWhiteSpace(input))
                 continue;
@@ -1756,6 +1828,8 @@
 
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
+            if (Pane is not null) processedInput += new CliAgentDirectory(Pane).ExpandMentions(input)[input.Length..];
+            if (Pane is not null) processedInput = Services.GetRequiredService<CliDelegations>().WithInbox(Pane.PersistKey, processedInput);
 
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
@@ -1846,7 +1920,7 @@
         }
         if (Pane is not null && Pane.Workspace.Command(Pane, input)) return;
         if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
-        if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input);
+        if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input, Pane is null ? null : new CliAgentDirectory(Pane).All.Select(p => p.Name));
         _isProcessing = true;
         _inputTcs.TrySetResult(input);
     }
@@ -2252,6 +2326,7 @@
 
         foreach (var filePath in matches)
         {
+            if (Pane is not null && CliAgentDirectory.IsAgentName(filePath) && new CliAgentDirectory(Pane).Resolve(filePath) is not null) continue;
 
             // Skip duplicates
             if (!referencedFiles.Add(filePath))
@@ -2412,8 +2487,10 @@
         }
     }
 
-    private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null)
+    private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null, CancellationToken cancellationToken = default)
     {
+        _lastRequestError = null;
+        _lastCompletedReply = null;
         (Pane?.Session ?? TuiConsole.Current)?.BeginToolTurn();
         // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
         // turn the user then cancelled would sit in the single slot and execute at the end of some
@@ -2427,7 +2504,7 @@
 
         AnsiConsole.WriteLine();
 
-        _requestCts = new CancellationTokenSource();
+        _requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _requestCts.Token;
         StartCancelKeyListener();
 
@@ -2471,6 +2548,9 @@
                     // tool call, so each turn reads in the order it happened.
                     void AccumulateChunk(string chunk)
                     {
+                        // Peer reports carry the final completed assistant turn, rather than all
+                        // of the narration preceding tool calls. The receiver keeps the full transcript.
+                        if (!string.IsNullOrWhiteSpace(chunk)) _lastCompletedReply = chunk.Trim();
                         var unprinted = SettleReply(chunk);
                         if (unprinted.Length > 0)
                         {
@@ -2519,6 +2599,7 @@
                     var responseText = responseBuffer.ToString().Trim();
                     if (string.IsNullOrEmpty(responseText))
                     {
+                        _lastRequestError = "The model returned no answer.";
                         AnsiConsole.MarkupLine("[yellow]Model returned an empty response. The context may be too large for this model.[/]");
                         AnsiConsole.MarkupLine("[dim]Try a smaller request, or switch to a model with a larger context window via /config.[/]");
                     }
@@ -2535,6 +2616,7 @@
                         if (responseText.Contains("Error: Connection to Ollama failed.", StringComparison.Ordinal)
                             && !await CheckOllamaConnectionAsync())
                         {
+                            _lastRequestError = "Connection to Ollama failed.";
                             CloseReply();
                             await HandleRetryCommandAsync();
                             if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
@@ -2546,6 +2628,7 @@
                         // every single time this hits.
                         if (Looks401(responseText))
                         {
+                            _lastRequestError = "The model requires sign-in.";
                             await TryAutoSigninAfter401Async();
                         }
 
@@ -2601,6 +2684,7 @@
         }
         catch (OperationCanceledException)
         {
+            _lastRequestError = "Request cancelled.";
             Spinner.Stop();
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[yellow]Request cancelled.[/]");
@@ -2608,6 +2692,7 @@
         }
         catch (Exception ex)
         {
+            _lastRequestError = ex.Message;
             Spinner.Stop();
             AnsiConsole.WriteLine($"Error: {ex.Message}");
             AnsiConsole.WriteLine();
@@ -2659,7 +2744,7 @@
             // Large responses with many tables/code blocks can take 10+ seconds to build.
             Spectre.Console.Rendering.IRenderable? renderable = null;
             var buildTask = Task.Run(() =>
-                renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot));
+                renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot, Pane is null ? null : new CliAgentDirectory(Pane).All.Select(p => p.Name).ToArray()));
 
             // Show a spinner if the build takes more than 1 second. The remaining
             // budget comes from config — big tool-grounded responses (MCP, many

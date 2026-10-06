@@ -33,8 +33,8 @@
     }
     else if (ChatFeaturesEnabled)
     {
-        @if (_composer.FilesLoading) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
-        <AutocompletePopup Composer="_composer" />
+        @if (_composer.FilesLoading && !_composer.ViewingAgents) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
+        <AutocompletePopup Composer="_composer" OnChanged="PickerChanged" />
     }
     <Flex Direction="FlexDirection.Row" Height="3">
     <Box Width="@PromptWidth">
@@ -42,7 +42,7 @@
         <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="1"
                   WordWrap="false" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
                   CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
-                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen)"
+                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen || _composer.AtPickerOpen)"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
     </Panel>
     </Box>
@@ -82,7 +82,7 @@
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
-    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files, : for emojis";
+    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
@@ -167,7 +167,11 @@
             _composer = new(SM);
             if (Pane is not null && key is not null) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
         }
+        if (ChatFeaturesEnabled && Pane is not null) _composer.Agents = new CliAgentDirectory(Pane);
+        if (ChatFeaturesEnabled && Pane?.Workspace.Registry is { } registry) registry.Changed += FilesChanged;
+        else if (ChatFeaturesEnabled && Pane is not null) Pane.Workspace.Changed += FilesChanged;
     }
+    private async Task PickerChanged() { StateHasChanged(); await FocusPromptAsync(); }
     private FileAutocompleteProvider? _files;
     private bool _disposed;
     private int _loadingFrame;
@@ -180,6 +184,8 @@
     public void Dispose()
     {
         _disposed = true; _loadingStop.Cancel(); if (_files is not null) _files.SuggestionsChanged -= FilesChanged;
+        if (Pane?.Workspace.Registry is { } registry) registry.Changed -= FilesChanged;
+        else if (Pane is not null) Pane.Workspace.Changed -= FilesChanged;
         if (ExplorerFocus is not null) ExplorerFocus.Changed -= ExplorerFocusChanged;
     }
     protected override void OnParametersSet()
@@ -222,6 +228,7 @@
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
         if (Pane is { Active: false }) return true;
+        if (!Disabled && key.Key == "Tab" && _composer.AtPickerOpen && _composer.HandleKey("Tab")) { StateHasChanged(); return true; }
         if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
         if (_emojiOpen && ChatFeaturesEnabled && !Disabled)
         {
@@ -265,6 +272,11 @@
                 default: return false;
             }
             StateHasChanged();
+            return true;
+        }
+        if (ChatFeaturesEnabled && ModelPicker is null && !_emojiOpen && !_composer.IsOpen && !_composer.AtPickerOpen && key.Key is "ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")
+        {
+            await OnScroll.InvokeAsync(key.Key);
             return true;
         }
         if (Disabled)

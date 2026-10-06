@@ -113,6 +113,7 @@ class Program
         config.DefaultAgentOptions ??= AgentSettingsDraft.Capture(config);
         services.AddSingleton(new SnapshotStore(config.AllowPersistence ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "snapshots.json") : null));
         services.AddScoped<SnapshotContext>();
+        services.AddSingleton<CliDelegations>();
         services.AddSingleton(new AgentModelDefaults(config));
         services.AddSingleton(new CliIntegrationCoordinator(config));
         // Register configuration per agent

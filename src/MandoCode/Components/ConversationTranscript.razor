@@ -1,0 +1,49 @@
+@foreach (var entry in Entries)
+{
+    <Rows @key="entry.Id">
+    @if (entry.AgentActivity is { } exchange)
+    {
+        <WorkspaceButton @key="entry.Id" Parts="@ExchangeParts(exchange)" OnClick="@(() => OnAgentToggle.InvokeAsync(exchange))" />
+        @if (exchange.Expanded && Details.TryGetValue(exchange, out var details))
+        {
+            <Markup Content="@($"Started {exchange.CreatedAt.ToLocalTime():g} · Updated {exchange.UpdatedAt.ToLocalTime():T}")" Foreground="Spectre.Console.Color.Grey" />
+            <ConversationTranscript @key="(exchange.Id, details.Length, details.LastOrDefault()?.Id)" Entries="details" Details="Details" OnAgentToggle="OnAgentToggle" OnToolToggle="OnToolToggle" />
+        }
+    }
+    else if (entry.ToolActivity is { Finished: true } activity)
+    {
+        <WorkspaceButton @key="entry.Id" Content="@((activity.Expanded ? "▾ ⚡ " : "▸ ⚡ ") + activity.Summary)" OnClick="@(() => OnToolToggle.InvokeAsync(activity))" />
+    }
+    else if (entry.ToolActivity is null && (entry.ToolOutput is null || !entry.ToolOutput.Finished || entry.ToolOutput.Expanded))
+    {
+        <ConversationEntry @key="entry.Id" Entry="entry" />
+    }
+    </Rows>
+}
+
+@code {
+    private static IReadOnlyList<ButtonTextPart> ExchangeParts(AgentExchange exchange)
+    {
+        var title = exchange.Title.Split(" · ", 2, StringSplitOptions.None);
+        var parts = new List<ButtonTextPart>
+        {
+            new(exchange.Expanded ? "▾ " : "▸ ", Spectre.Console.Color.Grey),
+            new(title[0], new Spectre.Console.Color(198, 120, 221))
+        };
+        if (title.Length > 1) parts.Add(new(" · " + title[1], Spectre.Console.Color.Grey));
+        parts.Add(new(" · ", Spectre.Console.Color.Grey));
+        var statusColor = exchange.Status switch
+        {
+            "Completed" or "Delivered" => Spectre.Console.Color.Green,
+            "Failed" or "Declined" => Spectre.Console.Color.Red,
+            "Working" or "Working in background" or "Waiting for reply" or "Sent" or "Cancellation requested" => new Spectre.Console.Color(255, 200, 80),
+            _ => Spectre.Console.Color.Grey
+        };
+        parts.Add(new(exchange.Status, statusColor));
+        return parts;
+    }
+    [Parameter] public IReadOnlyList<TuiEntry> Entries { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<AgentExchange, TuiEntry[]> Details { get; set; } = new Dictionary<AgentExchange, TuiEntry[]>();
+    [Parameter] public EventCallback<AgentExchange> OnAgentToggle { get; set; }
+    [Parameter] public EventCallback<ToolActivity> OnToolToggle { get; set; }
+}

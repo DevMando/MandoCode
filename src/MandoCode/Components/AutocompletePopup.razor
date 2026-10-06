@@ -1,10 +1,21 @@
 @using Spectre.Console
 @inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
 
-@if (Composer.IsOpen)
+@if (Composer.AtPickerOpen || Composer.IsOpen)
 {
-    <Panel Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
+    <Panel TitleColor="@PaneColors.For(Pane, Composer.AtPickerOpen ? new Color(255, 200, 80) : new Color(86, 182, 194))" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(Composer.AtPickerOpen ? Composer.ViewingAgents ? "Agents — Press [Tab] for Files" : "Files — Press [Tab] for Agents" : Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
         <Rows>
+            @if (Composer.AtPickerOpen && Composer.ViewingAgents)
+            {
+                @if (Composer.AgentSuggestions.Length == 0) { <Markup Content="No matching open agents" Foreground="Color.Grey70" /> }
+                @foreach (var index in AgentIndices)
+                {
+                    var agent = Composer.AgentSuggestions[index];
+                    <div data-focusable="false" @onclick="@(() => Choose(index))"><Markup Content="@((index == Composer.AgentSelected ? "> " : "  ") + agent.Name + " · " + agent.Workspace.Name)" Foreground="@(index == Composer.AgentSelected ? Color.White : new Color(198, 120, 221))" Background="@(index == Composer.AgentSelected ? new Color(80, 55, 101) : Color.Default)" /></div>
+                }
+            }
+            else
+            {
             @foreach (var index in VisibleIndices)
             {
                 var item = Composer.Suggestions.DropdownItems[index];
@@ -20,6 +31,7 @@
                     <CommandSuggestionRow Command="@item" Description="@description" Selected="@selected" CommandColumn="@CommandColumn" />
                 }
             }
+            }
         </Rows>
     </Panel>
 }
@@ -27,6 +39,17 @@
 @code {
     [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private async Task Choose(int index) { Composer.InsertAgent(index); await OnChanged.InvokeAsync(); }
+    private IEnumerable<int> AgentIndices
+    {
+        get
+        {
+            var visible = Math.Min(6, Math.Max(1, Viewport.Height / 4));
+            var start = Math.Clamp(Composer.AgentSelected - visible + 1, 0, Math.Max(0, Composer.AgentSuggestions.Length - visible));
+            return Enumerable.Range(start, Math.Min(visible, Composer.AgentSuggestions.Length - start));
+        }
+    }
     private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Select(command => command.Length).DefaultIfEmpty(0).Max());
     private IEnumerable<int> VisibleIndices
     {

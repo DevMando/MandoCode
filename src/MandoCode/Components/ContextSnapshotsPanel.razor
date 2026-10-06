@@ -186,7 +186,7 @@
   Store.Refresh();
   ResetBrowser();
   _model = CurrentModel; _models = [_model]; _create = StartCreating; _offer = SwitchOffer;
-  _inputFocused = _create && !_offer;
+  _inputFocused = !_offer;
   _status = Store.LoadError is { } error ? "Could not load saved snapshots: " + error : ""; _error = Store.LoadError is not null;
   Store.Changed += StoreChanged; _ = LoadModels(); _ = Animate();
  }

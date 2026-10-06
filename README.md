@@ -235,7 +235,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
 | `/snapshot-context-create` | Save an AI summary of this conversation |
-| `/snapshot-context-import` | Browse and import saved context snapshots |
+| `/snapshot-context-import` | Browse and import saved context snapshots (Alt+C) |
 | `/ollama-pull` | Browse the Ollama library and download a model |
 | `/ollama-serve` | Start local Ollama if unavailable and retry the connection twice |
 | `/learn` | Interactive guide to LLMs and local AI |
@@ -265,6 +265,27 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 First-run setup and `/setup` use a guided panel: **Connect → Choose model → Download → Verify → Ready**. Choose a recommended cloud starter (`glm-5.3-flash:cloud` or `deepseek-v4.1-flash:cloud`), a local starter with approximate download sizes, an installed model, or the full model browser. Cloud requires Ollama sign-in and internet; account limits and pricing apply. Local model memory use depends on the model and context, beyond download size. Back returns from choices, and Escape pauses setup. Downloads target your configured Ollama server; remote cloud authentication must be configured on that server. Setup tests a real model response before saving it as the default for new agents. Failed verification offers retry, another model, or Finish later. Existing model preferences are preserved until verification succeeds.
 
 Use `/ollama-pull` anytime to browse the Ollama library, choose a model tag, and download it with progress. Use the search box to filter model names; choose Popular, Name A–Z, or Newest (the default) (Ctrl+S cycles sorting). The table shows model names, capabilities, and hosting. Toggle Cloud to show only models marked for cloud hosting. Tab cycles through search, sorting/filter buttons, and the list. Left/Right selects a sorting button; Enter applies it. Ctrl+P pulls the model name typed in the search field. Enter, Escape, or the Cancel button cancels a download. Use `/model` afterwards to switch to the downloaded model.
+
+### Mention another agent
+
+Type `@` for files, then **Tab** to switch to open agents across workspaces. Type a name to filter, use Up/Down and Enter to select, or press Tab again for files. The switching hint appears only in the picker title. Escape closes the picker without deleting your text. Names with spaces are quoted automatically. Selecting a file that shares an agent's name inserts an explicit `@./` path.
+
+Try `What is @Ares working on?` or `Ask @Ares what it found and let me know later.` The picker shows plain agent names in purple, with white text when highlighted. Recognized chat mentions appear with consistent agent avatars and purple names in submitted prompts and reply prose. File paths, email addresses, code snippets, and unknown names stay literal. Agent interactions have their own collapsed sections in both transcripts, showing participants and live status. Expand one to inspect requests, messages, task commentary, tool calls, and Markdown replies with timestamps. Expansion stays open as updates arrive; failures and cancellations also have a visible notice. The main answer to the user stays outside the section. Up/Down scrolls the conversation from the prompt when no picker is open, including during a response. Each agent uses its own model, context, tools, and approval settings; busy agents keep working and call loops are blocked.
+
+| Agent tool | Behavior |
+|---|---|
+| `ask_agent_and_wait` | Waits for an answer needed to continue the current request |
+| `ask_agent_async` | Asks an independent question; its answer arrives later |
+| `send_agent_message` | Delivers information to an inbox without starting a turn or requesting a reply |
+| `delegate_to_agent` | Assigns independent work and returns after acceptance |
+| `request_agent_review` | Assigns a background review; file changes, commands, plans, and further assignments are blocked |
+| `handoff_to_agent` | Transfers a clearly specified task scope; the caller is instructed to stop working on that scope |
+| `update_agent_job` | Queues additional context for an interaction by ID |
+| `cancel_agent_job` | Requests cancellation of an interaction you assigned; completed changes remain |
+| `wait_for_agent_job` | Waits explicitly for a result, with a timeout; ending the wait does not cancel the job |
+| `list_agents`, `get_agent_status`, `read_agent_transcript`, `check_delegations` | Inspect agents, conversations, and background interaction states |
+
+Background questions and jobs have readable IDs such as `job1`; inbox messages use `message1`. Jobs and report Completed, Declined, Cancelled, or Failed outcomes. They return after acceptance rather than waiting for a result. Reports appear in the caller's transcript and are included with its next request. Messages and updates can reach busy agents but are consumed at the next turn, not injected into an active request. Cancellation targets only that interaction; ownership is checked by the assigning agent. Handoffs communicate responsibility and file scope to the models rather than locking files. Reviews permit built-in inspection tools; shell commands and unknown MCP tools are unavailable in a read-only review.
 
 ### Context snapshots
 

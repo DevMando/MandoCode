@@ -69,7 +69,7 @@ public static class MarkdownHtmlRenderer
         AnsiConsole.Write(BuildRenderable(markdown, projectRoot));
     }
 
-    public static IRenderable BuildRenderable(string markdown, string? projectRoot = null)
+    public static IRenderable BuildRenderable(string markdown, string? projectRoot = null, IEnumerable<string>? agentNames = null)
     {
         if (string.IsNullOrWhiteSpace(markdown))
             return new Text("");
@@ -79,6 +79,12 @@ public static class MarkdownHtmlRenderer
 
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
+        foreach (var node in doc.DocumentNode.Descendants().Where(n => n.NodeType == HtmlNodeType.Text && !n.Ancestors().Any(a => a.Name is "code" or "pre")))
+        {
+            var textNode = (HtmlTextNode)node;
+            textNode.Text = TerminalEmojiPresentation.SpaceLabels(TerminalEmojiPresentation.Normalize(textNode.Text));
+        }
+        if (agentNames is not null) CliAgentPresentation.Annotate(doc, agentNames);
 
         // MarkdownRenderingService wraps output in <div>…</div>. Unwrap.
         var root = doc.DocumentNode.SelectSingleNode("/div") ?? doc.DocumentNode;
@@ -464,6 +470,11 @@ public static class MarkdownHtmlRenderer
         }
 
         if (node.NodeType != HtmlNodeType.Element) return;
+        if (node.Name == "span" && node.GetAttributeValue("data-cli-agent", "") == "true")
+        {
+            sb.Append(CliAgentPresentation.Name(HtmlEntity.DeEntitize(node.InnerText)));
+            return;
+        }
 
         switch (node.Name.ToLowerInvariant())
         {
