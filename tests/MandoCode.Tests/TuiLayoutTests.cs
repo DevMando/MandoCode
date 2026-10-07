@@ -105,6 +105,8 @@ public class TuiLayoutTests
         services.AddLogging();
         services.AddRazorConsoleServices();
         services.AddSingleton(session);
+        services.AddSingleton<AgentWorkspace>();
+        services.AddSingleton<WorkspaceRegistry>();
         services.AddSingleton(new InputStateMachine(new Dictionary<string, string>(), null));
         services.AddSingleton<ITerminalViewport>(new FixedViewport(80, 24));
         services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, TranscriptEntryTranslator>());
@@ -216,6 +218,25 @@ public class TuiLayoutTests
         Assert.Contains("/h", frame);
     }
 
+    [Theory]
+    [InlineData(40, "first line\nsecond line\nthird line")]
+    [InlineData(40, "one two three four five six seven eight nine ten eleven twelve thirteen fourteen")]
+    public async Task Prompt_GrowsToShowWrappedDraft_WithoutOverlappingConversation(int width, string draft)
+    {
+        var session = new TuiSession();
+        session.Append(new Text("LATEST RESPONSE"));
+        var frame = await Frame(session, width, 30, initialValue: draft);
+        var rows = frame.Replace("\r", "").TrimEnd('\n').Split('\n');
+        var top = Array.FindLastIndex(rows, row => row.Contains('╔'));
+        Assert.True(top < rows.Length - 3, frame);
+        Assert.Contains("LATEST RESPONSE", frame);
+        Assert.Contains("╚", rows[^1]);
+        var content = string.Join(" ", rows.Skip(top + 1).Take(rows.Length - top - 2));
+        foreach (var word in draft.Split([' ', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            Assert.Contains(word, content);
+        Assert.Equal(30, rows.Length);
+        AssertComposerAtBottom(await Frame(session, width, 30), 30);
+    }
     private static void AssertComposerAtBottom(string frame, int height)
     {
         var rows = frame.Replace("\r", "").TrimEnd('\n').Split('\n');
@@ -238,6 +259,8 @@ public class TuiLayoutTests
         services.AddLogging();
         services.AddRazorConsoleServices();
         services.AddSingleton(session);
+        services.AddSingleton<AgentWorkspace>();
+        services.AddSingleton<WorkspaceRegistry>();
         if (snapshots is not null) services.AddSingleton(snapshots);
         services.AddSingleton<ITerminalViewport>(new FixedViewport(width, height));
         services.AddSingleton(new InputStateMachine(new Dictionary<string, string> { ["/help"] = "Help" }, null));

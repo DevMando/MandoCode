@@ -7,6 +7,7 @@
 
 <div data-focusable="false" @onclick="FocusPromptAsync">
 <Rows>
+    @if (_clipboardStatus.Length > 0) { <Markup Content="@Spectre.Console.Markup.Escape(_clipboardStatus)" Foreground="@InputColor(_clipboardError ? Color.Gold1 : Color.Purple)" /> }
     @if (ModelPicker is not null)
     {
         <ModelPickerPopup Picker="ModelPicker" />
@@ -36,11 +37,11 @@
         @if (_composer.FilesLoading && !_composer.ViewingAgents) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
         <AutocompletePopup Composer="_composer" OnChanged="PickerChanged" />
     }
-    <Flex Direction="FlexDirection.Row" Height="3">
+    <Flex Direction="FlexDirection.Row" Height="@(InputHeight + 2)">
     <Box Width="@PromptWidth">
     <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
-        <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="1"
-                  WordWrap="false" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
+        <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="@InputHeight"
+                  WordWrap="true" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
                   CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
                   Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen || _composer.AtPickerOpen)"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
@@ -82,7 +83,7 @@
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
-    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis";
+    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis · Alt+V paste image";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
@@ -96,7 +97,44 @@
     private bool ShowEmojiButton => ChatFeaturesEnabled && ModelPicker is null && (ContentWidth ?? Pane?.Width ?? Viewport.Width) >= 18;
     private int PromptWidth => Math.Max(1, (ContentWidth ?? Pane?.Width ?? Viewport.Width) - (ShowEmojiButton ? 9 : 0));
     private int InputWidth => Math.Max(1, PromptWidth - 4);
+    // Use the editor's own wrapping rules, including newlines and wide characters.
+    private int InputHeight => Math.Clamp(_composer.Buffer.Wrap(InputWidth, 0, true).Count, 1,
+        Math.Max(1, (Pane?.Height ?? Viewport.Height) / 2 - 2));
     private bool _emojiOpen;
+    private readonly PromptCursorNavigation _cursorNavigation = new();
+    private bool _pastingImage, _clipboardError;
+    private string _clipboardStatus = "";
+    private readonly ClipboardImageStore _fallbackClipboard = new();
+    private TerminalPasteGuard _pasteGuard = new();
+    private async Task<bool> PasteClipboardImage(bool explicitRequest)
+    {
+        if (Disabled || !ChatFeaturesEnabled || ModelPicker is not null || Pane is { Active: false }) return true;
+        if (!explicitRequest && !OperatingSystem.IsWindows()) return false;
+        if (_pastingImage) return true;
+        _pastingImage = true; _clipboardError = false; _clipboardStatus = "Reading clipboard…";
+        StateHasChanged();
+        try {
+            var services = Pane?.Services ?? Services;
+            var reader = services.GetService(typeof(IClipboardImageReader)) as IClipboardImageReader ?? new WindowsClipboardImageReader();
+            var png = await reader.ReadPngAsync(_loadingStop.Token);
+            if (_disposed) return true;
+            if (png is null) {
+                var textReader = services.GetService(typeof(IClipboardTextReader)) as IClipboardTextReader ?? reader as IClipboardTextReader;
+                var text = explicitRequest || textReader is null ? null : await textReader.ReadTextAsync(_loadingStop.Token);
+                if (_disposed) return true;
+                if (text is not null) { _composer.Buffer.Insert(PromptPaste.Normalize(text)); _composer.Refresh(); _emojiOpen = false; _clipboardStatus = ""; return true; }
+                _clipboardStatus = explicitRequest ? "No Image in the clipboard. Copy an image, then press Alt+V" : ""; return explicitRequest;
+            }
+            var images = services.GetService(typeof(ClipboardImageStore)) as ClipboardImageStore ?? _fallbackClipboard;
+            _composer.InsertFileReference(images.Add(png));
+            _clipboardStatus = "Clipboard image attached · Add a message, then Enter to send · Delete its @reference to remove";
+            _emojiOpen = false;
+            return true;
+        }
+        catch (OperationCanceledException) { if (!_disposed) { _clipboardError = true; _clipboardStatus = "Clipboard read timed out. Try Alt+V again."; } return true; }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or FormatException) { _clipboardError = true; _clipboardStatus = ex.Message; return true; }
+        finally { _pastingImage = false; if (!_disposed) { StateHasChanged(); await FocusPromptAsync(); } }
+    }
     private int _emojiSelected;
     private IReadOnlyList<string> _emojiChoices = PromptEmojiAliases.PickerEmojis;
     private bool _emojiFromToken;
@@ -125,6 +163,8 @@
     }
     private async Task EmojiButtonKey(KeyboardEventArgs key)
     {
+        if (Pane is { Active: false }) return;
+        if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
         if (key.Key is "Enter" or "Return" or " ") await OpenEmojiPicker();
         else if (key.Key is "Escape" or "Tab") await FocusPromptAsync();
     }
@@ -228,6 +268,15 @@
     private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
         if (Pane is { Active: false }) return true;
+        if (key.Key is not ("ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")) _cursorNavigation.Reset();
+        if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null) return await PasteClipboardImage(key.AltKey);
+        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (_pastingImage) return true;
+        if (!Disabled && ModelPicker is null && _pasteGuard.IsPasteKey(key))
+        {
+            _composer.Buffer.Insert(key.Key is "Enter" or "Return" ? "\n" : key.Key == "Tab" ? "\t" : key.Key);
+            _composer.Refresh(); _emojiOpen = false; StateHasChanged(); return true;
+        }
         if (!Disabled && key.Key == "Tab" && _composer.AtPickerOpen && _composer.HandleKey("Tab")) { StateHasChanged(); return true; }
         if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
         if (_emojiOpen && ChatFeaturesEnabled && !Disabled)
@@ -276,7 +325,12 @@
         }
         if (ChatFeaturesEnabled && ModelPicker is null && !_emojiOpen && !_composer.IsOpen && !_composer.AtPickerOpen && key.Key is "ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")
         {
-            await OnScroll.InvokeAsync(key.Key);
+            var direction = key.Key is "ArrowUp" or "UpArrow" ? -1 : 1;
+            if (!Disabled && _cursorNavigation.Move(_composer.Buffer, InputWidth, InputHeight, direction, key.ShiftKey))
+            {
+                _composer.Refresh(); StateHasChanged();
+            }
+            else if (!key.ShiftKey) await OnScroll.InvokeAsync(key.Key);
             return true;
         }
         if (Disabled)
@@ -323,9 +377,10 @@
     private async Task HandleSubmit(string value)
     {
         if (Pane is not null && !Pane.Active) return;
-        if (Disabled || (!AllowEmpty && string.IsNullOrWhiteSpace(value))) return;
+        if (Disabled || _pastingImage || (!AllowEmpty && string.IsNullOrWhiteSpace(value))) return;
         if (ChatFeaturesEnabled) _composer.Submitted(value);
         _composer.SetText("");
+        _clipboardStatus = "";
         await OnSubmit.InvokeAsync(value);
     }
     public void SetValue(string value) { _composer.SetText(value); StateHasChanged(); }

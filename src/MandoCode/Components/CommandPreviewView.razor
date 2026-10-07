@@ -1,0 +1,34 @@
+@using Spectre.Console
+<Panel Border="BoxBorder.Rounded" BorderColor="@(new Color(86, 182, 194))" Expand="true" Title="@Preview.Shell">
+    <Rows>
+        <Markup Content="@(Spectre.Console.Markup.Escape("Working directory: " + Preview.Directory))" Foreground="Color.Grey" />
+        <RenderableContent Content="@_code" />
+        @if (Preview.HasScriptView)
+        {
+            <div @key="_key" data-focus-key="@_key" data-focusable="@(Pane is null || Pane.Active)" data-focus-order="2" data-input-managed="true" @onclick="Toggle" @onkeydown="Key">
+                <Markup Content="@(_expanded ? "▾ Exact invocation" : "▸ Exact invocation")" Foreground="Color.Grey85" />
+            </div>
+            @if (_expanded) { <RenderableContent Content="@_exact" /> }
+        }
+    </Rows>
+</Panel>
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter, EditorRequired] public CommandPreview Preview { get; set; } = default!;
+    private CommandPreview? _previous;
+    private Spectre.Console.Rendering.IRenderable _code = default!, _exact = default!;
+    private bool _expanded;
+    private readonly string _key = "command-preview-" + Guid.NewGuid().ToString("N");
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_previous, Preview)) return;
+        _previous = Preview; _code = Preview.Code(); _exact = new Text(Preview.Exact); _expanded = false;
+    }
+    private void Toggle() { if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane); _expanded = !_expanded; }
+    private void Key(KeyboardEventArgs key)
+    {
+        if (Pane is { Active: false }) return;
+        if (Pane?.Workspace.Key(Pane, key) == true) return;
+        if (key.Key is "Enter" or "Return" or " ") Toggle();
+    }
+}

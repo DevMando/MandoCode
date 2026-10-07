@@ -113,6 +113,10 @@ class Program
         config.DefaultAgentOptions ??= AgentSettingsDraft.Capture(config);
         services.AddSingleton(new SnapshotStore(config.AllowPersistence ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "snapshots.json") : null));
         services.AddScoped<SnapshotContext>();
+        services.AddScoped<ClipboardImageStore>();
+        services.AddSingleton<WindowsClipboardImageReader>();
+        services.AddSingleton<IClipboardImageReader>(sp => sp.GetRequiredService<WindowsClipboardImageReader>());
+        services.AddSingleton<IClipboardTextReader>(sp => sp.GetRequiredService<WindowsClipboardImageReader>());
         services.AddSingleton<CliDelegations>();
         services.AddSingleton(new AgentModelDefaults(config));
         services.AddSingleton(new CliIntegrationCoordinator(config));

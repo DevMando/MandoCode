@@ -157,6 +157,79 @@ public sealed class ContextSnapshotsPanelTests
             Assert.False((bool)Get(panel, "_inputFocused")!); Assert.Equal(0, Get(panel, "_action"));
         });
     }
+    [Theory]
+    [InlineData("Key", true, false)]
+    [InlineData("Key", false, false)]
+    [InlineData("InputKey", false, false)]
+    [InlineData("Key", true, true)]
+    public async Task AgentNavigationRemainsAvailableInSnapshotPanel(string handler, bool busy, bool meta)
+    {
+        var registrations = new ServiceCollection().AddLogging();
+        registrations.AddRazorConsoleServices();
+        registrations.AddSingleton(new SnapshotStore(null));
+        registrations.AddScoped<TuiSession>();
+        registrations.AddScoped(_ => new MandoCode.Models.MandoCodeConfig { AllowPersistence = false, UseAgentNames = false });
+        await using var services = registrations.BuildServiceProvider();
+        await using var workspace = new AgentWorkspace(services.GetRequiredService<IServiceScopeFactory>());
+        var first = workspace.Add();
+        var second = workspace.Add();
+        workspace.Focus(first);
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            TestPanel panel = null!;
+            await renderer.RenderComponentAsync<Host>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Capture"] = (Action<TestPanel>)(p => panel = p) }));
+            panel.Pane = first;
+            Set(panel, "_busy", busy);
+            Set(panel, "_status", "Creating snapshot…");
+            using var operation = new CancellationTokenSource();
+            Set(panel, "_operation", operation);
+            var key = new KeyboardEventArgs { Key = "ArrowRight", AltKey = !meta, MetaKey = meta };
+            var result = PanelType.GetMethod(handler, Flags)!.Invoke(panel, [key]);
+            await (Task)result!;
+            Assert.True(second.Active);
+            Assert.False(first.Active);
+            Assert.Equal(busy, Get(panel, "_busy"));
+            Assert.False(operation.IsCancellationRequested);
+            Assert.Equal("Creating snapshot…", Get(panel, "_status"));
+            Assert.Same(operation, Get(panel, "_operation"));
+            if (handler == "InputKey") Assert.True(await (Task<bool>)result!);
+            workspace.Focus(first);
+            Assert.True(first.Active);
+            Assert.Equal(busy, Get(panel, "_busy"));
+        });
+    }
+    [Theory]
+    [InlineData("Key", true)]
+    [InlineData("InputKey", false)]
+    public async Task AltWClosesHighlightedAgentFromSnapshotMenu(string handler, bool busy)
+    {
+        var registrations = new ServiceCollection().AddLogging();
+        registrations.AddRazorConsoleServices();
+        registrations.AddSingleton(new SnapshotStore(null));
+        registrations.AddScoped<TuiSession>();
+        registrations.AddSingleton(new AgentArchiveStore(Path.Combine(Path.GetTempPath(), "snapshot-close-test-" + Guid.NewGuid().ToString("N"))));
+        registrations.AddScoped(_ => new MandoCode.Models.MandoCodeConfig { AllowPersistence = false, UseAgentNames = false });
+        await using var services = registrations.BuildServiceProvider();
+        await using var workspace = new AgentWorkspace(services.GetRequiredService<IServiceScopeFactory>());
+        var first = workspace.Add(); var second = workspace.Add(); workspace.Focus(first);
+        first.IsBusy = () => busy;
+        var stopped = false; first.Stop = () => stopped = true;
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            TestPanel panel = null!;
+            await renderer.RenderComponentAsync<Host>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Capture"] = (Action<TestPanel>)(p => panel = p) }));
+            panel.Pane = first; Set(panel, "_busy", busy);
+            await (Task)PanelType.GetMethod(handler, Flags)!.Invoke(panel, [new KeyboardEventArgs { Key = "w", AltKey = true }])!;
+            Assert.DoesNotContain(first, workspace.Panes);
+            Assert.True(second.Active); Assert.True(stopped);
+            // A queued key from the removed menu cannot close its replacement.
+            await (Task)PanelType.GetMethod(handler, Flags)!.Invoke(panel, [new KeyboardEventArgs { Key = "w", AltKey = true }])!;
+            Assert.Single(workspace.Panes);
+        });
+        await first.DisposeAsync();
+    }
     public sealed class TestPanel : ContextSnapshotsPanel { protected override void OnInitialized() { if (StartCreating) base.OnInitialized(); } }
     public sealed class Host : ComponentBase
     {

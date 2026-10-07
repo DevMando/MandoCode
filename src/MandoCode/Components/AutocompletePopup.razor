@@ -3,7 +3,12 @@
 
 @if (Composer.AtPickerOpen || Composer.IsOpen)
 {
-    <Panel TitleColor="@PaneColors.For(Pane, Composer.AtPickerOpen ? new Color(255, 200, 80) : new Color(86, 182, 194))" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(Composer.AtPickerOpen ? Composer.ViewingAgents ? "Agents — Press [Tab] for Files" : "Files — Press [Tab] for Agents" : Composer.Suggestions.Mode == AutocompleteMode.Command ? "Commands" : "Files")">
+    <Rows>
+    @if (FilePicker)
+    {
+        <Box FillWidth="true" Height="1"><RenderableContent Content="@PickerHeader" /></Box>
+    }
+    <Box FillWidth="true" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(FilePicker ? null : "Commands")" data-border-top="@(FilePicker ? "none" : "rounded")">
         <Rows>
             @if (Composer.AtPickerOpen && Composer.ViewingAgents)
             {
@@ -33,11 +38,32 @@
             }
             }
         </Rows>
-    </Panel>
+    </Box>
+    </Rows>
 }
 
 @code {
     [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter(Name = "AgentContentWidth")] public int? ContentWidth { get; set; }
+    private bool FilePicker => Composer.AtPickerOpen || Composer.Suggestions.Mode == AutocompleteMode.File;
+    private Spectre.Console.Rendering.IRenderable PickerHeader
+    {
+        get
+        {
+            var width = Math.Max(4, ContentWidth ?? Pane?.Width ?? Viewport.Width);
+            var label = Composer.ViewingAgents ? "🤖 Agents" : "📁 Files";
+            var hint = Composer.AtPickerOpen ? Composer.ViewingAgents ? " — Press [Tab] for Files" : " — Press [Tab] for Agents" : "";
+            var available = width - 4;
+            var shownLabel = WorkspaceTabWindow.Fit(label, available).TrimEnd();
+            var remaining = Math.Max(0, available - RazorConsole.Core.Input.TextSelectionState.CellWidth(shownLabel));
+            var shownHint = remaining > 0 ? WorkspaceTabWindow.Fit(hint, remaining).TrimEnd() : "";
+            var padding = Math.Max(0, remaining - RazorConsole.Core.Input.TextSelectionState.CellWidth(shownHint));
+            var teal = new Style(PaneColors.For(Pane, new Color(86, 182, 194)));
+            return new Paragraph().Append("╭─" + shownLabel, teal)
+                .Append(shownHint, new Style(PaneColors.For(Pane, new Color(255, 200, 80))))
+                .Append(new string('─', padding) + "─╮", teal);
+        }
+    }
     [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
     [Parameter] public EventCallback OnChanged { get; set; }
     private async Task Choose(int index) { Composer.InsertAgent(index); await OnChanged.InvokeAsync(); }

@@ -1,9 +1,10 @@
 @using RazorConsole.Core.Rendering
 @inject ScrollableLayoutCoordinator LayoutCoordinator
+@inject RazorConsole.Core.Focus.FocusManager Focus
 @implements IDisposable
 
 <view-height-scrollable data-lines-to-render="0" data-offset="@(_following ? int.MaxValue : _offset)" data-scroll-id="@_scrollId">
-    <div data-focusable="@(Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)" data-focus-order="1" data-input-managed="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" data-manage-tab="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" @onkeydown="HandleKey" @onwheel="HandleWheel">
+    <div @key="_focusKey" data-vnode-hook="@_focusKey" data-focus-key="@_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-focus-order="1" data-input-managed="true" data-manage-tab="@(Pane?.ExplorerFocus?.Active == true ? "true" : "false")" @onkeydown="HandleKey" @onwheel="HandleWheel">
         @Header
         <ConversationTranscript Entries="_visibleEntries" Details="_details" OnAgentToggle="ToggleExchange" OnToolToggle="ToggleTools" />
     </div>
@@ -13,6 +14,7 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     [Parameter] public RenderFragment? Header { get; set; }
     [Parameter] public IReadOnlyList<TuiEntry> Entries { get; set; } = Array.Empty<TuiEntry>();
+    private readonly string _focusKey = "conversation-" + Guid.NewGuid().ToString("N");
     private readonly string _scrollId = Guid.NewGuid().ToString("N");
     private int _offset;
     private bool _following = true;
@@ -38,6 +40,16 @@
         if (Pane?.PresentationState.GetValueOrDefault("scroll") is ValueTuple<int, bool> saved)
             (_offset, _following) = saved;
     }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Startup has no prompt yet. Give the selected pane a keyboard target
+        // immediately, then let its prompt or menu take ownership when mounted.
+        if (Pane is not null && Pane.FocusKey is null)
+        {
+            Pane.FocusKey = _focusKey;
+            if (Pane.Active) await Focus.FocusAsync(_focusKey);
+        }
+    }
     public void Scroll(string key)
     {
         var maximum = LayoutCoordinator.GetMaxOffset(_scrollId);
@@ -58,8 +70,8 @@
     }
     private void HandleKey(KeyboardEventArgs key)
     {
-        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
         if (Pane is not null && !Pane.Active) return;
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return;
         Scroll(key.Key);
     }
     private void HandleWheel(WheelEventArgs wheel)

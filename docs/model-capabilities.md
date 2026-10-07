@@ -20,8 +20,8 @@ to a different model. Ordinary settings changes preserve conversation history.
 only for confirmed support. This describes the model, not the host application's
 ability to deliver images. Browser tools must also supply actual image content
 before enabling visual inspection; returning a screenshot path is insufficient.
-Text/DOM browser tools need no vision capability. This change does not add browser
-inspection tools, screenshot capture, or image message delivery.
+Text/DOM browser tools need no vision capability. The CLI delivers tagged image files
+and Windows clipboard images (Alt+V) through the image attachment flow below.
 
 Provider contract: https://docs.ollama.com/api-reference/show-model-details
 

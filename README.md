@@ -234,13 +234,14 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/config` | Adjust settings — guided wizard |
 | `/config set <key> <value>` | Set one setting inline without leaving the session (e.g. `/config set modelResponseTimeout 300`); no args lists all keys + current values |
 | `/retry` | Retry Ollama connection |
-| `/snapshot-context-create` | Save an AI summary of this conversation |
-| `/snapshot-context-import` | Browse and import saved context snapshots (Alt+C) |
+| `/context-snap-create` | Save a context snapshot (summary) of this agent conversation (Alt+C) |
+| `/context-snap-import` | Browse and import saved context snapshots (Alt+C) |
 | `/ollama-pull` | Browse the Ollama library and download a model |
 | `/ollama-serve` | Start local Ollama if unavailable and retry the connection twice |
 | `/learn` | Interactive guide to LLMs and local AI |
 | `/copy` | Copy last AI response to clipboard |
 | `/copy-code` | Copy code blocks from last response |
+| `/transcript-save` | Save this agent conversation as standalone HTML; optional quoted file path |
 | `/command <cmd>` | Run a shell command |
 | `/music` | Start playing music |
 | `/music-stop` | Stop playback |
@@ -289,7 +290,7 @@ Background questions and jobs have readable IDs such as `job1`; inbox messages u
 
 ### Context snapshots
 
-Open **Context Snapshots** beside Agent Settings, or use `/snapshot-context-create` to save a conversation summary. The outlined name textbox is ready to type into as soon as the form opens; no Enter-to-edit step is needed. Tab moves to the model and buttons. Enter a name or leave it blank for an AI title, choose a summarizer model (initially the current agent model), then Create. The separate summarizer does not change your agent context or run tools. Saved snapshots persist in `~/.mandocode/snapshots.json` and are shared across CLI agents and workspaces. The browser has a search/Create/Close toolbar, collapsible project groups with newest snapshots first, and a summary pane with Import into Agent/Delete actions. Wide terminals show the list and summary side by side; narrow terminals stack them. Tab moves through search, list, toolbar, summary, and actions. The selected snapshot stays subtly shaded while another control has keyboard focus. Click project headings or press Enter on them to collapse/expand. Click the summary to focus it; mouse wheel, arrows, Home/End, and Page Up/Page Down scroll it. Enter on a snapshot imports it, while Enter on Close or Escape closes without importing. Import queues a summary for the next message; multiple imports stack without duplicating the same snapshot. Delete requires confirmation. When `/model`, `/setup`, or the configuration wizard clears an existing conversation, a prompt offers Keep Memory, Create Snapshot, or Dismiss. Changing models in Agent Settings already keeps memory.
+Open **Context Snapshots** beside Agent Settings, or use `/context-snap-create` to save a conversation summary. The outlined name textbox is ready to type into as soon as the form opens; no Enter-to-edit step is needed. Tab moves to the model and buttons. Enter a name or leave it blank for an AI title, choose a summarizer model (initially the current agent model), then Create. The separate summarizer does not change your agent context or run tools. Saved snapshots persist in `~/.mandocode/snapshots.json` and are shared across CLI agents and workspaces. The browser has a search/Create/Close toolbar, collapsible project groups with newest snapshots first, and a summary pane with Import into Agent/Delete actions. Wide terminals show the list and summary side by side; narrow terminals stack them. Tab moves through search, list, toolbar, summary, and actions. The selected snapshot stays subtly shaded while another control has keyboard focus. Click project headings or press Enter on them to collapse/expand. Click the summary to focus it; mouse wheel, arrows, Home/End, and Page Up/Page Down scroll it. Enter on a snapshot imports it, while Enter on Close or Escape closes without importing. Import queues a summary for the next message; multiple imports stack without duplicating the same snapshot. Delete requires confirmation. When `/model`, `/setup`, or the configuration wizard clears an existing conversation, a prompt offers Keep Memory, Create Snapshot, or Dismiss. Changing models in Agent Settings already keeps memory.
 
 ### MCP and Skills managers
 

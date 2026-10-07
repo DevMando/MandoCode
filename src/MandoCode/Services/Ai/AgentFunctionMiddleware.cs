@@ -216,7 +216,8 @@ public class AgentFunctionMiddleware
         }
 
         var functionName = context.Function.Name;
-        var description = GetFunctionDescription(functionName, context.Arguments);
+        var description = functionName == "execute_command" && TuiConsole.Current is not null && OnCommandApprovalRequested is not null
+            ? "Preparing command" : GetFunctionDescription(functionName, context.Arguments);
         var isWriteOperation = IsWriteOperation(functionName);
         var deduplicationWindow = isWriteOperation ? _writeDeduplicationWindow : _readDeduplicationWindow;
         var callKey = CreateCallKey(functionName, context.Arguments, isWriteOperation);

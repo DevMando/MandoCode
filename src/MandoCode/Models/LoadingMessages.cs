@@ -92,7 +92,10 @@ public static class LoadingMessages
         "BagWorking...",
         "Pump & Dumping...",
         "Deploying Smart Contracts...",
-        "Minting..."
+        "Minting...",
+        // Easter eggs for RazorConsole creators and maintainers.
+        "BigMiao...",
+        "Rout..."
     };
 
     /// <summary>

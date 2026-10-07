@@ -1,6 +1,6 @@
 # Component TUI alpha: RazorConsole 0.6
 
-The CLI engine is based on v0.15.2, labeled 0.16.0-alpha, and uses RazorConsole.Core 0.6.0.
+The CLI engine is based on v0.15.2, targets 0.16.0, and uses RazorConsole.Core 0.6.0.
 
 ## Current layout
 
@@ -10,7 +10,9 @@ The CLI engine is based on v0.15.2, labeled 0.16.0-alpha, and uses RazorConsole.
 - AgentStatus renders bounded activity, spinner, and preview rows above the composer. Its transient children disappear when the operation stops.
 - PromptInput uses TextArea and component-managed slash/file suggestions.
 - /model opens a bounded popup above the same prompt: type to filter, Up/Down to navigate, Enter or Tab to select, Escape to cancel. The prompt keeps keyboard focus; choosing a model does not submit a chat turn.
-- Page Up / Page Down scroll the conversation while the prompt has focus. Ctrl+End returns to the bottom.
+- Up/Down navigates explicit and wrapped prompt lines, then scrolls the conversation at the first/last line. Shift+Up/Down selects prompt text. Page Up / Page Down scroll the conversation while the prompt has focus. Ctrl+End returns to the bottom.
+- Ctrl+V inserts clipboard text in one operation when the terminal forwards it. Queued multiline Windows terminal paste has a newline guard; Enter separately submits the completed prompt. Alt+V stays image-only and uses the vision attachment flow.
+- /transcript-save exports the current agent conversation as standalone HTML, including collapsed output. An optional quoted path selects the destination.
 - Mouse wheel scrolling is supported in the conversation. Following output pauses above the bottom.
 - Escape cancels a running direct request through the prompt keyboard path.
 - Approvals and instruction requests take the input region while active.
@@ -45,6 +47,6 @@ Stop any running CLI/debug session and rebuild before testing.
 
 ## Remaining migrations
 
-Some settings, onboarding, learning, and recovery pickers still use blocking Spectre prompts/status displays. Those are not yet compatible with the full component canvas and need their own component migration. Music playback remains available, but the old cursor-positioned music visualizer is suppressed in component mode. Other cursor-driven easter eggs and subprocess interactive input also need review.
+Settings, setup, integration managers, context snapshots, and model downloads now have component panels. Any remaining legacy learning/recovery prompts must be checked individually before being used with the full component canvas. Music playback remains available, but the old cursor-positioned music visualizer is suppressed in component mode. Other cursor-driven easter eggs and subprocess interactive input also need review.
 
 Autocomplete is currently an inline component popup above the input. An anchored overlay can follow after the base layout and keyboard behavior are stable.

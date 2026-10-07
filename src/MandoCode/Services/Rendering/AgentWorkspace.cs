@@ -87,7 +87,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         if (index < 0) return;
         Focus(_panes[(index + direction + _panes.Count) % _panes.Count]);
     }
-    public void Close(AgentPane pane)
+    public void Close(AgentPane pane, bool stopRunning = false)
     {
         if (!_panes.Contains(pane)) return;
         if (_panes.Count == 1)
@@ -95,7 +95,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
             pane.Session.Append(new Text("Use /exit to close the last agent."));
             return;
         }
-        if (pane.IsBusy?.Invoke() == true)
+        if (!stopRunning && pane.IsBusy?.Invoke() == true)
         {
             pane.Session.Append(new Text("Wait for startup or cancel the running request with Escape, then use /agent-close."));
             return;
@@ -200,7 +200,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
                     _ = pane.SubmitCommand("/change-directory");
                 return true;
             case "n": Add(); return true;
-            case "w": Close(pane); return true;
+            case "w": if (pane.Active) Close(pane, stopRunning: true); return true;
             case "arrowleft": case "leftarrow": Move(-1); return true;
             case "arrowright": case "rightarrow": Move(1); return true;
 

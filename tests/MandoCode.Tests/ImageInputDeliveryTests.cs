@@ -58,6 +58,27 @@ public class ImageInputDeliveryTests
         Assert.DoesNotContain(history, message => message.Contents.OfType<DataContent>().Any());
     }
 
+    [Fact]
+    public async Task ClipboardReferenceRoutesThroughChatAndDeliversImageBytes()
+    {
+        var ai = await VisionServiceAsync(streaming: false);
+        byte[] png = [137, 80, 78, 71, 13, 10, 26, 10, 1];
+        var images = new ClipboardImageStore(); var reference = images.Add(png);
+        var registrations = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton(registrations, images);
+        using var services = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(registrations);
+        var app = new MandoCode.Components.App();
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+        typeof(MandoCode.Components.App).GetProperty("Services", flags)!.SetValue(app, services);
+        typeof(MandoCode.Components.App).GetProperty("AI", flags)!.SetValue(app, ai);
+        typeof(MandoCode.Components.App).GetProperty("ProjectRoot", flags)!.SetValue(app, new ProjectRootAccessor(Path.GetTempPath()));
+        using var transcript = TuiConsole.Enter(new TuiSession());
+        var processed = (string)typeof(MandoCode.Components.App).GetMethod("ProcessFileReferences", flags)!.Invoke(app, [FileReferenceToken.Format(reference)])!;
+        Assert.Contains("attached as image input", processed);
+        var seen = new List<string>(); ai.SetChatClientFactoryForTests(body => { seen.Add(body); return Reply("image received"); });
+        await foreach (var _ in ai.ChatStreamAsync(processed)) { }
+        Assert.Contains(Convert.ToBase64String(png), seen[0]);
+    }
     private static async Task<AIService> VisionServiceAsync(bool streaming = true)
     {
         var config = new MandoCodeConfig();

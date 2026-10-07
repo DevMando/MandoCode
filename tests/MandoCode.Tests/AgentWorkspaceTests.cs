@@ -75,6 +75,50 @@ public class AgentWorkspaceTests
         foreach (var pane in survivors) Assert.Contains(pane.Id.ToString(), markers);
     }
 
+    [Fact]
+    public async Task LoadingAgent_HasKeyboardFocus_AndCanSwitchBeforePromptMounts()
+    {
+        var registrations = new ServiceCollection().AddLogging();
+        registrations.AddRazorConsoleServices();
+        registrations.AddSingleton<ITerminalViewport>(new FixedViewport());
+        registrations.AddSingleton<IHostApplicationLifetime, Lifetime>();
+        Program.RegisterAgentServices(registrations, new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false }, Path.GetTempPath());
+        await using var services = registrations.BuildServiceProvider();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var first = workspace.Add(); var loading = workspace.Add();
+        loading.IsBusy = () => true;
+        var conversations = new Dictionary<int, ConversationView>();
+        RenderFragment<AgentPane> body = pane => builder =>
+        {
+            builder.OpenComponent<ConversationView>(0);
+            builder.AddAttribute(1, "Entries", new[] { new TuiEntry(1, new Text("Loading agent")) });
+            builder.AddComponentReferenceCapture(2, value => conversations[pane.Id] = (ConversationView)value);
+            builder.CloseComponent();
+        };
+        var rendererType = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
+        var instance = ActivatorUtilities.CreateInstance(services, rendererType, new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
+        await using var renderer = (IAsyncDisposable)instance;
+        var mount = rendererType.GetMethods(BindingFlags.Public | BindingFlags.Instance).Single(m => m.Name == "MountComponentAsync" && m.IsGenericMethodDefinition);
+        await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance, new object[] { ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None })!;
+        var dispatcher = (Dispatcher)rendererType.GetProperty("Dispatcher")!.GetValue(instance)!;
+        await dispatcher.InvokeAsync(() =>
+        {
+            var focus = services.GetRequiredService<RazorConsole.Core.Focus.FocusManager>();
+            var snapshot = rendererType.GetMethod("RefreshSnapshot", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(instance, null)!;
+            typeof(RazorConsole.Core.Focus.FocusManager).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Single(m => m.Name.EndsWith("OnNext")).Invoke(focus, [snapshot]);
+            Assert.NotNull(loading.FocusKey);
+            Assert.True(focus.IsFocused(loading.FocusKey));
+            var handle = typeof(ConversationView).GetMethod("HandleKey", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            handle.Invoke(conversations[loading.Id], [new KeyboardEventArgs { Key = "ArrowLeft", AltKey = true }]);
+            Assert.True(first.Active);
+            Assert.True(loading.IsBusy());
+            // A stale keyboard event from the old pane must not change selection.
+            handle.Invoke(conversations[loading.Id], [new KeyboardEventArgs { Key = "ArrowRight", AltKey = true }]);
+            Assert.True(first.Active);
+            handle.Invoke(conversations[first.Id], [new KeyboardEventArgs { Key = "ArrowRight", AltKey = true }]);
+            Assert.True(loading.Active);
+        });
+    }
     public sealed class MountedTestApp : App
     {
         // Run the real App initialization/disposal, but avoid network startup in this test.
@@ -409,7 +453,7 @@ public class AgentWorkspaceTests
         pane.IsAwaitingInput = () => true;
         workspace.Key(pane, new() { Key = "c", AltKey = true });
         Assert.Equal(1, calls);
-        Assert.Contains(Keybindings.ContextSnapshots, SlashCommands.All["/snapshot-context-import"]);
+        Assert.Contains(Keybindings.ContextSnapshots, SlashCommands.All["/context-snap-import"]);
         Assert.Contains(Keybindings.All, binding => binding.Keys == "Alt+C");
     }
 
