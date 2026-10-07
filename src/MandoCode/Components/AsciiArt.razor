@@ -1,0 +1,10 @@
+@using MandoCode.Services
+
+<RenderableContent Content="@PaneColors.Render(_art, Pane, constrainWidth: false)" />
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<string> Lines { get; set; } = Array.Empty<string>();
+    private AsciiArtRenderable _art = new(Array.Empty<string>());
+    protected override void OnParametersSet() => _art = new AsciiArtRenderable(Lines);
+}

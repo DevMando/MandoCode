@@ -194,28 +194,15 @@ public class DiffApprovalHandler
         // Stop the spinner so we have clean console output
         _spinner.Stop();
 
-        // Render command panel — matches the rounded/dim border style used
-        // for fenced code blocks (see MarkdownHtmlRenderer.TranslateCodeBlock).
-        string highlighted;
-        try
+        var preview = CommandPreview.Create(command, _projectRoot.ProjectRoot);
+        if (TuiConsole.Current is { } session)
+            session.AppendCommand(preview);
+        else
         {
-            highlighted = SyntaxHighlighter.Highlight($"$ {command}", "bash");
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(preview.Fallback());
+            AnsiConsole.WriteLine();
         }
-        catch
-        {
-            highlighted = Markup.Escape($"$ {command}");
-        }
-
-        var commandPanel = new Panel(new Markup(highlighted))
-            .Border(BoxBorder.Rounded)
-            .BorderStyle(Style.Parse("dim"))
-            .Padding(1, 0);
-        commandPanel.Header = new PanelHeader("[deepskyblue1] Command [/]", Justify.Left);
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(commandPanel);
-        AnsiConsole.WriteLine();
-
         // If globally bypassed, auto-approve
         if (_globalWriteBypass)
         {

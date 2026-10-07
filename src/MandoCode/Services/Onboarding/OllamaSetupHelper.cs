@@ -220,13 +220,13 @@ public static class OllamaSetupHelper
     /// signed out — pulled models stick around in /api/tags but inference returns
     /// 401 because the daemon's local auth token is gone.
     /// </summary>
-    public static async Task<AuthTestResult> TestCloudAuthAsync(string url, string modelName, CancellationToken ct = default)
+    public static async Task<AuthTestResult> TestCloudAuthAsync(string url, string modelName, CancellationToken ct = default, int timeoutSeconds = 20)
     {
         if (string.IsNullOrWhiteSpace(modelName))
             return new AuthTestResult(false, false, "Empty model name");
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             var body = new StringContent(
                 System.Text.Json.JsonSerializer.Serialize(new
                 {
@@ -289,7 +289,7 @@ public static class OllamaSetupHelper
     /// it harmlessly. Only applies when WE start the daemon; an already-running Ollama is
     /// untouched.
     /// </summary>
-    public static bool TryStartOllamaProcess(int contextLength = 0)
+    public static bool TryStartOllamaProcess(int contextLength = 0, string? endpoint = null)
     {
         try
         {
@@ -304,13 +304,33 @@ public static class OllamaSetupHelper
             {
                 psi.Environment["OLLAMA_CONTEXT_LENGTH"] = contextLength.ToString();
             }
+            if (endpoint is not null)
+            {
+                if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "http" || !uri.IsLoopback) return false;
+                psi.Environment["OLLAMA_HOST"] = uri.GetLeftPart(UriPartial.Authority);
+            }
             var proc = Process.Start(psi);
+            if (proc is not null) _ = DrainServerOutputAsync(proc);
             return proc != null;
         }
         catch
         {
             return false;
         }
+    }
+
+    private static async Task DrainServerOutputAsync(Process process)
+    {
+        using (process)
+        {
+            try
+            {
+                // Drain both pipes concurrently so daemon logging cannot fill a pipe and stall it.
+                await Task.WhenAll(DrainAsync(process.StandardOutput), DrainAsync(process.StandardError), process.WaitForExitAsync());
+            }
+            catch { /* The daemon's lifetime is independent of the CLI window. */ }
+        }
+        static async Task DrainAsync(StreamReader reader) { while (await reader.ReadLineAsync() is not null) { } }
     }
 
     /// <summary>
@@ -355,7 +375,7 @@ public static class OllamaSetupHelper
 
             using var proc = Process.Start(psi);
             if (proc == null) return -1;
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode;
         }
         catch
@@ -417,12 +437,23 @@ public static class OllamaSetupHelper
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode;
         }
         catch
         {
             return -1;
+        }
+    }
+
+    private static async Task WaitForOwnedProcessAsync(Process process, CancellationToken ct)
+    {
+        try { await process.WaitForExitAsync(ct); }
+        catch (OperationCanceledException)
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            throw;
         }
     }
 
@@ -598,7 +629,7 @@ public static class OllamaSetupHelper
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
-            await proc.WaitForExitAsync(ct);
+            await WaitForOwnedProcessAsync(proc, ct);
             return proc.ExitCode == 0;
         }
         catch

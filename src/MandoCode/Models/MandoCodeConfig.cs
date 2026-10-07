@@ -46,11 +46,10 @@ public class MandoCodeConfig
     };
 
     /// <summary>
-    /// Cloud model auto-pulled by the onboarding wizard when a signed-in user has no
-    /// models yet. Tuned for the broadest "best out-of-box" experience on hardware-light
-    /// setups; bump as Ollama publishes newer cloud-tier defaults.
+    /// Initial cloud recommendation for new configurations. Existing saved models
+    /// remain unchanged; setup offers this and other current flash cloud starters.
     /// </summary>
-    public const string DefaultCloudModel = "glm-5.2:cloud";
+    public const string DefaultCloudModel = "glm-5.3-flash:cloud";
 
     /// <summary>
     /// True when the tag names an Ollama cloud model. Cloud tags end in "cloud" with a
@@ -153,6 +152,12 @@ public class MandoCodeConfig
     [JsonPropertyName("modelName")]
     public string? ModelName { get; set; }
 
+    /// <summary>Saved model for newly created CLI agents; existing agents retain their own model.</summary>
+    [JsonPropertyName("defaultAgentModel")]
+    public string? DefaultAgentModel { get; set; }
+    [JsonPropertyName("defaultAgentOptions")]
+    public Dictionary<string, string>? DefaultAgentOptions { get; set; }
+
     /// <summary>
     /// Optional display identity for this AI instance — "Blazor" instead of "MandoCode" in the
     /// system prompt. Runtime-only ([JsonIgnore]): it names ONE session, so persisting it to
@@ -162,6 +167,12 @@ public class MandoCodeConfig
     /// </summary>
     [JsonIgnore]
     public string? AgentName { get; set; }
+
+    /// <summary>Use Desktop-style callsigns for newly created CLI agents; false uses numbers.</summary>
+    public bool UseAgentNames { get; set; } = true;
+    public bool DimUnfocusedAgents { get; set; } = true;
+    public bool ShowTips { get; set; } = true;
+    [JsonIgnore] public bool AllowPersistence { get; set; } = true;
 
     /// <summary>
     /// Optional: Direct path to a local model file (GGUF, etc.)
@@ -535,6 +546,7 @@ public class MandoCodeConfig
     /// </summary>
     public void Save(string? configPath = null)
     {
+        if (!AllowPersistence) return;
         configPath ??= GetDefaultConfigPath();
 
         try
@@ -615,7 +627,7 @@ public class MandoCodeConfig
         // and only when the as-typed URL actually fails to reach the daemon.
 
         // Normalize MCP server lookups to case-insensitive — otherwise InputStateMachine's
-        // lowercasing of commands ("/mcp remove Solana" → "mcp remove solana") would miss
+        // lowercasing of commands ("/mcp tools Solana" → "mcp tools solana") would miss
         // an entry the user originally saved with capital letters. System.Text.Json
         // deserializes into a default (case-sensitive) dict regardless of the property's
         // initializer, so we rebuild here once rather than at every lookup site.

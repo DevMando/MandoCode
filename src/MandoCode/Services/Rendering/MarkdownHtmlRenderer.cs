@@ -69,7 +69,7 @@ public static class MarkdownHtmlRenderer
         AnsiConsole.Write(BuildRenderable(markdown, projectRoot));
     }
 
-    public static IRenderable BuildRenderable(string markdown, string? projectRoot = null)
+    public static IRenderable BuildRenderable(string markdown, string? projectRoot = null, IEnumerable<string>? agentNames = null)
     {
         if (string.IsNullOrWhiteSpace(markdown))
             return new Text("");
@@ -79,15 +79,28 @@ public static class MarkdownHtmlRenderer
 
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
+        foreach (var node in doc.DocumentNode.Descendants().Where(n => n.NodeType == HtmlNodeType.Text && !n.Ancestors().Any(a => a.Name is "code" or "pre")))
+        {
+            var textNode = (HtmlTextNode)node;
+            textNode.Text = TerminalEmojiPresentation.SpaceLabels(TerminalEmojiPresentation.Normalize(textNode.Text));
+        }
+        if (agentNames is not null) CliAgentPresentation.Annotate(doc, agentNames);
 
         // MarkdownRenderingService wraps output in <div>…</div>. Unwrap.
         var root = doc.DocumentNode.SelectSingleNode("/div") ?? doc.DocumentNode;
 
         var renderables = new List<IRenderable>();
+        string? previousBlock = null;
         foreach (var child in root.ChildNodes)
         {
             var r = TranslateBlock(child);
-            if (r != null) renderables.Add(r);
+            if (r != null)
+            {
+                if (renderables.Count > 0 && previousBlock is not ("h1" or "h2" or "h3" or "h4" or "h5" or "h6"))
+                    renderables.Add(new Text(" "));
+                renderables.Add(r);
+                previousBlock = child.Name.ToLowerInvariant();
+            }
         }
 
         return renderables.Count switch
@@ -166,19 +179,15 @@ public static class MarkdownHtmlRenderer
     private static IRenderable TranslateHeading(HtmlNode node)
     {
         var level = int.Parse(node.Name.AsSpan(1));
-        var prefix = new string('#', level) + " ";
         var style = level switch
         {
             1 => new Style(new Color(255, 200, 80), decoration: Decoration.Bold),
-            2 => new Style(Color.DeepSkyBlue1, decoration: Decoration.Bold),
-            3 => new Style(Color.Green, decoration: Decoration.Bold),
-            4 => new Style(Color.Blue, decoration: Decoration.Bold),
-            5 => new Style(Color.Magenta1, decoration: Decoration.Bold),
-            _ => new Style(Color.Grey, decoration: Decoration.Bold),
+            2 => new Style(new Color(86, 182, 194), decoration: Decoration.Bold),
+            _ => new Style(new Color(86, 182, 194), decoration: Decoration.Bold),
         };
 
         var text = HtmlEntity.DeEntitize(node.InnerText);
-        return new Markup(Spectre.Console.Markup.Escape(prefix + text), style);
+        return new Markup(Spectre.Console.Markup.Escape(text), style);
     }
 
     private static IRenderable TranslateParagraph(HtmlNode node)
@@ -206,13 +215,15 @@ public static class MarkdownHtmlRenderer
                 continue;
 
             var prefix = isOrdered ? $"{start + itemIndex}. " : "• ";
+            // Empty model-generated items should not leave orphaned markers.
+            if (string.IsNullOrWhiteSpace(HtmlEntity.DeEntitize(child.InnerText))) { itemIndex++; continue; }
             var content = BuildListItemContent(child);
 
-            items.Add(new Columns(new IRenderable[] { new Markup(prefix), content })
-            {
-                Expand = false,
-                Padding = new Padding(0, 0, 0, 0),
-            });
+            var row = new Grid().Expand();
+            row.AddColumn(new GridColumn().Width(prefix.Length).PadRight(0));
+            row.AddColumn(new GridColumn().PadLeft(0).PadRight(0));
+            row.AddRow(new Markup(prefix, new Style(new Color(86, 182, 194))), content);
+            items.Add(row);
 
             itemIndex++;
         }
@@ -302,7 +313,8 @@ public static class MarkdownHtmlRenderer
         string highlighted;
         try
         {
-            highlighted = SyntaxHighlighter.Highlight(code, language ?? string.Empty);
+            var plainOutput = string.IsNullOrWhiteSpace(language) || language.ToLowerInvariant() is "text" or "txt" or "plaintext" or "plain" or "output" or "console" or "log";
+            highlighted = plainOutput ? Spectre.Console.Markup.Escape(code) : SyntaxHighlighter.Highlight(code, language!);
         }
         catch
         {
@@ -316,8 +328,23 @@ public static class MarkdownHtmlRenderer
 
         if (!string.IsNullOrEmpty(language))
         {
+            var label = language.ToLowerInvariant() switch
+            {
+                "csharp" or "cs" or "c#" => "C#",
+                "javascript" or "js" => "JavaScript",
+                "typescript" or "ts" => "TypeScript",
+                "python" or "py" => "Python",
+                "json" => "JSON",
+                "html" => "HTML",
+                "css" => "CSS",
+                "sql" => "SQL",
+                "powershell" or "ps1" => "PowerShell",
+                "text" or "txt" or "plaintext" or "plain" => "Text",
+                "output" or "console" or "log" => "Output",
+                _ => language
+            };
             panel.Header = new PanelHeader(
-                $"[deepskyblue1] {Spectre.Console.Markup.Escape(language)} [/]",
+                $"[bold #56b6c2] {Spectre.Console.Markup.Escape(label)} [/]",
                 Justify.Left);
         }
 
@@ -366,7 +393,8 @@ public static class MarkdownHtmlRenderer
                 {
                     var sb = new StringBuilder();
                     AppendInlines(cell, sb);
-                    table.AddColumn(new TableColumn(new Markup(sb.ToString())));
+                    table.AddColumn(new TableColumn(new Markup(sb.ToString(),
+                        new Style(new Color(86, 182, 194), new Color(22, 26, 30), Decoration.Bold))));
                 }
                 hasColumns = true;
             }
@@ -442,6 +470,11 @@ public static class MarkdownHtmlRenderer
         }
 
         if (node.NodeType != HtmlNodeType.Element) return;
+        if (node.Name == "span" && node.GetAttributeValue("data-cli-agent", "") == "true")
+        {
+            sb.Append(CliAgentPresentation.Name(HtmlEntity.DeEntitize(node.InnerText)));
+            return;
+        }
 
         switch (node.Name.ToLowerInvariant())
         {
@@ -493,7 +526,7 @@ public static class MarkdownHtmlRenderer
             case "code":
                 // Inline code: soft purple on dark grey, matching the project's
                 // synthwave palette. Sits visually distinct from the syntax
-                // highlighter's bright [magenta] used for numeric literals inside
+                // highlighter's keyword and type colors inside
                 // code blocks. Don't allow nested formatting — escape raw text.
                 sb.Append("[mediumpurple1]");
                 sb.Append(Spectre.Console.Markup.Escape(HtmlEntity.DeEntitize(node.InnerText)));
@@ -505,8 +538,9 @@ public static class MarkdownHtmlRenderer
                 if (!string.IsNullOrWhiteSpace(href))
                 {
                     sb.Append($"[link={Spectre.Console.Markup.Escape(href)}]");
+                    sb.Append("[mediumpurple1 underline]");
                     AppendInlines(node, sb);
-                    sb.Append("[/]");
+                    sb.Append("[/][/]");
                 }
                 else
                 {

@@ -113,6 +113,11 @@ public class AgentFunctionMiddleware
         Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
         CancellationToken cancellationToken)
     {
+        if (CliAgentCallChain.IsReview && !ReviewAllows(context.Function.Name))
+            return "This is a read-only agent review. That tool is unavailable; inspect files/status and report findings without changing files, running commands, proposing plans, or assigning work.";
+        if (_currentScope.Value?.PlanCancellationRequested == true)
+            return "The user cancelled the plan. All further tool calls are refused. Stop immediately — do not call tools, write files, or continue the work.";
+
         if (context.Function.Name == "propose_plan" && _planHandoff != null)
         {
             return HandleProposePlan(context);
@@ -211,7 +216,8 @@ public class AgentFunctionMiddleware
         }
 
         var functionName = context.Function.Name;
-        var description = GetFunctionDescription(functionName, context.Arguments);
+        var description = functionName == "execute_command" && TuiConsole.Current is not null && OnCommandApprovalRequested is not null
+            ? "Preparing command" : GetFunctionDescription(functionName, context.Arguments);
         var isWriteOperation = IsWriteOperation(functionName);
         var deduplicationWindow = isWriteOperation ? _writeDeduplicationWindow : _readDeduplicationWindow;
         var callKey = CreateCallKey(functionName, context.Arguments, isWriteOperation);
@@ -272,13 +278,14 @@ public class AgentFunctionMiddleware
                     DiffApprovalResponse.CancelPlan =>
                         $"User cancelled the plan while reviewing MCP tool '{context.Function.Name}'. Stop all further work.",
                     _ =>
-                        $"User rejected the MCP tool call and provided new instructions: {approval.UserMessage}"
+                        NewInstructionsResult($"User rejected the MCP tool call and provided new instructions: {approval.UserMessage}", approval.UserMessage)
                 };
             }
         }
 
         OnFunctionInvoked?.Invoke(new FunctionCall
         {
+            McpServerName = mcpServerName,
             FunctionName = functionName,
             Description = description,
             Arguments = ToArgDictionary(context.Arguments)
@@ -380,7 +387,7 @@ public class AgentFunctionMiddleware
                 {
                     DiffApprovalResponse.Denied => $"User denied the edit to '{editPath}'. Do not retry unless the user asks.",
                     DiffApprovalResponse.CancelPlan => $"User cancelled the plan while reviewing the edit to '{editPath}'. Stop all further work.",
-                    _ => $"User rejected the edit to '{editPath}' and provided new instructions: {editApproval.UserMessage}"
+                    _ => NewInstructionsResult($"User rejected the edit to '{editPath}' and provided new instructions: {editApproval.UserMessage}", editApproval.UserMessage)
                 };
                 CompleteWith(functionName, resultMsg, success: true);
                 return resultMsg;
@@ -419,6 +426,8 @@ public class AgentFunctionMiddleware
 
         try
         {
+            if (_currentScope.Value?.PlanCancellationRequested == true)
+                return "The current plan was stopped. This tool call is refused.";
             var result = await next(context, cancellationToken);
             var resultStr = result switch
             {
@@ -491,6 +500,18 @@ public class AgentFunctionMiddleware
     private static string? GetArg(FunctionInvocationContext context, string name) =>
         context.Arguments.TryGetValue(name, out var v) ? v?.ToString() : null;
 
+    private string NewInstructionsResult(string message, string? instructions)
+    {
+        if (_planHandoff?.IsExecuting == true && !string.IsNullOrWhiteSpace(instructions))
+        {
+            _currentScope.Value?.RequestPlanCancellation();
+            _planHandoff.RequestReplacement(instructions);
+            return "The user changed the plan requirements. The current plan is stopped; all further tool calls are refused. " +
+                "A replacement plan must be reviewed and approved before work resumes. New instructions: " + instructions;
+        }
+        return message;
+    }
+
     private async Task<string?> HandleWriteApprovalAsync(FunctionInvocationContext context, string? oldContent, CancellationToken cancellationToken)
     {
         if (OnWriteApprovalRequested == null) return null;
@@ -508,7 +529,7 @@ public class AgentFunctionMiddleware
         {
             DiffApprovalResponse.Approved or DiffApprovalResponse.ApprovedNoAskAgain => null,
             DiffApprovalResponse.Denied => DenyWrite(relativePath),
-            DiffApprovalResponse.NewInstructions => $"User rejected the file write to '{relativePath}' and provided new instructions: {approval.UserMessage}",
+            DiffApprovalResponse.NewInstructions => NewInstructionsResult($"User rejected the file write to '{relativePath}' and provided new instructions: {approval.UserMessage}", approval.UserMessage),
             DiffApprovalResponse.CancelPlan => CancelPlanFromWrite(relativePath),
             _ => null
         };
@@ -547,7 +568,7 @@ public class AgentFunctionMiddleware
                 _currentScope.Value?.RevokeRemainingApprovals();
                 return $"User denied the deletion of '{relativePath}'. Do not retry unless the user asks.";
             case DiffApprovalResponse.NewInstructions:
-                return $"User rejected the deletion of '{relativePath}' and provided new instructions: {approval.UserMessage}";
+                return NewInstructionsResult($"User rejected the deletion of '{relativePath}' and provided new instructions: {approval.UserMessage}", approval.UserMessage);
             case DiffApprovalResponse.CancelPlan:
                 _currentScope.Value?.RequestPlanCancellation();
                 return $"User cancelled the plan while reviewing the deletion of '{relativePath}'. Stop all further work.";
@@ -577,7 +598,7 @@ public class AgentFunctionMiddleware
                 _currentScope.Value?.RevokeRemainingApprovals();
                 return $"User denied the command '{command}'. Do not retry this command unless the user asks.";
             case DiffApprovalResponse.NewInstructions:
-                return $"User rejected the command '{command}' and provided new instructions: {approval.UserMessage}";
+                return NewInstructionsResult($"User rejected the command '{command}' and provided new instructions: {approval.UserMessage}", approval.UserMessage);
             case DiffApprovalResponse.CancelPlan:
                 _currentScope.Value?.RequestPlanCancellation();
                 return $"User cancelled the plan while reviewing the command '{command}'. Stop all further work.";
@@ -852,7 +873,9 @@ public class AgentFunctionMiddleware
     }
 
     private static bool IsMutatingFunction(string? functionName) =>
-        functionName is "write_file" or "edit_file" or "delete_file" or "delete_folder" or "create_folder";
+        functionName is "write_file" or "edit_file" or "delete_file" or "delete_folder" or "create_folder" or "ask_agent" or "ask_agent_and_wait" or "ask_agent_async" or "delegate_to_agent" or "request_agent_review" or "handoff_to_agent" or "send_agent_message" or "update_agent_job" or "cancel_agent_job";
+
+    internal static bool ReviewAllows(string name) => name is "read_file_contents" or "list_all_project_files" or "list_files_match_glob_pattern" or "grep_files" or "search_text_in_files" or "get_absolute_path" or "search_web" or "fetch_webpage" or "load_skill" or "list_agents" or "get_agent_status" or "read_agent_transcript" or "check_delegations";
 
     private static readonly Regex ShellFileReadVerbs =
         new(@"^\s*(?:type|cat|head|tail|more|less|nl|gc|Get-Content|findstr|grep|sls|Select-String|sed|awk)\b",

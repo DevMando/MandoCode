@@ -1,111 +1,387 @@
+@inject IServiceProvider Services
 @using MandoCode.Models
 @using MandoCode.Services
 @using Spectre.Console
+@using RazorConsole.Core.Renderables
+@implements IDisposable
 
-@* TextInput — the only component *@
-<TextInput @bind-Value="_inputValue"
-           OnInput="HandleInput"
-           OnSubmit="HandleSubmit"
-           Label="@Label"
-           LabelColor="@LabelColor"
-           Placeholder="@Placeholder"
-           ValueColor="@(new Color(255, 200, 80))"
-           PlaceholderColor="Color.Grey"
-           BorderColor="Color.Green"
-           FocusedBorderColor="Color.Green"
-           DisabledBorderColor="Color.Green"
-           BorderStyle="BoxBorder.Double"
-           Disabled="@Disabled"
-           Expand="true"
-           FocusOrder="0" />
+<div data-focusable="false" @onclick="FocusPromptAsync">
+<Rows>
+    @if (_clipboardStatus.Length > 0) { <Markup Content="@Spectre.Console.Markup.Escape(_clipboardStatus)" Foreground="@InputColor(_clipboardError ? Color.Gold1 : Color.Purple)" /> }
+    @if (ModelPicker is not null)
+    {
+        <ModelPickerPopup Picker="ModelPicker" />
+    }
+    else if (_emojiOpen && ChatFeaturesEnabled)
+    {
+        <Panel Border="BoxBorder.Rounded" BorderColor="@InputColor(Color.Purple)" Expand="true" Title="Emoji">
+            <Rows>
+                @for (var row = EmojiStartRow; row < Math.Min(EmojiRowCount, EmojiStartRow + EmojiVisibleRows); row++)
+                {
+                    var rowIndex = row;
+                    <Flex Direction="FlexDirection.Row" Height="1">
+                        @for (var col = 0; col < EmojiColumns && rowIndex * EmojiColumns + col < _emojiChoices.Count; col++)
+                        {
+                            var index = rowIndex * EmojiColumns + col;
+                            <Box Width="5"><div data-focusable="false" @onclick="@(() => ChooseEmoji(index))"><Markup Content="@($" {_emojiChoices[index]} ")" Foreground="@InputColor(Color.White)" Background="@(index == _emojiSelected ? new Color(80, 55, 101) : Color.Default)" /></div></Box>
+                        }
+                    </Flex>
+                }
+                @if (_emojiChoices.Count == 0) { <Markup Content="No matching emoji" Foreground="@InputColor(Color.Grey)" /> }
+                <Markup Content="Type in prompt · ↑/↓/←/→ select · Enter insert · Esc close" Foreground="@InputColor(Color.Grey)" />
+            </Rows>
+        </Panel>
+    }
+    else if (ChatFeaturesEnabled)
+    {
+        @if (_composer.FilesLoading && !_composer.ViewingAgents) { <Markup Content="@($"{LoadingFrames[_loadingFrame % LoadingFrames.Length]} Loading files and folders")" Foreground="@InputColor(Color.Green)" /> }
+        <AutocompletePopup Composer="_composer" OnChanged="PickerChanged" />
+    }
+    <Flex Direction="FlexDirection.Row" Height="@(InputHeight + 2)">
+    <Box Width="@PromptWidth">
+    <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
+        <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="@InputHeight"
+                  WordWrap="true" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
+                  CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
+                  Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen || _composer.AtPickerOpen)"
+                  OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
+    </Panel>
+    </Box>
+    @if (ShowEmojiButton)
+    {
+        <Box Width="1"><Markup Content=" " /></Box>
+        <Box Width="8" Height="3" Border="BoxBorder.Rounded" BorderColor="@InputColor(_emojiOpen ? Color.Purple : Color.Green)">
+            <div data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" @onkeydown="EmojiButtonKey" @onclick="OpenEmojiPicker"><Markup Content="  😀  " Foreground="@InputColor(Disabled ? Color.Grey : Color.White)" /></div>
+        </Box>
+    }
+    </Flex>
+</Rows>
+</div>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter(Name = "AgentContentWidth")] public int? ContentWidth { get; set; }
+    [CascadingParameter] public ExplorerFocusScope? ExplorerFocus { get; set; }
+    private Color InputColor(Color color) => ExplorerFocus is { Active: true, PromptFocused: false } ? Color.Grey62 : PaneColors.For(Pane, color);
+    private async Task InsertExplorerReference(string path)
+    {
+        if (Disabled) throw new InvalidOperationException("Wait for the current response before adding a file reference.");
+        _composer.InsertFileReference(path);
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
     [Parameter] public EventCallback<string> OnAutocompleteRequested { get; set; }
+    [Parameter] public EventCallback<string> OnScroll { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public ModelPickerState? ModelPicker { get; set; }
+    [Parameter] public EventCallback<string> OnModelSelected { get; set; }
+    [Parameter] public EventCallback OnModelPickerCancel { get; set; }
+    private ModelPickerState? _previousPicker;
+    private bool _focusPicker;
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string InitialValue { get; set; } = "";
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
-    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files";
+    [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis · Alt+V paste image";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
     [Parameter] public bool AllowEmpty { get; set; }
-
-    [Inject] private InputStateMachine SM { get; set; } = default!;
-
-    private string _inputValue = "";
-    private DateTime _lastInputAt = DateTime.MinValue;
-    private int _lastLength = 0;
-    private bool _initialValueApplied;
-
+    [Parameter] public string? PersistenceKey { get; set; }
+    [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
+    private InputStateMachine SM => (InputStateMachine)(Pane?.Services ?? Services).GetService(typeof(InputStateMachine))!;
+    private PromptComposerState _composer = default!;
+    private readonly string _hook = "prompt-" + Guid.NewGuid().ToString("N");
+    private string _lastInitialValue = "";
+    private string? StateKey => PersistenceKey is not null ? "instruction-composer" : ChatFeaturesEnabled ? "chat-composer" : null;
+    [Inject] private RazorConsole.Core.Rendering.ITerminalViewport Viewport { get; set; } = default!;
+    private bool ShowEmojiButton => ChatFeaturesEnabled && ModelPicker is null && (ContentWidth ?? Pane?.Width ?? Viewport.Width) >= 18;
+    private int PromptWidth => Math.Max(1, (ContentWidth ?? Pane?.Width ?? Viewport.Width) - (ShowEmojiButton ? 9 : 0));
+    private int InputWidth => Math.Max(1, PromptWidth - 4);
+    // Use the editor's own wrapping rules, including newlines and wide characters.
+    private int InputHeight => Math.Clamp(_composer.Buffer.Wrap(InputWidth, 0, true).Count, 1,
+        Math.Max(1, (Pane?.Height ?? Viewport.Height) / 2 - 2));
+    private bool _emojiOpen;
+    private readonly PromptCursorNavigation _cursorNavigation = new();
+    private bool _pastingImage, _clipboardError;
+    private string _clipboardStatus = "";
+    private readonly ClipboardImageStore _fallbackClipboard = new();
+    private TerminalPasteGuard _pasteGuard = new();
+    private async Task<bool> PasteClipboardImage(bool explicitRequest)
+    {
+        if (Disabled || !ChatFeaturesEnabled || ModelPicker is not null || Pane is { Active: false }) return true;
+        if (!explicitRequest && !OperatingSystem.IsWindows()) return false;
+        if (_pastingImage) return true;
+        _pastingImage = true; _clipboardError = false; _clipboardStatus = "Reading clipboard…";
+        StateHasChanged();
+        try {
+            var services = Pane?.Services ?? Services;
+            var reader = services.GetService(typeof(IClipboardImageReader)) as IClipboardImageReader ?? new WindowsClipboardImageReader();
+            var png = await reader.ReadPngAsync(_loadingStop.Token);
+            if (_disposed) return true;
+            if (png is null) {
+                var textReader = services.GetService(typeof(IClipboardTextReader)) as IClipboardTextReader ?? reader as IClipboardTextReader;
+                var text = explicitRequest || textReader is null ? null : await textReader.ReadTextAsync(_loadingStop.Token);
+                if (_disposed) return true;
+                if (text is not null) { _composer.Buffer.Insert(PromptPaste.Normalize(text)); _composer.Refresh(); _emojiOpen = false; _clipboardStatus = ""; return true; }
+                _clipboardStatus = explicitRequest ? "No Image in the clipboard. Copy an image, then press Alt+V" : ""; return explicitRequest;
+            }
+            var images = services.GetService(typeof(ClipboardImageStore)) as ClipboardImageStore ?? _fallbackClipboard;
+            _composer.InsertFileReference(images.Add(png));
+            _clipboardStatus = "Clipboard image attached · Add a message, then Enter to send · Delete its @reference to remove";
+            _emojiOpen = false;
+            return true;
+        }
+        catch (OperationCanceledException) { if (!_disposed) { _clipboardError = true; _clipboardStatus = "Clipboard read timed out. Try Alt+V again."; } return true; }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or FormatException) { _clipboardError = true; _clipboardStatus = ex.Message; return true; }
+        finally { _pastingImage = false; if (!_disposed) { StateHasChanged(); await FocusPromptAsync(); } }
+    }
+    private int _emojiSelected;
+    private IReadOnlyList<string> _emojiChoices = PromptEmojiAliases.PickerEmojis;
+    private bool _emojiFromToken;
+    private string _emojiFragment = "";
+    private int _dismissedEmojiStart = -1;
+    private int EmojiColumns => Math.Max(1, Math.Min(12, ((ContentWidth ?? Pane?.Width ?? Viewport.Width) - 4) / 5));
+    private int EmojiRowCount => (_emojiChoices.Count + EmojiColumns - 1) / EmojiColumns;
+    private int EmojiVisibleRows => Math.Max(1, Math.Min(4, Viewport.Height / 4));
+    private int EmojiStartRow => Math.Max(0, _emojiSelected / EmojiColumns - EmojiVisibleRows + 1);
+    private async Task OpenEmojiPicker()
+    {
+        if (Disabled || !ShowEmojiButton || Pane is { Active: false }) return;
+        _emojiOpen = !_emojiOpen;
+        _emojiFromToken = false;
+        _emojiChoices = PromptEmojiAliases.PickerEmojis;
+        _emojiSelected = 0;
+        if (_emojiOpen && PromptEmojiAliases.Fragment(_composer.Buffer) is { } token)
+        {
+            _emojiFromToken = true;
+            _emojiFragment = token.Name;
+            _emojiChoices = PromptEmojiAliases.Match(token.Name);
+            _dismissedEmojiStart = -1;
+        }
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
+    private async Task EmojiButtonKey(KeyboardEventArgs key)
+    {
+        if (Pane is { Active: false }) return;
+        if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
+        if (key.Key is "Enter" or "Return" or " ") await OpenEmojiPicker();
+        else if (key.Key is "Escape" or "Tab") await FocusPromptAsync();
+    }
+    private async Task ChooseEmoji(int index)
+    {
+        if (Disabled || !ChatFeaturesEnabled || Pane is { Active: false } || index < 0 || index >= _emojiChoices.Count) return;
+        if (_emojiFromToken) PromptEmojiAliases.ReplaceFragment(_composer.Buffer, _emojiChoices[index]);
+        else PromptEmojiAliases.Insert(_composer.Buffer, _emojiChoices[index]);
+        _composer.Refresh();
+        _emojiOpen = false;
+        _emojiFromToken = false;
+        _dismissedEmojiStart = -1;
+        StateHasChanged();
+        await FocusPromptAsync();
+    }
+    public async Task FocusPromptAsync()
+    {
+        if (Pane is not null && !Pane.Active) return;
+        if (Pane is not null) Pane.FocusKey = _hook;
+        await Focus.FocusAsync(_hook);
+        ExplorerFocus?.SetPromptFocused(true);
+    }
+    protected override void OnInitialized()
+    {
+        if (ExplorerFocus is not null) ExplorerFocus.Changed += ExplorerFocusChanged;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
+        if (ChatFeaturesEnabled) { _files = (Pane?.Services ?? Services).GetService(typeof(FileAutocompleteProvider)) as FileAutocompleteProvider; if (_files is not null) _files.SuggestionsChanged += FilesChanged; }
+        var key = StateKey;
+        if (Pane is not null && key is not null && Pane.PresentationState.TryGetValue(key, out var saved) && saved is ComposerDraft draft
+            && draft.Key == PersistenceKey && draft.InitialValue == InitialValue && ReferenceEquals(draft.Picker, ModelPicker))
+        {
+            _composer = draft.Composer;
+            _lastInitialValue = InitialValue;
+            _previousPicker = ModelPicker;
+            _composer.Refresh();
+        }
+        else
+        {
+            _composer = new(SM);
+            if (Pane is not null && key is not null) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
+        }
+        if (ChatFeaturesEnabled && Pane is not null) _composer.Agents = new CliAgentDirectory(Pane);
+        if (ChatFeaturesEnabled && Pane?.Workspace.Registry is { } registry) registry.Changed += FilesChanged;
+        else if (ChatFeaturesEnabled && Pane is not null) Pane.Workspace.Changed += FilesChanged;
+    }
+    private async Task PickerChanged() { StateHasChanged(); await FocusPromptAsync(); }
+    private FileAutocompleteProvider? _files;
+    private bool _disposed;
+    private int _loadingFrame;
+    private readonly CancellationTokenSource _loadingStop = new();
+    private static readonly string[] LoadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    private void FilesChanged() { if (!_disposed) _ = InvokeAsync(() => { if (_disposed) return; _composer.Refresh(); StateHasChanged(); }); }
+    private async Task AnimateLoading() { try { while (!_loadingStop.IsCancellationRequested) { await Task.Delay(120, _loadingStop.Token); if (_composer.FilesLoading) await InvokeAsync(() => { _loadingFrame++; StateHasChanged(); }); } } catch (OperationCanceledException) { } }
+    private sealed record ComposerDraft(PromptComposerState Composer, string InitialValue, ModelPickerState? Picker, string? Key);
+    private void ExplorerFocusChanged() => _ = InvokeAsync(StateHasChanged);
+    public void Dispose()
+    {
+        _disposed = true; _loadingStop.Cancel(); if (_files is not null) _files.SuggestionsChanged -= FilesChanged;
+        if (Pane?.Workspace.Registry is { } registry) registry.Changed -= FilesChanged;
+        else if (Pane is not null) Pane.Workspace.Changed -= FilesChanged;
+        if (ExplorerFocus is not null) ExplorerFocus.Changed -= ExplorerFocusChanged;
+    }
     protected override void OnParametersSet()
     {
-        if (!_initialValueApplied && !string.IsNullOrEmpty(InitialValue))
+        if (Disabled || ModelPicker is not null) _emojiOpen = false;
+        if (!ReferenceEquals(ModelPicker, _previousPicker))
         {
-            _inputValue = InitialValue;
-            _initialValueApplied = true;
+            _previousPicker = ModelPicker;
+            _composer.SetText("");
+            _focusPicker = true;
+        }
+        if (InitialValue != _lastInitialValue)
+        {
+            _lastInitialValue = InitialValue;
+            _composer.SetText(InitialValue);
+        }
+        if (Pane is not null && StateKey is { } key) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) _ = AnimateLoading();
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.FocusPrompt = FocusPromptAsync;
+        if (ChatFeaturesEnabled && ExplorerFocus is not null) ExplorerFocus.InsertFileReference = InsertExplorerReference;
+        // A panel's focus request may precede registration of the new snapshot.
+        // Do not treat the prompt's stale focus as ownership during that redraw
+        // or when narrow panes remount it. Tab/clicks explicitly restore ownership.
+        if (ExplorerFocus?.Active == true && (firstRender || !ExplorerFocus.PromptFocused)) return;
+        if (Focus.IsFocused(_hook)) ExplorerFocus?.SetPromptFocused(true);
+        // The conversation can already own focus when connection startup reveals
+        // this prompt. Request its stable TextArea key once, without stealing focus
+        // back from transcript navigation on subsequent streaming redraws.
+        if (Pane is not null && (firstRender || _focusPicker || Focus.IsFocused(_hook))) Pane.FocusKey = _hook;
+        if ((Pane is null || Pane.Active) && (firstRender || _focusPicker))
+        {
+            _focusPicker = false;
+            await Focus.FocusAsync(_hook);
         }
     }
 
-    // Paste handling: terminals stream paste as a burst of keystrokes, not a discrete event.
-    // RazorConsole 0.5.0's single-line TextInput interprets pasted '\r' as Enter and fires
-    // OnSubmit mid-paste, splitting the buffer. Two layers defend against that:
-    //   A) sanitize '\r'/'\n'/'\t' to space here, push the cleaned value back via SetValue.
-    //   B) HandleSubmit suppresses Submits that fire <30ms after the last OnInput —
-    //      paste '\r' arrives <1ms after the prior char; human Enter is always >100ms.
-    private async Task HandleInput(string value)
+    private async Task<bool> PreviewKey(KeyboardEventArgs key)
     {
-        var sanitized = value;
-        if (value.IndexOfAny(new[] { '\r', '\n', '\t' }) >= 0)
+        if (Pane is { Active: false }) return true;
+        if (key.Key is not ("ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")) _cursorNavigation.Reset();
+        if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null) return await PasteClipboardImage(key.AltKey);
+        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (_pastingImage) return true;
+        if (!Disabled && ModelPicker is null && _pasteGuard.IsPasteKey(key))
         {
-            sanitized = value.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
-            SetValue(sanitized);
+            _composer.Buffer.Insert(key.Key is "Enter" or "Return" ? "\n" : key.Key == "Tab" ? "\t" : key.Key);
+            _composer.Refresh(); _emojiOpen = false; StateHasChanged(); return true;
         }
-
-        _inputValue = sanitized;
-
-        var action = ChatFeaturesEnabled ? SM.UpdateText(sanitized) : InputAction.Noop;
-
-        _lastInputAt = DateTime.UtcNow;
-        _lastLength = sanitized.Length;
-
-        // When autocomplete triggers, hand off to imperative mode
-        if (ChatFeaturesEnabled &&
-            (action == InputAction.ShowCommandDropdown || action == InputAction.ShowFileDropdown))
+        if (!Disabled && key.Key == "Tab" && _composer.AtPickerOpen && _composer.HandleKey("Tab")) { StateHasChanged(); return true; }
+        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (_emojiOpen && ChatFeaturesEnabled && !Disabled)
         {
-            await OnAutocompleteRequested.InvokeAsync(sanitized);
+            switch (key.Key)
+            {
+                case "ArrowLeft": case "LeftArrow": _emojiSelected = Math.Max(0, _emojiSelected - 1); break;
+                case "ArrowRight": case "RightArrow": _emojiSelected = Math.Max(0, Math.Min(_emojiChoices.Count - 1, _emojiSelected + 1)); break;
+                case "ArrowUp": case "UpArrow": _emojiSelected = Math.Max(0, _emojiSelected - EmojiColumns); break;
+                case "ArrowDown": case "DownArrow": _emojiSelected = Math.Max(0, Math.Min(_emojiChoices.Count - 1, _emojiSelected + EmojiColumns)); break;
+                case "Enter": case "Return": await ChooseEmoji(_emojiSelected); return true;
+                case "Escape": case "Tab": _emojiOpen = false; _dismissedEmojiStart = PromptEmojiAliases.Fragment(_composer.Buffer)?.Start ?? -1; break;
+                default: return false;
+            }
+            StateHasChanged();
+            return true;
         }
+        if (key.Key == "Tab" && ExplorerFocus?.Active == true && (Pane is null || Pane.Active))
+        {
+            await ExplorerFocus.ToggleAsync(key.ShiftKey);
+            return true;
+        }
+        if (Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (Pane is not null && !Pane.Active) return true;
+        if (Pane is not null) Pane.FocusKey = _hook;
+        ExplorerFocus?.SetPromptFocused(true);
+        if (key.Key is "PageUp" or "PageDown" || (key.CtrlKey && key.Key == "End"))
+        {
+            await OnScroll.InvokeAsync(key.Key);
+            return true;
+        }
+        if (ModelPicker is { } picker)
+        {
+            switch (key.Key)
+            {
+                case "ArrowUp": case "UpArrow": picker.Move(-1); break;
+                case "ArrowDown": case "DownArrow": picker.Move(1); break;
+                case "Enter": case "Return": case "Tab":
+                    if (picker.Selected is { } selected) await OnModelSelected.InvokeAsync(selected);
+                    break;
+                case "Escape": await OnModelPickerCancel.InvokeAsync(); break;
+                default: return false;
+            }
+            StateHasChanged();
+            return true;
+        }
+        if (ChatFeaturesEnabled && ModelPicker is null && !_emojiOpen && !_composer.IsOpen && !_composer.AtPickerOpen && key.Key is "ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")
+        {
+            var direction = key.Key is "ArrowUp" or "UpArrow" ? -1 : 1;
+            if (!Disabled && _cursorNavigation.Move(_composer.Buffer, InputWidth, InputHeight, direction, key.ShiftKey))
+            {
+                _composer.Refresh(); StateHasChanged();
+            }
+            else if (!key.ShiftKey) await OnScroll.InvokeAsync(key.Key);
+            return true;
+        }
+        if (Disabled)
+        {
+            if (key.Key == "Escape") await OnCancel.InvokeAsync();
+            return true;
+        }
+        if (ChatFeaturesEnabled && _composer.HandleKey(key.Key))
+        {
+            StateHasChanged();
+            return true;
+        }
+        if (key.Key == "Tab" && ShowEmojiButton) { await OpenEmojiPicker(); return true; }
+        return false;
     }
-
-    private void HandleSubmit(string value)
+    private void HandleChanged()
     {
-        if (Disabled) return;
-        if (!AllowEmpty && string.IsNullOrWhiteSpace(value)) return;
-
-        // Paste-burst guard: a Submit firing within 30ms of the last OnInput is the '\r'
-        // from a paste burst, not a real user Enter. Humans can't reach Enter that fast.
-        var sinceInput = (DateTime.UtcNow - _lastInputAt).TotalMilliseconds;
-        if (sinceInput < 30)
+        if (ModelPicker is { } picker) picker.Filter(_composer.Buffer.Text);
+        else if (ChatFeaturesEnabled)
         {
-            SetValue(value);
-            if (ChatFeaturesEnabled)
-                SM.UpdateText(value);
-            return;
+            var expanded = PromptEmojiAliases.Expand(_composer.Buffer);
+            var fragment = PromptEmojiAliases.Fragment(_composer.Buffer);
+            if (fragment is { } token && !Disabled)
+            {
+                if (_dismissedEmojiStart != token.Start)
+                {
+                    if (!_emojiOpen || !_emojiFromToken || _emojiFragment != token.Name) _emojiSelected = 0;
+                    _emojiChoices = PromptEmojiAliases.Match(token.Name);
+                    _emojiFragment = token.Name;
+                    _emojiFromToken = true;
+                    _emojiOpen = true;
+                }
+            }
+            else
+            {
+                if (_emojiFromToken || expanded) _emojiOpen = false;
+                _emojiFromToken = false;
+                _dismissedEmojiStart = -1;
+            }
+            _composer.Refresh();
         }
-
-        if (ChatFeaturesEnabled)
-            SM.SubmitInput(value);
-
-        var submitted = value;
-        _inputValue = "";
-        _lastLength = 0;
         StateHasChanged();
-
-        OnSubmit.InvokeAsync(submitted);
     }
-
-    public void SetValue(string value)
+    private async Task HandleSubmit(string value)
     {
-        _inputValue = value;
-        StateHasChanged();
+        if (Pane is not null && !Pane.Active) return;
+        if (Disabled || _pastingImage || (!AllowEmpty && string.IsNullOrWhiteSpace(value))) return;
+        if (ChatFeaturesEnabled) _composer.Submitted(value);
+        _composer.SetText("");
+        _clipboardStatus = "";
+        await OnSubmit.InvokeAsync(value);
     }
+    public void SetValue(string value) { _composer.SetText(value); StateHasChanged(); }
 }

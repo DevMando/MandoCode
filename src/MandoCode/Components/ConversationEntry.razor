@@ -1,0 +1,25 @@
+@* data-canvas opts into the widget pipeline's Spectre fallback; our middleware
+   supplies the cached rich renderable, including code blocks and tool results. *@
+@if (Entry.Command is { } command)
+{
+    <CommandPreviewView Preview="command" />
+}
+else if (Entry.UserPrompt is not null)
+{
+    <UserPrompt Entry="Entry" />
+}
+else if (Entry.SpaceAfter)
+{
+    <Rows>
+        <div @key="Entry.Id" data-canvas="true" data-transcript-entry="@Entry.Id" />
+        <Markup Content=" " />
+    </Rows>
+}
+else
+{
+    <div @key="Entry.Id" data-canvas="true" data-transcript-entry="@Entry.Id" />
+}
+
+@code {
+    [Parameter, EditorRequired] public TuiEntry Entry { get; set; } = default!;
+}

@@ -1,0 +1,90 @@
+@using Spectre.Console
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+@if (Composer.AtPickerOpen || Composer.IsOpen)
+{
+    <Rows>
+    @if (FilePicker)
+    {
+        <Box FillWidth="true" Height="1"><RenderableContent Content="@PickerHeader" /></Box>
+    }
+    <Box FillWidth="true" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="@(FilePicker ? null : "Commands")" data-border-top="@(FilePicker ? "none" : "rounded")">
+        <Rows>
+            @if (Composer.AtPickerOpen && Composer.ViewingAgents)
+            {
+                @if (Composer.AgentSuggestions.Length == 0) { <Markup Content="No matching open agents" Foreground="Color.Grey70" /> }
+                @foreach (var index in AgentIndices)
+                {
+                    var agent = Composer.AgentSuggestions[index];
+                    <div data-focusable="false" @onclick="@(() => Choose(index))"><Markup Content="@((index == Composer.AgentSelected ? "> " : "  ") + agent.Name + " · " + agent.Workspace.Name)" Foreground="@(index == Composer.AgentSelected ? Color.White : new Color(198, 120, 221))" Background="@(index == Composer.AgentSelected ? new Color(80, 55, 101) : Color.Default)" /></div>
+                }
+            }
+            else
+            {
+            @foreach (var index in VisibleIndices)
+            {
+                var item = Composer.Suggestions.DropdownItems[index];
+                var selected = index == Composer.Suggestions.SelectedIndex;
+                var description = Composer.Suggestions.Mode == AutocompleteMode.Command &&
+                    Composer.Suggestions.CommandDescriptions.TryGetValue(item, out var detail) ? detail : "";
+                @if (Composer.Suggestions.Mode == AutocompleteMode.File)
+                {
+                    <FileSuggestionRow Path="@item" Selected="@selected" />
+                }
+                else
+                {
+                    <CommandSuggestionRow Command="@item" Description="@description" Selected="@selected" CommandColumn="@CommandColumn" />
+                }
+            }
+            }
+        </Rows>
+    </Box>
+    </Rows>
+}
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [CascadingParameter(Name = "AgentContentWidth")] public int? ContentWidth { get; set; }
+    private bool FilePicker => Composer.AtPickerOpen || Composer.Suggestions.Mode == AutocompleteMode.File;
+    private Spectre.Console.Rendering.IRenderable PickerHeader
+    {
+        get
+        {
+            var width = Math.Max(4, ContentWidth ?? Pane?.Width ?? Viewport.Width);
+            var label = Composer.ViewingAgents ? "🤖 Agents" : "📁 Files";
+            var hint = Composer.AtPickerOpen ? Composer.ViewingAgents ? " — Press [Tab] for Files" : " — Press [Tab] for Agents" : "";
+            var available = width - 4;
+            var shownLabel = WorkspaceTabWindow.Fit(label, available).TrimEnd();
+            var remaining = Math.Max(0, available - RazorConsole.Core.Input.TextSelectionState.CellWidth(shownLabel));
+            var shownHint = remaining > 0 ? WorkspaceTabWindow.Fit(hint, remaining).TrimEnd() : "";
+            var padding = Math.Max(0, remaining - RazorConsole.Core.Input.TextSelectionState.CellWidth(shownHint));
+            var teal = new Style(PaneColors.For(Pane, new Color(86, 182, 194)));
+            return new Paragraph().Append("╭─" + shownLabel, teal)
+                .Append(shownHint, new Style(PaneColors.For(Pane, new Color(255, 200, 80))))
+                .Append(new string('─', padding) + "─╮", teal);
+        }
+    }
+    [Parameter, EditorRequired] public PromptComposerState Composer { get; set; } = default!;
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private async Task Choose(int index) { Composer.InsertAgent(index); await OnChanged.InvokeAsync(); }
+    private IEnumerable<int> AgentIndices
+    {
+        get
+        {
+            var visible = Math.Min(6, Math.Max(1, Viewport.Height / 4));
+            var start = Math.Clamp(Composer.AgentSelected - visible + 1, 0, Math.Max(0, Composer.AgentSuggestions.Length - visible));
+            return Enumerable.Range(start, Math.Min(visible, Composer.AgentSuggestions.Length - start));
+        }
+    }
+    private int CommandColumn => Math.Max(14, Composer.Suggestions.DropdownItems.Select(command => command.Length).DefaultIfEmpty(0).Max());
+    private IEnumerable<int> VisibleIndices
+    {
+        get
+        {
+            var count = Composer.Suggestions.DropdownItems.Count;
+            var visible = Math.Min(6, Math.Max(1, Viewport.Height / 4));
+            var start = Math.Clamp(Composer.Suggestions.SelectedIndex - visible + 1, 0, Math.Max(0, count - visible));
+            return Enumerable.Range(start, Math.Min(visible, count - start));
+        }
+    }
+}

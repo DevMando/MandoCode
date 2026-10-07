@@ -53,11 +53,22 @@ class Program
         var positional = args.Where(a => !a.StartsWith('-')).ToArray();
         var projectRoot = positional.Length > 0 ? positional[0] : Environment.CurrentDirectory;
 
+        var toolUpdate = new ToolUpdateService();
         var hostBuilder = Host.CreateDefaultBuilder(args)
-            .UseRazorConsole<App>();
+            .UseRazorConsole<TerminalWorkspaceView>();
 
         hostBuilder.ConfigureServices(services =>
         {
+            services.AddSingleton(toolUpdate);
+            // The widget canvas owns visible output; legacy output joins the transcript.
+            services.Configure<ConsoleAppOptions>(options =>
+            {
+                options.RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout;
+                options.ConsoleLiveDisplayOptions.UseAlternateScreenBuffer = true;
+                options.ConsoleLiveDisplayOptions.EnableMouseEvents = true;
+                options.EnableTerminalResizing = true;
+            });
+
             // Load configuration
             var config = MandoCodeConfig.Load();
 
@@ -74,136 +85,7 @@ class Program
                 config.ModelName = envModel;
             }
 
-            // Register configuration as singleton
-            services.AddSingleton(config);
-
-            // Register ProjectRootAccessor as singleton
-            services.AddSingleton(new ProjectRootAccessor(projectRoot));
-
-            // Register SpinnerService as singleton
-            services.AddSingleton<SpinnerService>();
-
-            // Register UpdateCheckService — background NuGet "newer version available" nag
-            services.AddSingleton<UpdateCheckService>();
-
-            // Register OperationDisplayRenderer as singleton
-            services.AddSingleton<OperationDisplayRenderer>();
-
-            // Register CancelKeyCoordinator — pauses App's background Escape listener
-            // while a Spectre prompt is active so arrow keys aren't silently eaten.
-            services.AddSingleton<CancelKeyCoordinator>();
-
-            // Register InstructionPromptCoordinator — bridges DiffApprovalHandler's
-            // "Provide new instructions" path to a VDOM TextInput in App.razor.
-            services.AddSingleton<InstructionPromptCoordinator>();
-
-            // Register ApprovalSelectCoordinator — bridges DiffApprovalHandler's approval
-            // menus to a VDOM ApprovalSelect in App.razor, so they no longer run through
-            // Spectre's blocking SelectionPrompt (whose ReadKey races the keyboard pump and
-            // could hang a plan step with the spinner already stopped).
-            services.AddSingleton<ApprovalSelectCoordinator>();
-
-            // Register ApprovalPromptGate — serializes all approval prompts so concurrent
-            // tool invocations can't open two blocking Spectre prompts at once.
-            services.AddSingleton<ApprovalPromptGate>();
-
-            // Register DiffApprovalHandler as singleton
-            services.AddSingleton<DiffApprovalHandler>();
-
-            // Register ShellCommandHandler as singleton
-            services.AddSingleton<ShellCommandHandler>();
-
-            // Register TokenTrackingService as singleton
-            services.AddSingleton<TokenTrackingService>();
-
-            // Register PlanHandoff as singleton — bridges propose_plan tool calls to the UI
-            services.AddSingleton<PlanHandoff>();
-
-            // Register SkillLoader as singleton — scans user + project skill dirs at startup
-            services.AddSingleton(provider =>
-            {
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
-                return new SkillLoader(cfg, projectRootAccessor);
-            });
-
-            // MCP lifecycle — manager owns client connections, gate guards first-use approvals.
-            // Manager.StartAllAsync() is invoked from App.razor's initial render so the UI is
-            // ready to surface connection failures inline.
-            services.AddSingleton(provider => new McpClientManager(provider.GetRequiredService<MandoCodeConfig>()));
-            services.AddSingleton(provider => new McpApprovalGate(provider.GetRequiredService<MandoCodeConfig>()));
-
-            // Register TerminalThemeService as singleton
-            services.AddSingleton(provider =>
-            {
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
-                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
-                return new TerminalThemeService(cfg, tokenTracker, projectRootAccessor);
-            });
-
-            // Register AIService as singleton
-            services.AddSingleton(provider =>
-            {
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
-                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
-                var planHandoff = provider.GetRequiredService<PlanHandoff>();
-                var skillLoader = provider.GetRequiredService<SkillLoader>();
-                var mcpManager = provider.GetRequiredService<McpClientManager>();
-                var mcpGate = provider.GetRequiredService<McpApprovalGate>();
-                var spinner = provider.GetRequiredService<SpinnerService>();
-                return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader, mcpManager, mcpGate, spinner);
-            });
-
-            // Register TaskPlannerService as singleton
-            services.AddSingleton(provider =>
-            {
-                var aiService = provider.GetRequiredService<AIService>();
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                return new TaskPlannerService(aiService, cfg);
-            });
-
-            // Plans always run through the workflow runner; TaskPlannerService above remains the
-            // decision heuristic and proposal mapper.
-            services.AddSingleton<IPlanStepExecutor>(provider =>
-                new AiServicePlanStepExecutor(provider.GetRequiredService<AIService>()));
-
-            services.AddSingleton(provider => new PlanRunnerSelector(
-                provider.GetRequiredService<MandoCodeConfig>(),
-                provider.GetRequiredService<IPlanStepExecutor>(),
-                provider.GetRequiredService<PlanHandoff>(),
-                provider.GetRequiredService<ProjectRootAccessor>()));
-
-            // Register MusicPlayerService as singleton
-            services.AddSingleton(provider =>
-            {
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                return new MusicPlayerService(cfg);
-            });
-
-            // Register FileAutocompleteProvider as singleton
-            services.AddSingleton(provider =>
-            {
-                var cfg = provider.GetRequiredService<MandoCodeConfig>();
-                var ignoreDirs = new HashSet<string>(MandoCodeConfig.DefaultIgnoreDirectories);
-                foreach (var dir in cfg.IgnoreDirectories) ignoreDirs.Add(dir);
-                var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
-                return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);
-            });
-
-            // Register InputStateMachine as singleton (shared between imperative + VDOM input).
-            // Commands are sourced from MandoCode.Models.SlashCommands so that the
-            // state machine and CommandAutocomplete can't drift apart.
-            services.AddSingleton(provider =>
-            {
-                var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
-                var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
-                return new InputStateMachine(commands, fileProvider);
-            });
-
-            // Register AnsiPassthrough translator for VDOM integration
-            services.AddSingleton<ITranslationMiddleware, AnsiPassthroughTranslator>();
+            RegisterAgentServices(services, config, projectRoot);
 
             // Configure console options
             services.Configure<ConsoleAppOptions>(options =>
@@ -212,8 +94,183 @@ class Program
             });
         });
 
-        var host = hostBuilder.Build();
-        await host.RunAsync();
+        using (var host = hostBuilder.Build())
+        using (var outputScope = host.Services.CreateScope())
+        using (var tuiOutput = TuiConsole.Begin(outputScope.ServiceProvider.GetRequiredService<TuiSession>()))
+            await host.RunAsync();
+        try { toolUpdate.Launch(); }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not start the update: " + ex.Message);
+            Console.WriteLine("Run manually: dotnet tool update -g MandoCode");
+            Environment.ExitCode = 1;
+        }
+    }
+
+    internal static void RegisterAgentServices(IServiceCollection services, MandoCodeConfig config, string projectRoot)
+    {
+        config.DefaultAgentModel ??= config.GetEffectiveModelName();
+        config.DefaultAgentOptions ??= AgentSettingsDraft.Capture(config);
+        services.AddSingleton(new SnapshotStore(config.AllowPersistence ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "snapshots.json") : null));
+        services.AddScoped<SnapshotContext>();
+        services.AddScoped<ClipboardImageStore>();
+        services.AddSingleton<WindowsClipboardImageReader>();
+        services.AddSingleton<IClipboardImageReader>(sp => sp.GetRequiredService<WindowsClipboardImageReader>());
+        services.AddSingleton<IClipboardTextReader>(sp => sp.GetRequiredService<WindowsClipboardImageReader>());
+        services.AddSingleton<CliDelegations>();
+        services.AddSingleton(new AgentModelDefaults(config));
+        services.AddSingleton(new CliIntegrationCoordinator(config));
+        // Register configuration per agent
+        services.AddScoped(_ =>
+        {
+            var copy = System.Text.Json.JsonSerializer.Deserialize<MandoCodeConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;
+            copy.AllowPersistence = config.AllowPersistence;
+            copy.ModelName = config.DefaultAgentModel;
+            copy.ModelPath = null;
+            return copy;
+        });
+
+        // Register ProjectRootAccessor per agent
+        services.AddScoped(_ => new ProjectRootAccessor(projectRoot));
+
+        // Register SpinnerService per agent
+        services.AddScoped<SpinnerService>();
+
+        // Register UpdateCheckService — background NuGet "newer version available" nag
+        services.AddScoped<UpdateCheckService>();
+
+        // Register OperationDisplayRenderer per agent
+        services.AddScoped<OperationDisplayRenderer>();
+
+        // Register CancelKeyCoordinator — pauses App's background Escape listener
+        // while a Spectre prompt is active so arrow keys aren't silently eaten.
+        services.AddScoped<CancelKeyCoordinator>();
+
+        // Register InstructionPromptCoordinator — bridges DiffApprovalHandler's
+        // "Provide new instructions" path to a VDOM TextInput in App.razor.
+        services.AddScoped<InstructionPromptCoordinator>();
+
+        // Register ApprovalSelectCoordinator — bridges DiffApprovalHandler's approval
+        // menus to a VDOM ApprovalSelect in App.razor, so they no longer run through
+        // Spectre's blocking SelectionPrompt (whose ReadKey races the keyboard pump and
+        // could hang a plan step with the spinner already stopped).
+        services.AddScoped<ApprovalSelectCoordinator>();
+
+        // Register ApprovalPromptGate — serializes all approval prompts so concurrent
+        // tool invocations can't open two blocking Spectre prompts at once.
+        services.AddScoped<ApprovalPromptGate>();
+
+        // Register DiffApprovalHandler per agent
+        services.AddScoped<DiffApprovalHandler>();
+
+        // Register ShellCommandHandler per agent
+        services.AddScoped<ShellCommandHandler>();
+
+        // Register TokenTrackingService per agent
+        services.AddScoped<TokenTrackingService>();
+
+        // Register PlanHandoff per agent — bridges propose_plan tool calls to the UI
+        services.AddScoped<PlanHandoff>();
+
+        // Register SkillLoader per agent — scans user + project skill dirs at startup
+        services.AddScoped(provider =>
+        {
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+            return new SkillLoader(cfg, projectRootAccessor);
+        });
+
+        // MCP lifecycle — manager owns client connections, gate guards first-use approvals.
+        // Manager.StartAllAsync() is invoked from App.razor's initial render so the UI is
+        // ready to surface connection failures inline.
+        services.AddScoped(provider => new McpClientManager(provider.GetRequiredService<MandoCodeConfig>()));
+        services.AddScoped(provider => new McpApprovalGate(provider.GetRequiredService<MandoCodeConfig>()));
+
+        // Keep the terminal palette alive when an individual agent closes.
+        services.AddSingleton<TerminalPaletteService>();
+        services.AddScoped(provider =>
+        {
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
+            var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+            return new TerminalThemeService(cfg, tokenTracker, projectRootAccessor, provider.GetRequiredService<TerminalPaletteService>());
+        });
+
+        // Register AIService per agent
+        services.AddScoped(provider =>
+        {
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            var tokenTracker = provider.GetRequiredService<TokenTrackingService>();
+            var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+            var planHandoff = provider.GetRequiredService<PlanHandoff>();
+            var skillLoader = provider.GetRequiredService<SkillLoader>();
+            var mcpManager = provider.GetRequiredService<McpClientManager>();
+            var mcpGate = provider.GetRequiredService<McpApprovalGate>();
+            var spinner = provider.GetRequiredService<SpinnerService>();
+            return new AIService(projectRootAccessor, cfg, tokenTracker, planHandoff, skillLoader, mcpManager, mcpGate, spinner);
+        });
+
+        // Register TaskPlannerService per agent
+        services.AddScoped(provider =>
+        {
+            var aiService = provider.GetRequiredService<AIService>();
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            return new TaskPlannerService(aiService, cfg);
+        });
+
+        // Plans always run through the workflow runner; TaskPlannerService above remains the
+        // decision heuristic and proposal mapper.
+        services.AddScoped<IPlanStepExecutor>(provider =>
+            new AiServicePlanStepExecutor(provider.GetRequiredService<AIService>()));
+
+        services.AddScoped(provider => new PlanRunnerSelector(
+            provider.GetRequiredService<MandoCodeConfig>(),
+            provider.GetRequiredService<IPlanStepExecutor>(),
+            provider.GetRequiredService<PlanHandoff>(),
+            provider.GetRequiredService<ProjectRootAccessor>(),
+            provider.GetRequiredService<AgentIdentity>().CheckpointId));
+
+        // Register MusicPlayerService per agent
+        services.AddScoped(provider =>
+        {
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            return new MusicPlayerService(cfg);
+        });
+
+        // Register FileAutocompleteProvider per agent
+        services.AddScoped(provider =>
+        {
+            var cfg = provider.GetRequiredService<MandoCodeConfig>();
+            var ignoreDirs = new HashSet<string>(MandoCodeConfig.DefaultIgnoreDirectories);
+            foreach (var dir in cfg.IgnoreDirectories) ignoreDirs.Add(dir);
+            var projectRootAccessor = provider.GetRequiredService<ProjectRootAccessor>();
+            return new FileAutocompleteProvider(projectRootAccessor, ignoreDirs);
+        });
+
+        // Register InputStateMachine per agent (shared between imperative + VDOM input).
+        // Commands are sourced from MandoCode.Models.SlashCommands so that the
+        // state machine and CommandAutocomplete can't drift apart.
+        services.AddScoped(provider =>
+        {
+            var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
+            var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
+            var config = provider.GetRequiredService<MandoCodeConfig>();
+            return new InputStateMachine(commands, fileProvider, command => SlashCommands.IsAvailable(command, config));
+        });
+
+        // Retain rich markdown/tool renderables inside the widget conversation.
+        services.AddScoped<TuiSession>();
+        services.AddScoped<AgentIdentity>();
+        services.AddSingleton<AgentWorkspace>();
+        services.AddSingleton<WorkspaceRegistry>();
+        services.AddSingleton<AgentArchiveStore>();
+        services.AddSingleton<OllamaConnectionRecovery>();
+        services.Insert(0, ServiceDescriptor.Singleton<ITranslationMiddleware, WorkspaceVisibilityTranslator>());
+        services.Insert(1, ServiceDescriptor.Singleton<ITranslationMiddleware>(provider => new TranscriptEntryTranslator(new TuiSession(), provider.GetRequiredService<AgentWorkspace>(), provider.GetRequiredService<WorkspaceRegistry>())));
+
+        // Register AnsiPassthrough translator for VDOM integration
+        services.AddSingleton<ITranslationMiddleware, AnsiPassthroughTranslator>();
+
     }
 
     /// <summary>

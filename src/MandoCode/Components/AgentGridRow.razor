@@ -1,0 +1,25 @@
+@using RazorConsole.Core.Renderables
+
+@if (Workspace.Panes.Any(p => AgentWorkspace.Column(p.Slot) == Row))
+{
+    <Box Height="@ColumnHeight" Width="@RowWidth">
+        <Flex Direction="@(Workspace.Panes.Count == 2 ? FlexDirection.Row : FlexDirection.Column)" FillWidth="true" FillHeight="true">
+            <AgentGridSlot Workspace="Workspace" Slot="@(Row == 0 ? 0 : 1)" PaneWidth="PaneWidth" PaneHeight="SlotHeight" AgentBody="AgentBody" Revision="Revision" />
+            <AgentGridSlot Workspace="Workspace" Slot="@(Row == 0 ? 3 : 2)" PaneWidth="PaneWidth" PaneHeight="SlotHeight" AgentBody="AgentBody" Revision="Revision" />
+        </Flex>
+    </Box>
+}
+
+@code {
+    [Parameter, EditorRequired] public AgentWorkspace Workspace { get; set; } = default!;
+    [Parameter] public int AvailableHeight { get; set; }
+    private int Count => Workspace.Panes.Count(p => AgentWorkspace.Column(p.Slot) == Row);
+    private int ColumnHeight => AvailableHeight;
+    private int SlotHeight => Workspace.Panes.Count == 3 && Count == 1 ? AvailableHeight : PaneHeight;
+    [Parameter] public int Row { get; set; }
+    [Parameter] public int RowWidth { get; set; }
+    [Parameter] public int PaneWidth { get; set; }
+    [Parameter] public int PaneHeight { get; set; }
+    [Parameter] public RenderFragment<AgentPane>? AgentBody { get; set; }
+    [Parameter] public long Revision { get; set; }
+}

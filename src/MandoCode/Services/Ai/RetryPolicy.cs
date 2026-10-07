@@ -75,9 +75,10 @@ public static class RetryPolicy
     /// </summary>
     private static bool IsTransientError(Exception ex)
     {
-        // Context-window rejections are NOT transient — retrying the same oversized prompt
+        // A retired model cannot recover by retrying. Context-window rejections
+        // are also NOT transient — retrying the same oversized prompt
         // just wastes round-trips. Let them propagate so synthetic-summary recovery fires.
-        if (IsContextOverflowError(ex))
+        if (OllamaModelAvailability.IsUnavailable(ex) || IsContextOverflowError(ex))
             return false;
 
         // HTTP connection errors are transient

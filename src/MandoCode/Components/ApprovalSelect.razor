@@ -1,6 +1,7 @@
 @using Microsoft.AspNetCore.Components.Web
 @using Spectre.Console
 @using RazorConsole.Components
+@implements IDisposable
 
 @* Arrow-key selection menu rendered through the VDOM so RazorConsole's keyboard pump
    is the ONLY console reader. Replaces Spectre's SelectionPrompt for approval menus:
@@ -18,7 +19,7 @@
    Palette matches the Spectre prompts this replaces: per-option colors with the
    black-on-deepskyblue1 focus highlight. *@
 
-<div @onkeydown="HandleKeyDown">
+<div @key="_focusKey" data-focusable="@((Pane is null || Pane.Active) ? "true" : "false")" data-input-managed="true" data-focus-order="0" data-focus-key="@_focusKey" @onkeydown="HandleKeyDown">
     <Rows>
         @for (var i = 0; i < Options.Count; i++)
         {
@@ -34,6 +35,7 @@
 </div>
 
 @code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
     /// <summary>A selectable entry: display text plus its palette color.</summary>
     public sealed record Option(string Text, Color Color);
 
@@ -47,6 +49,40 @@
     public enum ScrollKey { PageUp, PageDown, Home, End }
 
     private int _focusedIndex;
+    [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
+    private readonly string _focusKey = "approval-" + Guid.NewGuid().ToString("N");
+    private IReadOnlyList<Option>? _previousOptions;
+    private bool _requestFocus;
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Options, _previousOptions))
+        {
+            _previousOptions = Options;
+            _focusedIndex = Pane?.PresentationState.GetValueOrDefault("approval-selection") is SelectionDraft saved && ReferenceEquals(saved.Options, Options)
+                ? Math.Clamp(saved.Index, 0, Math.Max(0, Options.Count - 1)) : 0;
+            _requestFocus = true;
+        }
+    }
+    private sealed record SelectionDraft(IReadOnlyList<Option> Options, int Index);
+    public void Dispose()
+    {
+        if (Pane is not null) Pane.PresentationState["approval-selection"] = new SelectionDraft(Options, _focusedIndex);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The prompt is removed while approvals are active. Explicitly take focus
+        // from the scrollable conversation, which otherwise receives the arrows.
+        if (Pane is not null) Pane.FocusKey = _focusKey;
+        if ((Pane is null || Pane.Active) && (firstRender || _requestFocus || !Focus.IsFocused(_focusKey)))
+        {
+            await Focus.FocusAsync(_focusKey);
+            // A newly mounted selector may not yet be in the framework's focus
+            // snapshot. Keep retrying until its registered target owns focus.
+            _requestFocus = !Focus.IsFocused(_focusKey);
+        }
+    }
 
     // Accept both naming conventions, mirroring RazorConsole's own Select component:
     // the keyboard pump reports ConsoleKey names ("UpArrow"), web events use "ArrowUp".
@@ -73,6 +109,8 @@
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (Pane is not null && Pane.Workspace.Key(Pane, e)) return;
+        if (Pane is not null && !Pane.Active) return;
         if (AsScrollKey(e.Key) is { } scroll)
         {
             await OnScroll.InvokeAsync(scroll);

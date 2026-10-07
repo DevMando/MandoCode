@@ -39,8 +39,53 @@ public static class ConfigKeySetter
 
     public static SetResult TrySet(MandoCodeConfig config, string key, string value)
     {
+        var result = TrySetCore(config, key, value);
+        if (result.Ok && config.DefaultAgentOptions is not null)
+        {
+            var canonical = key.ToLowerInvariant() switch
+            {
+                "contextwindow" or "numctx" => "contextLength",
+                "responsestreaming" => "streaming",
+                "enablediffapprovals" => "diffApprovals",
+                "autocontinuation" or "enableautocontinuation" => "autoContinue",
+                "maxautocontinuations" => "maxContinuations",
+                "requesttimeout" or "requesttimeoutminutes" => "timeout",
+                "modelresponsetimeoutseconds" or "watchdog" => "modelResponseTimeout",
+                "toolresultbudget" or "toolresultcharbudget" => "toolBudget",
+                "markdownrendertimeout" or "markdownrendertimeoutseconds" => "renderTimeout",
+                "enablewebsearch" => "webSearch",
+                "enablemcp" => "mcp",
+                _ => key
+            };
+            var setting = MandoCode.Services.AgentSettingsDraft.Fields.FirstOrDefault(item => item.Key.Equals(canonical, StringComparison.OrdinalIgnoreCase));
+            if (setting is not null) config.DefaultAgentOptions[setting.Key] = setting.Read(config);
+        }
+        if (result.Ok && key.ToLowerInvariant() is "model" or "modelname") config.DefaultAgentModel = config.GetEffectiveModelName();
+        return result;
+    }
+
+    private static SetResult TrySetCore(MandoCodeConfig config, string key, string value)
+    {
         switch (key.ToLowerInvariant())
         {
+            case "showtips":
+                var tips = value.Trim().ToLowerInvariant();
+                if (tips is not ("on" or "off" or "true" or "false"))
+                    return Fail("Error: showTips must be on or off.");
+                config.ShowTips = tips is "on" or "true";
+                return new(true, $"✓ Tips {(config.ShowTips ? "on" : "off")}");
+            case "dimunfocusedagents":
+                var dim = value.Trim().ToLowerInvariant();
+                if (dim is not ("on" or "off" or "true" or "false"))
+                    return Fail("Error: dimUnfocusedAgents must be on or off.");
+                config.DimUnfocusedAgents = dim is "on" or "true";
+                return new(true, $"✓ Unfocused agent dimming {(config.DimUnfocusedAgents ? "on" : "off")}");
+            case "agentnaming":
+                if (value.Trim().ToLowerInvariant() is not ("names" or "numbers"))
+                    return Fail("Error: agentNaming must be names or numbers.");
+                config.UseAgentNames = value.Trim().Equals("names", StringComparison.OrdinalIgnoreCase);
+                return new(true, $"✓ Agent naming: {(config.UseAgentNames ? "names" : "numbers")} (new agents only; existing names stay unchanged)");
+
             case "endpoint":
             case "ollamaendpoint":
                 config.OllamaEndpoint = value;
@@ -250,6 +295,9 @@ public static class ConfigKeySetter
     /// </summary>
     public static string DescribeKeys(MandoCodeConfig config) =>
         $"""
+        dimUnfocusedAgents   {config.DimUnfocusedAgents}  (on/off; grayscale background agents)
+        showTips             {config.ShowTips}  (on/off; helpful CLI tips)
+        agentNaming          {(config.UseAgentNames ? "names" : "numbers")}  (names = unique Desktop callsigns, default; numbers = Agent 1, Agent 2; new agents only)
         model                {config.GetEffectiveModelName()}
         endpoint             {config.OllamaEndpoint}
         temperature          {config.Temperature}  (0.0-1.0)

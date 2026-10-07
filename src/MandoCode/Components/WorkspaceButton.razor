@@ -1,0 +1,44 @@
+@using Spectre.Console
+@using RazorConsole.Core.Renderables
+@inject WorkspaceRegistry Registry
+
+<div data-focusable="true" data-focus-key="@_key" data-input-managed="true"
+     data-manage-tab="@(Registry.Active.SelectedPane?.ExplorerFocus?.Active == true ? "true" : "false")"
+     @onclick="OnClick" @onkeydown="Key" @onfocus="@(() => _focused = true)" @onfocusout="@(() => _focused = false)"
+     @onmouseenter="@(() => _hovered = true)" @onmouseleave="@(() => _hovered = false)">
+    @if (Parts is not null)
+    {
+        <Flex Direction="FlexDirection.Row">
+            @foreach (var part in Parts)
+            {
+                <Markup Content="@part.Text" Foreground="@(PaneColors.For(Pane, _focused || _hovered || Selected ? Color.Grey93 : part.Color))" Background="@ButtonBackground" />
+            }
+        </Flex>
+    }
+    else
+    {
+    <Markup Content="@Content" Foreground="@(_focused || _hovered || Selected ? Color.Grey93 : Foreground)"
+            Background="@(PaneColors.Muted(Pane) ? MutedBackground : _focused || _hovered ? HoverBackground : Selected ? SelectedBackground : Background)" />
+    }
+</div>
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter] public string Content { get; set; } = "";
+    [Parameter] public IReadOnlyList<ButtonTextPart>? Parts { get; set; }
+    private Color ButtonBackground => PaneColors.Muted(Pane) ? MutedBackground : _focused || _hovered ? HoverBackground : Selected ? SelectedBackground : Background;
+    [Parameter] public Color Foreground { get; set; } = Color.Grey85;
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public Color Background { get; set; } = new(22, 26, 30);
+    [Parameter] public Color MutedBackground { get; set; } = new(30, 30, 30);
+    [Parameter] public Color SelectedBackground { get; set; } = new(50, 80, 57);
+    [Parameter] public Color HoverBackground { get; set; } = new(63, 96, 70);
+    [Parameter] public EventCallback OnClick { get; set; }
+    private readonly string _key = "workspace-button-" + Guid.NewGuid().ToString("N");
+    private bool _focused;
+    private bool _hovered;
+    private async Task Key(KeyboardEventArgs key)
+    {
+        if (key.Key is "Enter" or "Return" or " ") await OnClick.InvokeAsync();
+        else if (Registry.Active.SelectedPane is { } pane) pane.Workspace.Key(pane, key);
+    }
+}

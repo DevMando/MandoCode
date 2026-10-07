@@ -30,6 +30,9 @@ public static class SyntaxHighlighter
         ["bash"] = "bash",
         ["shell"] = "bash",
         ["zsh"] = "bash",
+        ["powershell"] = "powershell",
+        ["pwsh"] = "powershell",
+        ["ps1"] = "powershell",
     };
 
     // ── Keyword sets ────────────────────────────────────────────────
@@ -155,6 +158,7 @@ public static class SyntaxHighlighter
     // because they're not preceded by `word-char + dot`.
     private static readonly Regex NumberLiteral = new(@"\G(?<!\w\.)\b0[xX][0-9a-fA-F_]+[lLuU]*\b|\G(?<!\w\.)\b0[bB][01_]+[lLuU]*\b|\G(?<!\w\.)\b\d[\d_]*\.?[\d_]*(?:[eE][+-]?\d+)?[fFdDmMlLuU]?\b", RegexOptions.Compiled, RegexTimeout);
 
+    private static readonly Regex PowerShellToken = new Regex(@"\G(?:\$[\w:]+|[A-Za-z]+-[A-Za-z][\w-]*|-[A-Za-z][\w-]*)", RegexOptions.None, RegexTimeout);
     // Identifier (word)
     private static readonly Regex Word = new(@"\G[a-zA-Z_]\w*", RegexOptions.Compiled, RegexTimeout);
 
@@ -204,7 +208,7 @@ public static class SyntaxHighlighter
             // 1. Comments (highest priority)
             if (TryMatchComment(code, pos, commentStyle, out match))
             {
-                sb.Append("[dim]");
+                sb.Append("[grey62]");
                 sb.Append(Markup.Escape(match.Value));
                 sb.Append("[/]");
                 pos += match.Length;
@@ -225,13 +229,24 @@ public static class SyntaxHighlighter
             match = NumberLiteral.Match(code, pos);
             if (match.Success && match.Index == pos)
             {
-                sb.Append("[magenta]");
+                sb.Append("[mediumpurple1]");
                 sb.Append(Markup.Escape(match.Value));
                 sb.Append("[/]");
                 pos += match.Length;
                 continue;
             }
 
+            if (lang == "powershell")
+            {
+                match = PowerShellToken.Match(code, pos);
+                if (match.Success && match.Index == pos)
+                {
+                    var color = match.Value.StartsWith('$') ? "mediumpurple1" : match.Value.StartsWith('-') ? "yellow" : "#56b6c2";
+                    sb.Append('[').Append(color).Append(']').Append(Markup.Escape(match.Value)).Append("[/]");
+                    pos += match.Length;
+                    continue;
+                }
+            }
             // 4. Words (keywords, types, or plain identifiers)
             match = Word.Match(code, pos);
             if (match.Success && match.Index == pos)
@@ -320,6 +335,7 @@ public static class SyntaxHighlighter
             "javascript" => (JsKeywords, JsTypes, CommentStyle.SlashAndBlock),
             "typescript" => (JsKeywords, JsTypes, CommentStyle.SlashAndBlock),
             "bash"       => (BashKeywords, BashTypes, CommentStyle.Hash),
+            "powershell" => (BashKeywords, BashTypes, CommentStyle.Hash),
             _            => (new HashSet<string>(), new HashSet<string>(), CommentStyle.SlashAndBlock),
         };
     }

@@ -1,0 +1,36 @@
+@using Spectre.Console
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<Panel Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, new Color(86, 182, 194))" Title="Models">
+    <Rows>
+        @if (Picker.Matches.Count == 0)
+        {
+            <Markup Content="No matching models" Foreground="@PaneColors.For(Pane, Color.Grey)" />
+        }
+        @foreach (var index in VisibleIndices)
+        {
+            <Box FillWidth="true" Height="1">
+                <Markup Content="@((index == Picker.SelectedIndex ? "› " : "  ") + Picker.Matches[index])"
+                        Foreground="@(PaneColors.Muted(Pane) ? Color.Grey62 : index == Picker.SelectedIndex ? Color.Yellow : Color.Grey)" />
+            </Box>
+        }
+    </Rows>
+</Panel>
+
+@code {
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    [Parameter, EditorRequired] public ModelPickerState Picker { get; set; } = default!;
+    [Parameter] public int? AvailableHeight { get; set; }
+    private IEnumerable<int> VisibleIndices
+    {
+        get
+        {
+            var visible = AvailableHeight is { } height
+                ? Math.Max(1, height - 2)
+                : Math.Min(6, Math.Max(1, (Viewport.Height - 6) / 2));
+            var count = Picker.Matches.Count;
+            var start = Math.Clamp(Picker.SelectedIndex - visible + 1, 0, Math.Max(0, count - visible));
+            return Enumerable.Range(start, Math.Min(visible, count - start));
+        }
+    }
+}

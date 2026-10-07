@@ -96,6 +96,59 @@ public class ModelVisionCapabilitiesTests
         Assert.Equal(ModelVisionSupport.Unknown, ai.VisionSupport);
     }
 
+    [Theory]
+    [InlineData("missing:cloud", HttpStatusCode.NotFound, true, false)]
+    [InlineData("retired:cloud", HttpStatusCode.Gone, true, false)]
+    [InlineData("available:cloud", HttpStatusCode.ServiceUnavailable, false, false)]
+    [InlineData("local-model:8b", HttpStatusCode.NotFound, false, true)]
+    public async Task StartupValidation_OffersPickerOnlyForMissingCloudModels(string model, HttpStatusCode status, bool offerPicker, bool suggestPull)
+    {
+        var ai = Create(new MandoCodeConfig { ModelName = model, ModelPath = null });
+        using var client = new HttpClient(new Handler(_ => Task.FromResult(new HttpResponseMessage(status))));
+        var result = await ai.ValidateModelAsync(client);
+        Assert.False(result.IsValid);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Equal(offerPicker, OllamaModelAvailability.OfferStartupPicker(model, result.ErrorMessage));
+        Assert.Equal(suggestPull, result.ErrorMessage!.Contains("ollama pull", StringComparison.Ordinal));
+        if (status == HttpStatusCode.ServiceUnavailable)
+            Assert.DoesNotContain("not found", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ReplacementModelValidation_ClearsUnavailableResult()
+    {
+        var config = new MandoCodeConfig { ModelName = "missing:cloud", ModelPath = null };
+        var ai = Create(config);
+        using var missing = new HttpClient(new Handler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+        Assert.False((await ai.ValidateModelAsync(missing)).IsValid);
+        config.ModelName = "available:cloud";
+        using var available = Client("{\"capabilities\":[\"completion\"]}");
+        var result = await ai.ValidateModelAsync(available);
+        Assert.True(result.IsValid);
+        Assert.Null(result.ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Gone, true)]
+    [InlineData(HttpStatusCode.NotFound, true)]
+    [InlineData(HttpStatusCode.OK, false)]
+    public async Task ModelChoicePreflight_ChecksChosenTag_WithoutChangingConfiguredModel(HttpStatusCode status, bool rejected)
+    {
+        var config = new MandoCodeConfig { ModelName = "previous:cloud" };
+        string? sent = null;
+        using var client = new HttpClient(new Handler(async request =>
+        {
+            Assert.EndsWith("/api/show", request.RequestUri!.AbsolutePath);
+            sent = await request.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(status);
+        }));
+        var error = await OllamaModelAvailability.CheckCandidateAsync(client, "http://localhost:11434", "chosen:cloud");
+        Assert.Contains("chosen:cloud", sent);
+        Assert.Equal(rejected, error is not null);
+        Assert.Equal("previous:cloud", config.ModelName);
+        if (rejected) Assert.True(OllamaModelAvailability.OfferStartupPicker("chosen:cloud", error));
+    }
+
     private static AIService Create(MandoCodeConfig config)
     {
         var root = new ProjectRootAccessor(Path.GetTempPath());

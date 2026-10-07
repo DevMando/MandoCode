@@ -26,6 +26,7 @@ public sealed class OnboardingFlow
 {
     private readonly Action<string> _setStatus;
     private readonly Func<string, string, Func<string, string?>?, string?, Task<string>>? _promptTextVdom;
+    private readonly Func<string[], Task<string?>>? _pickModelVdom;
 
     /// <param name="setStatus">Updates the ambient VDOM status indicator during long ops.</param>
     /// <param name="promptTextVdom">
@@ -36,12 +37,15 @@ public sealed class OnboardingFlow
     /// can hit Enter to accept the default URL or edit it in place). Without this
     /// delegate, falls back to Spectre's TextPrompt for non-VDOM callers.
     /// </param>
+    /// <param name="pickModelVdom">Optional host model picker; null selection pauses setup.</param>
     public OnboardingFlow(
         Action<string> setStatus,
-        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null)
+        Func<string, string, Func<string, string?>?, string?, Task<string>>? promptTextVdom = null,
+        Func<string[], Task<string?>>? pickModelVdom = null)
     {
         _setStatus = setStatus;
         _promptTextVdom = promptTextVdom;
+        _pickModelVdom = pickModelVdom;
     }
 
     public sealed record FlowResult(bool Connected, bool Skipped, string? FinalModel);
@@ -215,6 +219,8 @@ public sealed class OnboardingFlow
         {
             AnsiConsole.MarkupLine($"[yellow]Note: model [white]{Spectre.Console.Markup.Escape(finalModel)}[/] didn't validate via /api/show.[/]");
             AnsiConsole.MarkupLine($"[dim]You may need to run: [deepskyblue1]ollama pull {Spectre.Console.Markup.Escape(finalModel)}[/] and then /retry — or /setup to pick a different model.[/]");
+            config.Save();
+            return new FlowResult(Connected: true, Skipped: true, FinalModel: null);
         }
 
         config.HasCompletedOnboarding = true;
@@ -555,6 +561,13 @@ public sealed class OnboardingFlow
         if (models.Count == 0)
             return await PickWhenEmptyAsync(url, ct);
 
+        // Component hosts share the chat prompt's picker with /model. Spectre's
+        // cursor-driven selector competes with the live terminal render loop.
+        if (_pickModelVdom != null)
+            return await _pickModelVdom(models
+                .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
+                .ThenBy(m => m, StringComparer.OrdinalIgnoreCase).ToArray());
+
         AnsiConsole.Write(new Rule("[rgb(255,200,80)]Pick a model[/]").LeftJustified());
         AnsiConsole.WriteLine();
 
@@ -767,9 +780,9 @@ public sealed class OnboardingFlow
             AnsiConsole.MarkupLine("[green]`ollama signin` finished. Re-checking authentication...[/]");
         }
 
-        // Final check — does the daemon report cloud-tag visibility now?
-        var finalAuth = await OllamaSetupHelper.CheckCloudSignInAsync(url, ct);
-        return finalAuth == OllamaSetupHelper.CloudAuthState.SignedIn;
+        // A successful signin does not require an existing cloud model. The caller
+        // retries the download/inference, which verifies the daemon's authentication.
+        return true;
     }
 
     private static string Truncate(string s, int max)
