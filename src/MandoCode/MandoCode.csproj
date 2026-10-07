@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -15,11 +15,12 @@
     <!-- NuGet metadata -->
     <Version>0.16.0</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
-    <Description>Your AI coding assistant — run locally or in the cloud with Ollama. No API keys required. Just you and your code.</Description>
+    <Description>An AI coding assistant built for the developer workflow: independent agents, workspaces, portable context, and local or cloud models through Ollama.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevMando/MandoCode</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>ai;cli;coding-assistant;ollama;agent-framework;local-llm;dotnet10;dotnet8</PackageTags>
+    <PackageTags>ai;cli;coding-assistant;ollama;agent-framework;razorconsole;multi-agent;local-llm;dotnet10;dotnet8</PackageTags>
+    <PackageReleaseNotes>v0.16.0 introduces a RazorConsole 0.6.0 terminal layout, multiple agents and workspaces, agent collaboration, context snapshots, history, MCP and Skills managers, vision attachments, and HTML transcript export. Full release notes: https://github.com/DevMando/MandoCode/blob/v0.16.0/docs/CHANGELOG.md</PackageReleaseNotes>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>
