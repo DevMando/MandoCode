@@ -1,6 +1,10 @@
 @* data-canvas opts into the widget pipeline's Spectre fallback; our middleware
    supplies the cached rich renderable, including code blocks and tool results. *@
-@if (Entry.UserPrompt is not null)
+@if (Entry.Command is { } command)
+{
+    <CommandPreviewView Preview="command" />
+}
+else if (Entry.UserPrompt is not null)
 {
     <UserPrompt Entry="Entry" />
 }

@@ -171,6 +171,8 @@
  private void SelectSearch() { Select(OptionCount + Array.IndexOf(Actions, "Search")); }
  private void SearchChanged() { _query = _searchBuffer.Text; _row = 0; _rowKey = Rows.FirstOrDefault(); _selected = OptionCount + Array.IndexOf(Actions, "Search"); }
  private async Task<bool> SearchKey(KeyboardEventArgs key) {
+  if (Pane is { Active: false }) return true;
+  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return true;
   if (key.Key == "Tab") { await Cycle(key.ShiftKey); return true; }
   if (key.Key is "ArrowDown" or "Enter" or "Return") { Select(OptionCount > 0 ? 0 : OptionCount + Array.IndexOf(Actions, _kind == 0 ? "Add Server" : "New Skill")); return true; }
   if (key.Key == "Escape") { await OnClose.InvokeAsync(); return true; }
@@ -195,6 +197,8 @@
   _status = "";
  }
  private async Task<bool> InlineKey(KeyboardEventArgs key) {
+  if (Pane is { Active: false }) return true;
+  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return true;
   if (key.Key is "Enter" or "Return") return true;
   if (key.Key is "Tab" or "Escape" or "ArrowUp" or "ArrowDown") { await Key(key); return true; }
   return false;

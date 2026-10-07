@@ -217,6 +217,8 @@
  private void InputChanged() { if (!_create) { _query = _input.Text; _collapsed.Clear(); ResetBrowser(); } }
  private async Task InputSubmitted(string _) { _previewFocused = false; _listFocused = !_create && Matches.Length > 0; await FocusPanel(); }
  private async Task<bool> InputKey(KeyboardEventArgs key) {
+  if (Pane is { Active: false }) return true;
+  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return true;
   // This is an inline field, not an Enter-to-edit/submit prompt.
   if (_create && key.Key == "Enter") return true;
   if (key.Key == "Tab") { await Cycle(key.ShiftKey); return true; }
@@ -226,6 +228,7 @@
  }
  private async Task Key(KeyboardEventArgs key) {
   if (Pane is not null && !Pane.Active) return;
+  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
   if (_busy) { if (key.Key is "Enter" or "Escape") await Cancel(); return; }
   if (key.Key == "Escape") { if (_confirmDelete) await CancelDelete(); else if (_choosingModel) _choosingModel = false; else if (_create) await Back(); else await Close(); return; }
   if (_choosingModel) {

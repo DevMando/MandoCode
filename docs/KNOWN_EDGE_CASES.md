@@ -1,8 +1,8 @@
 # Known Edge Cases & Future Hardening
 
-A living backlog of edge cases, rough corners, and hardening ideas surfaced through
+Historical observations and hardening ideas surfaced through
 dogfooding — things worth looking into in future releases but not blocking the current one.
-Each entry records what was *observed* (so it's reproducible) before what to *do* about it.
+These observations predate the current engine. Reproduce them before treating them as current defects; older API names and model examples describe the original reports.
 
 > Most of these were found while building real projects with MandoCode (local-model testing +
 > a Three.js / Pac-Man → Batman reskin session, 2026-06-18). Real use keeps finding what tests don't.
@@ -41,10 +41,8 @@ assumption in different ways. A broader "tool compatibility" pass may be worth i
 
 ## Agent-loop hardening
 
-### EC-4 — No functional verification step (textual ≠ functional)
-- **Observed:** after a reskin, an exhaustive grep sweep reported *"all mechanics intact"* and the game was still **unplayable** — a pre-existing movement bug (`isNearPerpCenter` computed tile boundaries instead of centers) meant Batman couldn't turn. Only *playing it* caught it.
-- **Cause:** grep/diff verification can confirm *"did I change what I meant to, and nothing else?"* — it is structurally blind to *"does the thing actually work?"* and to pre-existing defects.
-- **Direction:** an optional capstone that **exercises the artifact** (launch it, load the page, run the tests) rather than only grepping for stale terms. The verification lever the model already *improvises* (the grep sweep) is the textual half; the functional half is missing.
+### EC-4 — Functional verification (addressed)
+Implementation plans now include a final test-and-repair phase with recorded check results. See [Task Planner](../src/MandoCode/docs/TaskPlanner.md). This improves verification but does not guarantee a complete browser playthrough or independent verification of every result.
 
 ### EC-5 — Bulk full-file rewrites can introduce subtle semantic breakage
 - **Observed:** during a ~1,300-line full-file rewrite, the model emitted `ctxCtx.createGain()` instead of `ctxRef.createGain()` — valid syntax, undefined identifier, would have broken all audio. It self-caught and fixed it this time.

@@ -98,6 +98,10 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
         if (content is MandoCode.Translators.AnsiPassthroughRenderable ansi) content = AnsiTranscriptText.Parse(ansi.Content);
         lock (_sync) { AddEntry(new(Interlocked.Increment(ref _nextId), content) { ToolOutput = _capturedTools.Value, AgentOutput = _capturedExchange.Value }); Interlocked.Increment(ref _revision); }
     }
+    public void AppendCommand(CommandPreview preview)
+    {
+        lock (_sync) { AddEntry(new(Interlocked.Increment(ref _nextId), preview.Fallback()) { Command = preview, ToolOutput = _capturedTools.Value ?? _toolActivity, AgentOutput = _capturedExchange.Value }); Interlocked.Increment(ref _revision); }
+    }
     public void AppendUserPrompt(string prompt, IEnumerable<string>? agentNames = null)
     {
         lock (_sync)
@@ -211,6 +215,7 @@ public sealed record TuiEntry(long Id, IRenderable Content)
     public AgentExchange? AgentOutput { get; init; }
     public ToolActivity? ToolActivity { get; init; }
     public ToolActivity? ToolOutput { get; init; }
+    public CommandPreview? Command { get; init; }
     public string? UserPrompt { get; init; }
     public bool SpaceAfter { get; init; }
 }

@@ -1625,7 +1625,21 @@
                     continue;
                 }
 
-                if (command is "snapshot-context-create" or "snapshot-context-import") { await CaptureSnapshot(); await ShowSnapshots(command == "snapshot-context-create"); continue; }
+                if (command == "transcript-save" || command.StartsWith("transcript-save ", StringComparison.Ordinal))
+                {
+                    var args = input.Trim()["/transcript-save".Length..].Trim();
+                    try {
+                        var session = Pane?.Session ?? TuiConsole.Current ?? throw new IOException("The conversation is not available to save.");
+                        var path = await TranscriptExport.SaveAsync(session, Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot, Config.GetEffectiveModelName(), args);
+                        AnsiConsole.MarkupLine($"[green]Transcript saved to {Spectre.Console.Markup.Escape(path)}[/]");
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+                        var error = Spectre.Console.Markup.Escape("Couldn't save transcript: " + ex.Message);
+                        AnsiConsole.MarkupLine($"[yellow]{error}[/]");
+                    }
+                    continue;
+                }
+                if (command is "context-snap-create" or "context-snap-import") { await CaptureSnapshot(); await ShowSnapshots(command == "context-snap-create"); continue; }
                 if (command == "agent-settings") { _isProcessing = false; await ToggleSettings(); continue; }
                 if (command == "agent-file-explorer")
                 {
@@ -2336,7 +2350,10 @@
             {
                 try
                 {
-                    var image = ImageFileReference.Read(ProjectRoot.ProjectRoot, filePath);
+                    var clipboard = (Pane?.Services ?? Services).GetService<ClipboardImageStore>();
+                    var image = clipboard?.TryGet(filePath, out var pasted) == true
+                        ? (Bytes: pasted, MediaType: "image/png")
+                        : ImageFileReference.Read(ProjectRoot.ProjectRoot, filePath);
                     if (!AI.TryAttachImage(image.Bytes, image.MediaType, $"Referenced image: {filePath}", out var error))
                         throw new IOException(error);
                     contextBlocks.AppendLine($"Image: {filePath} — attached as image input. Inspect the supplied image directly, rather than reading its binary bytes as text.");
