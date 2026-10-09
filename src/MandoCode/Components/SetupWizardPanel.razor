@@ -98,7 +98,7 @@ else
         try { return await _answer.Task.WaitAsync(_stop.Token); }
         finally { _urlInput = false; _answer = null; }
     }
-    private Task<bool> UrlKey(KeyboardEventArgs key) { if (Pane is { Active: false }) return Task.FromResult(true); if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return Task.FromResult(true); if (key.Key == "Escape") { _answer?.TrySetResult(null); return Task.FromResult(true); } return Task.FromResult(false); }
+    private Task<bool> UrlKey(KeyboardEventArgs key) { if (Pane is { Active: false }) return Task.FromResult(true); if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return Task.FromResult(true); if (key.Key == "Escape") { _answer?.TrySetResult(null); return Task.FromResult(true); } return Task.FromResult(false); }
     private void SubmitUrl(string value)
     {
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) { Status("Connect", "Enter a complete http:// or https:// Ollama URL."); return; }
@@ -119,7 +119,7 @@ else
     private async Task Key(KeyboardEventArgs key)
     {
         if (Pane is not null && !Pane.Active) return;
-  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
+  if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return;
         if (key.Key == "Escape") { var back = Array.IndexOf(_choices, "Back"); if (_stage == "Ready") Select(0); else if (back >= 0) Select(back); else Pause(); }
         else if (key.Key is "ArrowUp" or "ArrowDown" or "Tab") await Cycle(key.Key == "ArrowUp" || key.ShiftKey);
         else if (key.Key == "Enter") { if (_choices.Length > 0) Select(_selected); else Pause(); }

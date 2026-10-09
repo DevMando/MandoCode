@@ -12,6 +12,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class AgentSettingsKeyboardTests
 {
     [Fact]

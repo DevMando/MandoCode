@@ -8,6 +8,7 @@ namespace MandoCode.Tests;
 /// Prior behavior retried overflow errors up to MaxRetryAttempts times before the
 /// recovery catch got to fire, wasting 3 round-trips per real provider rejection.
 /// </summary>
+[Trait("Category", "Unit")]
 public class RetryPolicyTests
 {
     [Theory]

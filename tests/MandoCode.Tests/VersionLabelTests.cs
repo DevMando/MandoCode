@@ -8,6 +8,7 @@ namespace MandoCode.Tests;
 /// unnoticed — the numeric assembly version alone cannot distinguish a prerelease test build from
 /// the release it was cut from.
 /// </summary>
+[Trait("Category", "Unit")]
 public class VersionLabelTests
 {
     [Fact]

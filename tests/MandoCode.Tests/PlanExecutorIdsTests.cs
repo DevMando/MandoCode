@@ -13,6 +13,7 @@ namespace MandoCode.Tests;
 /// These are cheap assertions protecting an expensive mistake: a careless rename in review would
 /// silently orphan every checkpoint in the field.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanExecutorIdsTests
 {
     [Fact]

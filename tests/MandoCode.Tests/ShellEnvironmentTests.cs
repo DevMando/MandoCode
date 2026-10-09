@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// The rules string gets appended to the system prompt, so it must be non-empty
 /// and mention the actual shell/OS the code will run in.
 /// </summary>
+[Trait("Category", "Unit")]
 public class ShellEnvironmentTests
 {
     [Fact]
@@ -26,28 +27,21 @@ public class ShellEnvironmentTests
     }
 
     [Fact]
-    public void WindowsLabel_MentionsCmd()
+    public void CurrentPlatformUsesItsActualShellRules()
     {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
-        Assert.Contains("cmd", ShellEnvironment.Label, System.StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void WindowsRules_WarnAgainstUnixTools()
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var rules = ShellEnvironment.SystemPromptRules;
-        // The rules must explicitly call out that unix tools don't exist on cmd
-        Assert.Contains("cmd.exe", rules);
-        Assert.Contains("head", rules);
-        Assert.Contains("grep", rules);
-    }
-
-    [Fact]
-    public void UnixRules_AllowPosixTools()
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
-        var rules = ShellEnvironment.SystemPromptRules;
-        Assert.Contains("bash", rules);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Assert.Contains("cmd", ShellEnvironment.Label, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("cmd.exe", rules);
+            Assert.Contains("head", rules);
+            Assert.Contains("grep", rules);
+        }
+        else
+        {
+            Assert.Contains("bash", ShellEnvironment.Label);
+            Assert.Contains("bash", rules);
+            Assert.Contains("POSIX", rules);
+        }
     }
 }

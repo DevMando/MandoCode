@@ -18,6 +18,7 @@ namespace MandoCode.Tests;
 /// accumulation now, so these tests cover the heartbeat wrapper and cancellation propagation;
 /// they deliberately don't re-verify the framework's own accumulation behavior.
 /// </summary>
+[Trait("Category", "Unit")]
 public class StreamBufferingTests
 {
     private static AgentResponseUpdate Chunk(string? text) => new(ChatRole.Assistant, text);

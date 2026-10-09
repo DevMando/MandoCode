@@ -10,6 +10,7 @@ namespace MandoCode.Tests;
 /// Completion is decided by the executor's own report plus mechanical signals read off tool
 /// history. No second model participates, so these are the only ways a step can fail.
 /// </summary>
+[Trait("Category", "Integration")]
 public class PlanStepRecoveryTests
 {
     private static TaskPlan Plan() => new() { OriginalRequest = "Build movement", Steps =

@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// than the ~10K output cap instead of editing blind below the truncation horizon —
 /// the root cause of "could not find old_text" thrash loops on large generated files.
 /// </summary>
+[Trait("Category", "Integration")]
 public class FileSystemPluginRangedReadTests : IDisposable
 {
     private readonly string _tempRoot;

@@ -6,6 +6,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class PlanQualityOutcomeTests
 {
     private static TaskStep Quality() => PlanFinalQuality.Ensure(new TaskPlan { Steps =

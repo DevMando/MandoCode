@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public sealed class TerminalEmojiPresentationTests
 {
     [Theory]

@@ -1,0 +1,48 @@
+name: CLI tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.framework }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        framework: [net10.0, net8.0]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Run complete suite
+        shell: pwsh
+        run: |
+          dotnet test tests/MandoCode.Tests/MandoCode.Tests.csproj -c Release -f ${{ matrix.framework }} --results-directory artifacts/tests --logger "trx;LogFileName=full.trx" --blame-hang-timeout 2m --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Repeat component tests
+        shell: pwsh
+        run: ./scripts/verify-component-stability.ps1 -Framework ${{ matrix.framework }} -Iterations 3
+      - name: Preserve test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.framework }}
+          path: artifacts/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14

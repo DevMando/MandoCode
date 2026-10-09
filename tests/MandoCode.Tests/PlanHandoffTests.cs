@@ -8,6 +8,7 @@ namespace MandoCode.Tests;
 /// <summary>
 /// Tests for PlanHandoff — the bridge between AgentFunctionMiddleware and the UI.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanHandoffTests
 {
     [Fact]

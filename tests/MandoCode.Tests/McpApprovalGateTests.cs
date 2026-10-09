@@ -4,6 +4,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class McpApprovalGateTests
 {
     private static (McpApprovalGate gate, int promptCount) BuildGate(

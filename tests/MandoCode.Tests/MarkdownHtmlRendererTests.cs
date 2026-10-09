@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class MarkdownHtmlRendererTests
 {
     private const string Osc8Prefix = "]8;;";

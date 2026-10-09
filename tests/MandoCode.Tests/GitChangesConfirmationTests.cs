@@ -6,6 +6,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public sealed class GitChangesConfirmationTests
 {
     [Fact]

@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// 4k-window daemon burned 1.3k thinking tokens against a 32k response budget and
 /// produced no visible answer.
 /// </summary>
+[Trait("Category", "Unit")]
 public class LengthCutoffNoticeTests
 {
     [Theory]

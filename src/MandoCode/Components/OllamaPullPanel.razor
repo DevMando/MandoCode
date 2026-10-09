@@ -6,8 +6,22 @@
 <Box FillWidth="true" FillHeight="true" Border="BoxBorder.Rounded" Title="🦙 Ollama Models" BorderColor="@PaneColors.For(Pane, Color.Purple)">
  <Flex Direction="FlexDirection.Column" FillWidth="true" FillHeight="true">
   @if (_tags is null) {
-   <Panel Title="Search models by name" Border="BoxBorder.Rounded" BorderColor="@PaneColors.For(Pane, _searchFocused ? Color.DeepSkyBlue1 : Color.Grey50)" Expand="true">
-    <div data-focusable="false" @onclick="FocusSearch"><TextArea Buffer="@_search" Editable="@(!_busy)" Width="@Math.Max(1, Width - 8)" Height="1" WordWrap="false" Hook="@_searchKey" OnPreviewKey="SearchKey" OnChanged="SearchChanged" OnSubmit="SearchSubmitted" CharacterStyle="@(_ => new Style(PaneColors.For(Pane, Color.Grey85)))" /></div>
+   <Panel
+       Title="Search models by name"
+       Border="BoxBorder.Rounded"
+       BorderColor="@PaneColors.For(Pane, _searchFocused ? Color.DeepSkyBlue1 : Color.Grey50)"
+       Expand="true">
+    <div data-focusable="false" @onclick="FocusSearch"><TextArea
+        Buffer="@_search"
+        Editable="@(!_busy)"
+        Width="@Math.Max(1, Width - 8)"
+        Height="1"
+        WordWrap="false"
+        Hook="@_searchKey"
+        OnPreviewKey="SearchKey"
+        OnChanged="SearchChanged"
+        OnSubmit="SearchSubmitted"
+        CharacterStyle="@(_ => new Style(PaneColors.For(Pane, Color.Grey85)))" /></div>
    </Panel>
    <Flex Direction="FlexDirection.Row">
     @foreach (var sort in Controls) { var choice = sort;
@@ -17,7 +31,9 @@
   }
   <div @key="_focusKey" data-focusable="@(Pane is null || Pane.Active)" data-input-managed="true" data-manage-tab="true" @onkeydown="Key">
    <Rows>
-    <Markup Content="@Escape(_tags is null ? $"{Matches.Length} models · {_sort}" : "Choose a tag · Enter starts the download")" Foreground="@PaneColors.For(Pane, Color.Grey85)" />
+    <Markup
+        Content="@Escape(_tags is null ? $"{Matches.Length} models · {_sort}" : "Choose a tag · Enter starts the download")"
+        Foreground="@PaneColors.For(Pane, Color.Grey85)" />
     @if (_busy) {
      <Markup Content="@($"{Frames[_frame % Frames.Length]} Working")" Foreground="@PaneColors.For(Pane, Color.Purple)" />
     }
@@ -33,7 +49,9 @@
     @if (_busy) {
      <div data-focusable="false" @onclick="CancelOperation"><Markup Content="> Cancel (Enter / Esc)" Foreground="Color.Black" Background="Color.DeepSkyBlue1" /></div>
     } else {
-     <Markup Content="@Escape(_tags is null ? "↑/↓ select · Enter tags · Tab search/sort/list · ←/→ sort · Enter apply · Ctrl+P pull name · Ctrl+R refresh · Esc close" : "↑/↓ select · Enter pull · Esc back")" Foreground="@PaneColors.For(Pane, Color.Grey62)" />
+     <Markup
+         Content="@Escape(_tags is null ? "↑/↓ select · Enter tags · Tab search/sort/list · ←/→ sort · Enter apply · Ctrl+P pull name · Ctrl+R refresh · Esc close" : "↑/↓ select · Enter pull · Esc back")"
+         Foreground="@PaneColors.For(Pane, Color.Grey62)" />
     }
    </Rows>
   </div>
@@ -118,7 +136,7 @@
  private Task SearchSubmitted(string _) => FocusList();
  private async Task<bool> SearchKey(KeyboardEventArgs key) {
   if (Pane is not null && !Pane.Active) return true;
-  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return true;
+  if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return true;
   if (_busy) { if (key.Key is "Escape" or "Enter") CancelOperation(); return true; }
   if (key.Key == "Tab") { await Cycle(key.ShiftKey); return true; }
   if (key.Key == "ArrowDown") { await FocusSort(); return true; }
@@ -171,7 +189,7 @@
  }
  private async Task Key(KeyboardEventArgs key) {
   if (Pane is not null && !Pane.Active) return;
-  if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
+  if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return;
   if (key.Key == "Escape") { if (_busy) CancelOperation(); else if (_tags is not null) { _tags = null; _selected = 0; } else await OnClose.InvokeAsync(); return; }
   if (_busy) { if (key.Key == "Enter") CancelOperation(); return; }
   if (_sortFocused) {

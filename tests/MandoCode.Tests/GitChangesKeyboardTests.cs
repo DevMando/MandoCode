@@ -12,6 +12,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public sealed class GitChangesKeyboardTests
 {
     [Fact]
@@ -114,6 +115,12 @@ public sealed class GitChangesKeyboardTests
                 await renderer.RenderComponentAsync<Host>(ParameterView.FromDictionary(new Dictionary<string, object?> { [nameof(Host.Root)] = directory, [nameof(Host.Capture)] = (Action<AgentGitChanges>)(value => panel = value) }));
                 var type = typeof(AgentGitChanges); var flags = BindingFlags.Instance | BindingFlags.NonPublic;
                 async Task Key(string key) => await (Task)type.GetMethod("Key", flags)!.Invoke(panel, [new KeyboardEventArgs { Key = key }])!;
+                var feedbackElapsed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                panel.FeedbackDelay = (duration, token) =>
+                {
+                    Assert.Equal(TimeSpan.FromSeconds(2), duration);
+                    return feedbackElapsed.Task.WaitAsync(token);
+                };
                 await Key("ArrowDown"); await Key("Enter");
                 Assert.NotNull(type.GetField("_file", flags)!.GetValue(panel));
                 Assert.Equal(0, type.GetField("_toolbarIndex", flags)!.GetValue(panel));
@@ -123,7 +130,8 @@ public sealed class GitChangesKeyboardTests
                 await refreshing;
                 Assert.False((bool)type.GetField("_refreshing", flags)!.GetValue(panel)!);
                 Assert.Equal("File refreshed", type.GetField("_refreshMessage", flags)!.GetValue(panel));
-                await Task.Delay(2200);
+                feedbackElapsed.SetResult();
+                await panel.FeedbackCompletion.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal("", type.GetField("_refreshMessage", flags)!.GetValue(panel));
             });
         }

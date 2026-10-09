@@ -15,6 +15,7 @@ using RazorConsole.Core.Rendering;
 namespace MandoCode.Tests;
 
 [Collection("TUI console routing")]
+[Trait("Category", "Component")]
 public sealed class CliAgentMentionTests
 {
     private static ServiceProvider Services()

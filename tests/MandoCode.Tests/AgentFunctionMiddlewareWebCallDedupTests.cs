@@ -7,6 +7,7 @@ namespace MandoCode.Tests;
 /// <summary>
 /// MAF-side sibling of WebCallDedupCircuitTests (feat/agent-framework-migration, Phase 6).
 /// </summary>
+[Trait("Category", "Unit")]
 public class AgentFunctionMiddlewareWebCallDedupTests
 {
     private static (AgentFunctionMiddleware Middleware, Microsoft.Extensions.AI.AIFunction Fn, List<string> Calls) BuildSearch(

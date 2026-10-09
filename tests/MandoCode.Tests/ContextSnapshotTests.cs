@@ -8,6 +8,7 @@ using OllamaSharp;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class ContextSnapshotTests
 {
     private static ContextSnapshot Snapshot(string name = "Feature work") => new(Guid.NewGuid(), DateTimeOffset.UtcNow,

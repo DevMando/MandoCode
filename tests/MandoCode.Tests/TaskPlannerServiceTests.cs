@@ -10,6 +10,7 @@ namespace MandoCode.Tests;
 ///  - RequiresPlanning scores task shape while excluding questions and narrow work.
 ///  - FromProposals materialises typed tool-call args into TaskSteps (no text parsing).
 /// </summary>
+[Trait("Category", "Unit")]
 public class TaskPlannerServiceTests
 {
     // RequiresPlanning does not touch _aiService, so null is safe here.
@@ -113,6 +114,7 @@ public class TaskPlannerServiceTests
     // ──────────────────────────────────────────────
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_NumberedList_ReturnsTrue()
     {
         var planner = MakePlanner();
@@ -122,6 +124,7 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_TwoNumberedItems_ReturnsFalse()
     {
         // Only 2 items: defer to the model rather than short-circuit.
@@ -132,6 +135,7 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_LongQuestion_ReturnsFalse()
     {
         var planner = MakePlanner();
@@ -141,6 +145,7 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_ShortImperative_ReturnsFalse()
     {
         // The old heuristic would have fired here; the trimmed one must not.
@@ -154,6 +159,7 @@ public class TaskPlannerServiceTests
     [InlineData("Build a complete game with saving, menus, and tests")]
     [InlineData("Refactor authentication across the API and Desktop app")]
     [InlineData("Create the service, add tests, write documentation, and configure deployment")]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_BroadMultiDeliverableWork_ReturnsTrue(string request)
     {
         var decision = MakePlanner().GetPlanningDecision(request);
@@ -170,14 +176,17 @@ public class TaskPlannerServiceTests
     [InlineData("Rename this method")]
     [InlineData("Explain how authentication works across the API and Desktop")]
     [InlineData("What should I know?\n1. Architecture?\n2. Testing?\n3. Deployment?")]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_ReadOnlyOrNarrowWork_ReturnsFalse(string request)
         => Assert.False(MakePlanner().RequiresPlanning(request));
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_ExplicitPlanRequest_ReturnsTrue()
         => Assert.True(MakePlanner().RequiresPlanning("Break this down into steps before making changes"));
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_Question_ReturnsFalse()
     {
         var planner = MakePlanner();
@@ -186,6 +195,7 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_Empty_ReturnsFalse()
     {
         var planner = MakePlanner();
@@ -195,6 +205,7 @@ public class TaskPlannerServiceTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void RequiresPlanning_Disabled_ReturnsFalse()
     {
         var planner = MakePlanner(enabled: false);

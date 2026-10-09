@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// highlighting an execute_command command panel (synchronous work after the spinner
 /// stops, with no watchdog to recover it). A per-match timeout + length guard now bound it.
 /// </summary>
+[Trait("Category", "Unit")]
 public class SyntaxHighlighterTests
 {
     [Fact]

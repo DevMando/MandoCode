@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// through AgentFunctionMiddleware.InterceptAsync directly instead of a real Kernel, via
 /// AgentMiddlewareTestHelpers.
 /// </summary>
+[Trait("Category", "Integration")]
 public class AgentFunctionMiddlewareLifecycleTests
 {
     private static AIFunction Fn(Delegate method, string name) =>

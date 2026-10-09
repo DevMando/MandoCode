@@ -12,6 +12,7 @@ namespace MandoCode.Tests;
 /// makes the setting real by stamping options.num_ctx onto every /api/chat request,
 /// which outranks both the env var and the daemon default.
 /// </summary>
+[Trait("Category", "Unit")]
 public class NumCtxHttpHandlerTests
 {
     /// <summary>Inner handler that captures the outgoing body instead of hitting the network.</summary>

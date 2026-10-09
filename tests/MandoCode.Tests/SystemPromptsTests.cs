@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// knowledge-cutoff disclaimer and refused to call the search_web tool it had — and the
 /// static prompt advertised search even in sessions where the plugin wasn't registered.
 /// </summary>
+[Trait("Category", "Unit")]
 public class SystemPromptsTests
 {
     [Fact]

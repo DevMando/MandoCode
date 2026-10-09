@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class PreviewToolPolicyTests
 {
     [Theory]

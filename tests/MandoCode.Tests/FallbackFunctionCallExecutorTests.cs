@@ -10,6 +10,7 @@ namespace MandoCode.Tests;
 /// name normalization, and call-JSON removal from the surrounding prose. These are
 /// pure functions — no tool list or network needed.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FallbackFunctionCallExecutorTests
 {
     // ---- ExtractFunctionCallsFromText ----

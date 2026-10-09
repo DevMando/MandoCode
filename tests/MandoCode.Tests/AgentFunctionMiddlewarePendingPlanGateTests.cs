@@ -18,6 +18,7 @@ namespace MandoCode.Tests;
 /// it just queued. The incident these tests were written for is still the reason they exist, which
 /// is why they were retargeted rather than deleted.
 /// </summary>
+[Trait("Category", "Unit")]
 public class AgentFunctionMiddlewarePendingPlanGateTests
 {
     private static AIFunction Fn(Delegate method, string name) =>

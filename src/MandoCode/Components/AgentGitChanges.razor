@@ -73,6 +73,8 @@
  private string _error = "", _root = "";
  private bool _refreshing;
  private string _refreshMessage = "";
+ internal Func<TimeSpan, CancellationToken, Task> FeedbackDelay { get; set; } = Task.Delay;
+ internal Task FeedbackCompletion { get; private set; } = Task.CompletedTask;
  private int _refreshVersion;
  private int VisibleRows => Math.Max(1, Height - 7);
  private bool CanDiscard => _file is not null && _file.OriginalPath is null && _file.Label != "Added" && Pane?.IsBusy?.Invoke() != true;
@@ -182,7 +184,7 @@
   {
    _files = await GitChangesService.ReadAsync(Root, _shutdown.Token);
    if (_file is not null) { _file = _files.FirstOrDefault(x => x.Path == _file.Path); if (_file is not null) _preview = await GitChangesService.PreviewAsync(Root, _file, _shutdown.Token); else await Back(); }
-   if (showFeedback) { _refreshMessage = refreshingFile ? "File refreshed" : "Changes refreshed"; _ = ClearRefreshMessage(version); }
+   if (showFeedback) { _refreshMessage = refreshingFile ? "File refreshed" : "Changes refreshed"; FeedbackCompletion = ClearRefreshMessage(version); }
   }
   catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or OperationCanceledException) { _error = ex is OperationCanceledException ? "Git query timed out." : ex.Message; }
   finally { _loading = false; _refreshing = false; Reveal(); }
@@ -191,7 +193,7 @@
  {
   try
   {
-   await Task.Delay(TimeSpan.FromSeconds(2), _shutdown.Token);
+   await FeedbackDelay(TimeSpan.FromSeconds(2), _shutdown.Token);
    await InvokeAsync(() => { if (version == _refreshVersion) { _refreshMessage = ""; StateHasChanged(); } });
   }
   catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }

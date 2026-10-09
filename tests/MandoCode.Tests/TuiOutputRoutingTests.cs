@@ -10,6 +10,7 @@ namespace MandoCode.Tests;
 public class TuiConsoleRoutingCollection { }
 
 [Collection("TUI console routing")]
+[Trait("Category", "Component")]
 public class TuiOutputRoutingTests
 {
     [Fact]
