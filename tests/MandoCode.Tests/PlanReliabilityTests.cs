@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public class PlanReliabilityTests
 {
     private static TaskPlan Plan() => new() { OriginalRequest = "goal", Steps =

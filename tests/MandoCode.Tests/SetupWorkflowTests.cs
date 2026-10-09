@@ -4,6 +4,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public sealed class SetupWorkflowTests
 {
     private static MandoCodeConfig Config() => new() { AllowPersistence = false, ModelName = "existing:local", ContextLength = 8192 };

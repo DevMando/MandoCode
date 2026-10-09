@@ -15,6 +15,7 @@ namespace MandoCode.Tests;
 /// Asserted against Workflow.ReflectExecutors()/ReflectEdges() rather than ToString(), which only
 /// returns the type name and would make every assertion here pass vacuously.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanWorkflowTopologyTests
 {
     private static TaskPlan PlanWith(int stepCount) => new()
@@ -47,19 +48,10 @@ public class PlanWorkflowTopologyTests
         var wf = Build(stepCount);
         var nodes = wf.ReflectExecutors().Keys.OrderBy(k => k, StringComparer.Ordinal);
         var edges = wf.ReflectEdges()
-            .SelectMany(kv => kv.Value.Select(e => $"{kv.Key}->{e}"))
+            .SelectMany(kv => kv.Value.SelectMany(e => e.Connection.SinkIds.Select(sink => $"{kv.Key}->{sink}")))
             .OrderBy(s => s, StringComparer.Ordinal);
 
         return $"start={wf.StartExecutorId}\nnodes={string.Join(",", nodes)}\nedges={string.Join(",", edges)}";
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    [InlineData(12)]
-    public void GraphBuilds_ForAnyStepCount(int stepCount)
-    {
-        Assert.NotEmpty(Build(stepCount).ReflectExecutors());
     }
 
     [Fact]
@@ -76,8 +68,7 @@ public class PlanWorkflowTopologyTests
     {
         // Deliberately hard-coded. This SHOULD fail when the graph gains a node — that failure is
         // the reminder to bump PlanExecutorIds.TopologyVersion and decide what happens to any
-        // checkpoints already written. (Checkpointing is not live yet, so growing the graph before
-        // then costs nothing.)
+        // checkpoints already written.
         string[] expected =
         [
             PlanExecutorIds.Finalizer,
@@ -107,8 +98,7 @@ public class PlanWorkflowTopologyTests
         // Two ways out of triage: back to the step runner for the next step, or on to the finalizer.
         Assert.Equal(2, edges[PlanExecutorIds.Triage].Count);
 
-        var shape = Shape(2);
-        Assert.Contains(PlanExecutorIds.StepRunner, shape, StringComparison.Ordinal);
-        Assert.Contains(PlanExecutorIds.Triage, shape, StringComparison.Ordinal);
+        var targets = edges[PlanExecutorIds.Triage].SelectMany(edge => edge.Connection.SinkIds).Order(StringComparer.Ordinal);
+        Assert.Equal(new[] { PlanExecutorIds.Finalizer, PlanExecutorIds.StepRunner }.Order(StringComparer.Ordinal), targets);
     }
 }

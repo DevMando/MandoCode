@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// else. Observed live: a step sat at "Working…" for four minutes while the model narrated
 /// throughout, which read as a hang.
 /// </summary>
+[Trait("Category", "Unit")]
 public class StepNarrationTests
 {
     [Fact]

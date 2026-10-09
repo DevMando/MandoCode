@@ -4,6 +4,26 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Improve readability of integration menu navigation, delegation completion, component wiring, and Razor parameter lists; retain intent-focused comments and update outdated engine explanations.
+
+- Add targeted mutation probes, repeated component checks, and a Windows/Linux test workflow for both supported .NET targets; document a terminal smoke checklist.
+
+- Organize tests by unit, component, integration, and compatibility tiers; add a shared widget renderer harness and replace fixed waits in explorer and refresh-feedback tests.
+- Strengthen workflow edge and registered-tool assertions, consolidate duplicate graph checks, and replace platform tests that could pass without asserting behavior.
+
+- Separate CLI command handling, planning, attachments, integrations, request processing, lifecycle, and terminal effects into focused component code files.
+- Centralize panel visibility and global agent shortcut routing; retain independent agent execution and nested menu state.
+- Extract Ollama model inspection, pending image delivery, history serialization, and response-limit notices from the shared AI service.
+- Separate component activity updates from direct terminal spinner rendering while preserving the public engine API used by Desktop.
+
+### Fixed
+
+- Complete pending menu/input requests when an agent closes, including model selection, directory selection, and plan approvals.
+- Release callbacks only when the disposing component still owns them, preventing an old component from clearing callbacks registered by its replacement.
+- Record diagnostic warnings for failed history serialization and context recap persistence.
+
 ## [0.16.0] - 2026-10-06
 
 **A new way to work with agents in the terminal.** Built on RazorConsole 0.6.0, this release introduces multiple workspaces, independent agents, agent collaboration, portable context snapshots, and saved-agent history. A rebuilt interface keeps your conversation readable and your prompt within reach.

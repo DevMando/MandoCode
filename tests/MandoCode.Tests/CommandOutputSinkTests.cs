@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// observational: it must see the full lifecycle, it must see output the model's capped copy
 /// drops, and it must never be able to affect the command it is watching.
 /// </summary>
+[Trait("Category", "Integration")]
 public class CommandOutputSinkTests : IDisposable
 {
     private readonly string _tempRoot;

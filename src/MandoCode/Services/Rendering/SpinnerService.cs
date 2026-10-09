@@ -1,271 +1,40 @@
-using MandoCode.Models;
-
 namespace MandoCode.Services;
 
-/// <summary>
-/// Owns spinner animation lifecycle and taskbar progress.
-/// Thread-safe start/stop for the animated spinner with optional activity display.
-/// </summary>
+/// <summary>Compatible entry point for agent activity. Backend selection belongs here,
+/// keeping cursor-driven terminal animation outside the component presentation path.</summary>
 public class SpinnerService
 {
-    private CancellationTokenSource? _spinnerCts;
-    private Task? _spinnerTask;
-    private readonly object _spinnerLock = new();
-
-    // Live-updatable activity line shown above the spinner. Mutable so callers
-    // (e.g. ExecuteCommand streaming subprocess output) can refresh it mid-spin.
-    private volatile string? _liveActivity;
-
-    // Tracks whether UpdateActivity fired during this spin. If it did, we preserve
-    // the final activity line in scrollback on Stop instead of clearing it — the
-    // streamed updates are signal worth keeping; the static initial activity isn't.
-    private volatile bool _activityWasUpdated;
-
-    // The reply streaming right now, shown as its last few lines between the activity line and the
-    // spinner. Read by the animation loop each frame, which is what throttles the redraws.
-    private volatile string? _livePreview;
-
-    /// <summary>How many lines of a streaming reply the preview shows.</summary>
     public const int PreviewLines = 5;
+    private readonly TerminalActivityPresentation _terminal = new();
 
-    // How often to rotate the random "fun" message so long waits don't feel frozen.
-    private static readonly TimeSpan MessageRotationInterval = TimeSpan.FromSeconds(15);
+    private IActivityPresentation Presentation => TuiConsole.Current is { } session
+        ? new WidgetActivityPresentation(session)
+        : _terminal;
 
-    public void Start(string? activity = null, string? message = null)
-    {
-        if (TuiConsole.Current is { } session) { session.SetRunning(true, activity, message); return; }
-        Stop();
-        SetTaskbarIndeterminate();
-        var cts = new CancellationTokenSource();
-        var token = cts.Token;
-        var fixedMessage = message is not null;
-        message ??= LoadingMessages.GetRandom();
-        var spinner = LoadingMessages.GetRandomSpinner();
-        var frames = spinner.Frames.ToArray();
-        var interval = (int)spinner.Interval.TotalMilliseconds;
-        var hasActivity = !string.IsNullOrEmpty(activity);
-        _liveActivity = activity;
-        _activityWasUpdated = false;
-        var startTime = DateTime.UtcNow;
-        var lastMessageRotation = startTime;
+    public void Start(string? activity = null, string? message = null) => Presentation.Start(activity, message);
+    public void UpdateActivity(string? activity) => Presentation.UpdateActivity(activity);
+    public void UpdatePreview(string? text) => Presentation.UpdatePreview(text);
+    public void Stop() => Presentation.Stop();
 
-        // Reserve the activity line above the spinner. Live updates rewrite this
-        // same line via cursor-up so the streamed output doesn't scroll the screen.
-        if (hasActivity)
-        {
-            Console.Write($"[2m  {activity}[0m\n");
-        }
+    public static void SetTaskbarProgress(int percent) => TerminalActivityPresentation.SetTaskbarProgress(percent);
+    public static void SetTaskbarIndeterminate() => TerminalActivityPresentation.SetTaskbarIndeterminate();
+    public static void SetTaskbarError(int percent = 100) => TerminalActivityPresentation.SetTaskbarError(percent);
+    public static void SetTaskbarWarning(int percent = 100) => TerminalActivityPresentation.SetTaskbarWarning(percent);
+    public static void ClearTaskbarProgress() => TerminalActivityPresentation.ClearTaskbarProgress();
+}
 
-        lock (_spinnerLock)
-        {
-            _spinnerCts = cts;
-            _spinnerTask = Task.Run(async () =>
-            {
-                var i = 0;
-                var lastRenderedActivity = activity;
-                var activityLineReserved = hasActivity;
-                // The preview sits directly above the spinner. Its region only grows while spinning
-                // (a shrinking reply is padded with blank rows) so every redraw moves the same rows.
-                string? lastRenderedPreview = null;
-                var drawnPreview = 0;
-                try
-                {
-                    while (!token.IsCancellationRequested)
-                    {
-                        var now = DateTime.UtcNow;
+internal interface IActivityPresentation
+{
+    void Start(string? activity, string? message);
+    void UpdateActivity(string? activity);
+    void UpdatePreview(string? text);
+    void Stop();
+}
 
-                        // Rotate the random message periodically so long waits feel alive.
-                        if (!fixedMessage && now - lastMessageRotation >= MessageRotationInterval)
-                        {
-                            message = LoadingMessages.GetRandom();
-                            lastMessageRotation = now;
-                        }
-
-                        // Pick up any live activity update. If the activity line
-                        // wasn't reserved at Start, we can't add one mid-flight
-                        // without scrolling — silently ignore in that case.
-                        var currentActivity = _liveActivity;
-                        if (activityLineReserved && currentActivity != lastRenderedActivity)
-                        {
-                            // Move up to the activity line, clear it, rewrite, drop back down.
-                            // [A = up one, \r = col 0, [2K = clear line, [B = down one.
-                            var redraw = currentActivity ?? string.Empty;
-                            var up = 1 + drawnPreview;
-                            Console.Write($"\r[2K[{up}A\r[2K  [2m{redraw}[0m[{up}B\r");
-                            lastRenderedActivity = currentActivity;
-                        }
-
-                        var currentPreview = _livePreview;
-                        if (!ReferenceEquals(currentPreview, lastRenderedPreview))
-                        {
-                            drawnPreview = DrawPreview(currentPreview, drawnPreview);
-                            lastRenderedPreview = currentPreview;
-                        }
-
-                        var frame = frames[i++ % frames.Length];
-                        var elapsed = FormatElapsed(now - startTime);
-
-                        // [2K clears the whole line so variable-length elapsed text
-                        // (9s -> 10s, 59s -> 1m 0s) doesn't leave stale chars behind.
-                        Console.Write(
-                            $"\r[2K  " +
-                            $"[38;2;200;100;255m{frame}[0m " +
-                            $"[38;2;180;140;255m{message}[0m " +
-                            $"[2m· {elapsed}[0m");
-
-                        await Task.Delay(interval, token);
-                    }
-                }
-                catch (OperationCanceledException) { }
-                finally
-                {
-                    // Clear the spinner line - animation is ephemeral, never preserved.
-                    Console.Write($"\r[2K");
-                    for (var row = 0; row < drawnPreview; row++)
-                        Console.Write($"[A[2K");
-                    if (activityLineReserved)
-                    {
-                        // Move up to the activity line and clear it.
-                        Console.Write($"[A[2K");
-                        // If UpdateActivity ever fired, the streamed updates are
-                        // worth keeping in scrollback (e.g. "$ dotnet run -> ...").
-                        // Re-print as a normal line - \n drops cursor back onto
-                        // the (already-cleared) spinner line, ready for next output.
-                        if (_activityWasUpdated && !string.IsNullOrEmpty(lastRenderedActivity))
-                        {
-                            Console.WriteLine($"  [2m{lastRenderedActivity}[0m");
-                        }
-                    }
-                    Console.Write("\r");
-                }
-            });
-        }
-    }
-
-    /// <summary>
-    /// Updates the activity text shown above the spinner. Safe to call from any thread.
-    /// No-op if the spinner isn't running or wasn't started with an activity (the line
-    /// has to be reserved at Start time — we won't insert a new line mid-spin because
-    /// that would scroll the terminal).
-    /// </summary>
-    public void UpdateActivity(string? activity)
-    {
-        TuiConsole.Current?.SetActivity(activity);
-        _liveActivity = activity;
-    }
-
-    /// <summary>
-    /// Shows the reply streaming right now as its last <see cref="PreviewLines"/> lines above the
-    /// spinner; null clears it. Safe to call from any thread and as often as chunks arrive: the
-    /// spinner picks up only the newest text on its next frame. The preview is never kept — it is
-    /// cleared with the spinner, and the finished reply prints as rendered markdown instead.
-    /// </summary>
-    public void UpdatePreview(string? text)
-    {
-        _livePreview = text;
-        TuiConsole.Current?.SetPreview(text);
-    }
-
-    /// <summary>
-    /// Redraws the preview rows above the spinner line, with the cursor starting and ending at the
-    /// start of the spinner line. Returns the region's new height.
-    /// </summary>
-    private static int DrawPreview(string? text, int drawn)
-    {
-        // Two cells of indent, and a spare column so a full-width row can't wrap on terminals that
-        // wrap at the last column.
-        var width = Math.Max(20, SafeWindowWidth() - 3);
-        var lines = ReplyPreview.Tail(text, width, PreviewLines);
-        var height = Math.Max(drawn, lines.Count);
-        if (height == 0) return 0;
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append($"\r[2K");
-        if (drawn > 0) sb.Append($"[{drawn}A");
-        var blank = height - lines.Count;
-        for (var row = 0; row < height; row++)
-        {
-            sb.Append($"\r[2K");
-            if (row >= blank) sb.Append($"  [2m{lines[row - blank]}[0m");
-            sb.Append('\n');
-        }
-        Console.Write(sb.ToString());
-        return height;
-    }
-
-    private static int SafeWindowWidth()
-    {
-        try { return Console.WindowWidth > 0 ? Console.WindowWidth : 80; }
-        catch { return 80; }
-    }
-
-    /// <summary>
-    /// Compact elapsed-time formatter: "3s", "45s", "1m 20s", "12m 5s".
-    /// </summary>
-    private static string FormatElapsed(TimeSpan span)
-    {
-        if (span.TotalMinutes >= 1)
-            return $"{(int)span.TotalMinutes}m {span.Seconds}s";
-        return $"{Math.Max(0, (int)span.TotalSeconds)}s";
-    }
-
-    public void Stop()
-    {
-        if (TuiConsole.Current is { } session) { session.SetRunning(false); return; }
-        CancellationTokenSource? cts;
-        Task? task;
-
-        lock (_spinnerLock)
-        {
-            cts = _spinnerCts;
-            task = _spinnerTask;
-            _spinnerCts = null;
-            _spinnerTask = null;
-        }
-
-        if (cts != null)
-        {
-            try
-            {
-                cts.Cancel();
-                // Use non-blocking wait with timeout to avoid thread pool starvation
-                if (task != null)
-                {
-                    try { task.Wait(1000); } catch (AggregateException) { }
-                }
-            }
-            finally
-            {
-                cts.Dispose();
-            }
-        }
-
-        ClearTaskbarProgress();
-    }
-
-    // Taskbar progress (Windows Terminal OSC 9;4)
-    public static void SetTaskbarProgress(int percent)
-    {
-        Console.Write($"]9;4;1;{percent}");
-    }
-
-    public static void SetTaskbarIndeterminate()
-    {
-        Console.Write("]9;4;3");
-    }
-
-    public static void SetTaskbarError(int percent = 100)
-    {
-        Console.Write($"]9;4;2;{percent}");
-    }
-
-    public static void SetTaskbarWarning(int percent = 100)
-    {
-        Console.Write($"]9;4;4;{percent}");
-    }
-
-    public static void ClearTaskbarProgress()
-    {
-        Console.Write("]9;4;0");
-    }
+internal sealed class WidgetActivityPresentation(TuiSession session) : IActivityPresentation
+{
+    public void Start(string? activity, string? message) => session.SetRunning(true, activity, message);
+    public void UpdateActivity(string? activity) => session.SetActivity(activity);
+    public void UpdatePreview(string? text) => session.SetPreview(text);
+    public void Stop() => session.SetRunning(false);
 }

@@ -3,6 +3,7 @@ using MandoCode.Models;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class MandoCodeConfigTests
 {
     [Theory]

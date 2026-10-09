@@ -12,6 +12,7 @@ namespace MandoCode.Tests;
 /// FunctionInvocationFilter (feat/agent-framework-migration final cleanup) — the classifiers
 /// themselves are pure string logic, unaffected by the SK -> Agent Framework cutover.
 /// </summary>
+[Trait("Category", "Unit")]
 public class ShellCommandClassifierTests
 {
     [Theory]

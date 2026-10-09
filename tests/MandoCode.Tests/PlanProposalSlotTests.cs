@@ -13,6 +13,7 @@ namespace MandoCode.Tests;
 /// run also threw OperationCanceledException past the host's catch-all, which reported it a second
 /// time as "Unexpected error: A task was canceled." on top of "Request cancelled."
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanProposalSlotTests
 {
     private static PlanStepProposal[] Steps(params string[] descriptions)

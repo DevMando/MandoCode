@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// version had already drifted: the stall-watchdog error recommended a
 /// `modelResponseTimeout` key the CLI didn't have.
 /// </summary>
+[Trait("Category", "Unit")]
 public class ConfigKeySetterTests
 {
     [Fact]

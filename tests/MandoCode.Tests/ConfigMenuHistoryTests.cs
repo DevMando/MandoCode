@@ -12,6 +12,7 @@ namespace MandoCode.Tests;
 
 #pragma warning disable BL0006
 [Collection("TUI console routing")]
+[Trait("Category", "Component")]
 public class ConfigMenuHistoryTests
 {
     [Theory]

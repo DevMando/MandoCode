@@ -9,6 +9,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class ImageInputDeliveryTests
 {
     private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4];

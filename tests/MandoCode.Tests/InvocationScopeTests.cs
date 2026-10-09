@@ -3,6 +3,7 @@ using MandoCode.Services;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class InvocationScopeTests
 {
     [Fact]

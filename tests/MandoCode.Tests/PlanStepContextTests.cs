@@ -12,6 +12,7 @@ namespace MandoCode.Tests;
 /// user request is now included in every step's context as the authority on
 /// target paths.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanStepContextTests
 {
     private const string SystemPrompt = "You are a helpful coding assistant.";

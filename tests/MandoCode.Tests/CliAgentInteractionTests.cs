@@ -8,6 +8,7 @@ using Xunit;
 namespace MandoCode.Tests;
 
 [Collection("TUI console routing")]
+[Trait("Category", "Component")]
 public sealed class CliAgentInteractionTests
 {
     private static ServiceProvider Services()

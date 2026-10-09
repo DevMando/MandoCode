@@ -18,6 +18,7 @@ namespace MandoCode.Tests;
 /// MULTIPLE calls on the same middleware instance correctly retains earlier successes when a
 /// later step in the same logical turn fails.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PartialTraceAccumulationTests
 {
     private static AIFunction Fn(Delegate method, string name) =>

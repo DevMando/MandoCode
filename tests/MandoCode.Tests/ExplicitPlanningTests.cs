@@ -6,6 +6,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class ExplicitPlanningTests
 {
     private static AIService Create()

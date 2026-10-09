@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// refusal criterion, because the failure mode of resuming a stale or foreign checkpoint is
 /// re-running steps whose write_file already succeeded.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanCheckpointEnvelopeTests
 {
     private static PlanCheckpointEnvelope Make(

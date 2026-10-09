@@ -4,6 +4,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class GitChangesServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "mandocode-git-changes-" + Guid.NewGuid().ToString("N"));

@@ -13,6 +13,7 @@ namespace MandoCode.Tests;
 /// authoritative for WHERE work happens — losing it made every file land in the project root), and
 /// the results of earlier steps (the context the remaining work usually builds on).
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanResumeContextTests
 {
     private static PlanRunState SavedMidPlan() => new()

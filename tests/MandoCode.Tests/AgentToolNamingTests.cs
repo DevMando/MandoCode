@@ -13,12 +13,14 @@ namespace MandoCode.Tests;
 /// reference the snake_case name, without any compile error to catch it. See
 /// feat/agent-framework-migration, Phase 2.
 /// </summary>
+[Trait("Category", "Unit")]
 public class AgentToolNamingTests
 {
     [Description("A method whose real name should never reach the model.")]
     private static string DoNotUseThisName() => "ok";
 
     [Fact]
+    [Trait("Behavior", "DependencyContract")]
     public void NamedTool_style_creation_overrides_the_default_method_derived_name()
     {
         AIFunction function = AIFunctionFactory.Create(
@@ -30,13 +32,20 @@ public class AgentToolNamingTests
     }
 
     [Fact]
-    public void Without_an_explicit_name_AIFunctionFactory_falls_back_to_the_method_name()
+    public void EngineRegistersTheToolNamesReferencedByItsPrompts()
     {
-        // Documents the failure mode NamedTool exists to prevent: omit the override and the
-        // exposed tool name silently becomes the C# method name instead of the snake_case name
-        // every prompt/skill actually references.
-        AIFunction function = AIFunctionFactory.Create(DoNotUseThisName);
-
-        Assert.Equal(nameof(DoNotUseThisName), function.Name);
+        var config = new MandoCode.Models.MandoCodeConfig { AllowPersistence = false };
+        var root = new MandoCode.Services.ProjectRootAccessor(Path.GetTempPath());
+        var ai = new MandoCode.Services.AIService(root, config,
+            new MandoCode.Services.TokenTrackingService(), new MandoCode.Services.PlanHandoff(),
+            new MandoCode.Services.SkillLoader(config, root), new MandoCode.Services.McpClientManager(config),
+            new MandoCode.Services.McpApprovalGate(config), new MandoCode.Services.SpinnerService());
+        var tools = (IEnumerable<AIFunction>)typeof(MandoCode.Services.AIService)
+            .GetField("_agentFunctions", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(ai)!;
+        var names = tools.Select(tool => tool.Name).ToArray();
+        Assert.Contains("list_all_project_files", names);
+        Assert.Contains("read_file_contents", names);
+        Assert.Contains("execute_command", names);
+        Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
     }
 }

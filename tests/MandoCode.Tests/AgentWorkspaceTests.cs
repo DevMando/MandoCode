@@ -18,6 +18,7 @@ using Xunit;
 namespace MandoCode.Tests;
 
 [Collection("TUI console routing")]
+[Trait("Category", "Component")]
 public class AgentWorkspaceTests
 {
     [Theory]
@@ -35,28 +36,21 @@ public class AgentWorkspaceTests
         var workspace = services.GetRequiredService<AgentWorkspace>();
         for (var i = 0; i < count; i++) workspace.Add();
         var survivors = workspace.Panes.Skip(1).ToArray();
-        var rendererType = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
-        var instance = ActivatorUtilities.CreateInstance(services, rendererType,
-            new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
-        await using var renderer = (IAsyncDisposable)instance;
         RenderFragment<AgentPane> body = pane => builder =>
         {
             builder.OpenComponent<MountedTestApp>(0);
             builder.CloseComponent();
         };
-        var mount = rendererType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Single(m => m.Name == "MountComponentAsync" && m.IsGenericMethodDefinition);
-        await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance,
-            new object[] { ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None })!;
-        var dispatcher = (Dispatcher)rendererType.GetProperty("Dispatcher")!.GetValue(instance)!;
+        await using var renderer = await WidgetRendererHarness.MountAsync<AgentWorkspaceView>(services,
+            new() { ["AgentBody"] = body });
+        var dispatcher = renderer.Dispatcher;
         await dispatcher.InvokeAsync(() =>
         {
             workspace.Panes[0].IsBusy = () => false;
             workspace.Close(workspace.Panes[0]);
         });
-        var refresh = rendererType.GetMethod("RefreshSnapshot", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var snapshot = refresh.Invoke(instance, null)!;
-        var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
+        var snapshot = await dispatcher.InvokeAsync(renderer.Snapshot);
+        var root = WidgetRendererHarness.Root(snapshot);
         var markers = Flatten(root).Where(n => n.Attributes.ContainsKey("data-agent-marker"))
             .Select(n => n.Attributes["data-agent-marker"]).ToArray();
         Assert.Equal(survivors.Select(p => p.Id.ToString()).Order(), markers.Order());
@@ -67,7 +61,7 @@ public class AgentWorkspaceTests
             Assert.NotNull(pane.Stop);
         }
         await dispatcher.InvokeAsync(() => workspace.Add());
-        snapshot = refresh.Invoke(instance, null)!;
+        snapshot = await dispatcher.InvokeAsync(renderer.Snapshot);
         root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
         markers = Flatten(root).Where(n => n.Attributes.ContainsKey("data-agent-marker"))
             .Select(n => n.Attributes["data-agent-marker"]).ToArray();

@@ -164,7 +164,7 @@
     private async Task EmojiButtonKey(KeyboardEventArgs key)
     {
         if (Pane is { Active: false }) return;
-        if ((key.AltKey || key.MetaKey) && Pane?.Workspace.Key(Pane, key) == true) return;
+        if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return;
         if (key.Key is "Enter" or "Return" or " ") await OpenEmojiPicker();
         else if (key.Key is "Escape" or "Tab") await FocusPromptAsync();
     }
@@ -270,7 +270,7 @@
         if (Pane is { Active: false }) return true;
         if (key.Key is not ("ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")) _cursorNavigation.Reset();
         if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null) return await PasteClipboardImage(key.AltKey);
-        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+        if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return true;
         if (_pastingImage) return true;
         if (!Disabled && ModelPicker is null && _pasteGuard.IsPasteKey(key))
         {
@@ -278,7 +278,7 @@
             _composer.Refresh(); _emojiOpen = false; StateHasChanged(); return true;
         }
         if (!Disabled && key.Key == "Tab" && _composer.AtPickerOpen && _composer.HandleKey("Tab")) { StateHasChanged(); return true; }
-        if ((key.AltKey || key.MetaKey) && Pane is not null && Pane.Workspace.Key(Pane, key)) return true;
+
         if (_emojiOpen && ChatFeaturesEnabled && !Disabled)
         {
             switch (key.Key)

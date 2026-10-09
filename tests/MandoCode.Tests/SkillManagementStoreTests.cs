@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class SkillManagementStoreTests : IDisposable
 {
     private readonly string _temp = Path.Combine(Path.GetTempPath(), "mandocode-skills-test-" + Guid.NewGuid().ToString("N"));

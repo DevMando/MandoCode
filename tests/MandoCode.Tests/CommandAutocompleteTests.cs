@@ -4,6 +4,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Compatibility")]
 public class CommandAutocompleteTests
 {
     [Fact]

@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public class ToolUpdateServiceTests
 {
     [Fact]

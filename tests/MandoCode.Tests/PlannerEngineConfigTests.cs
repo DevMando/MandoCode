@@ -6,6 +6,7 @@ namespace MandoCode.Tests;
 /// <summary>
 /// The workflow planner is the product default and is intentionally not a configurable engine.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlannerEngineConfigTests
 {
     [Theory]

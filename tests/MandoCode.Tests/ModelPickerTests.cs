@@ -10,6 +10,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class ModelPickerTests
 {
     [Fact]

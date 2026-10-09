@@ -15,6 +15,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class PlanChoiceTests
 {
     [Fact]

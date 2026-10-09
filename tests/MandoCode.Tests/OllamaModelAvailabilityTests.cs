@@ -7,6 +7,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class OllamaModelAvailabilityTests
 {
     [Theory]

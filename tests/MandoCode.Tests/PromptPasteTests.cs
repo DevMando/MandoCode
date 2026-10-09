@@ -10,6 +10,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public sealed class PromptPasteTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;

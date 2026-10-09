@@ -12,15 +12,53 @@
 
 @if (Pane is null || Pane.Visible)
 {
-<ChatShell SnapshotsOpen="@_snapshotsOpen" SnapshotCreate="@_snapshotCreate" SnapshotOffer="@_snapshotOffer" SnapshotContext="@Snapshots" OnSnapshotsClose="CloseSnapshots" OnSnapshotCapture="CaptureSnapshot" OnSnapshotKeepMemory="KeepSnapshotMemory" SetupOpen="@_setupOpen" OnSetupComplete="SetupComplete" OllamaPullOpen="@_ollamaPullOpen" OllamaEndpoint="@Config.OllamaEndpoint" OnOllamaPullClose="CloseOllamaPull" IntegrationsOpen="@_integrationsOpen" IntegrationCoordinator="@(Services.GetRequiredService<CliIntegrationCoordinator>())" IntegrationKind="@_integrationKind" OnIntegrationsClose="CloseIntegrations" OnManageIntegrations="ManageIntegrations" SettingsOpen="@_settingsOpen" SettingsConfig="@Config" OnSettingsClose="CloseSettings" OnSettingsSave="SaveAgentSettings" OnApplyDefaults="ApplyAgentDefaults" OnSaveDefaults="SaveAgentDefaults" OnSettingsModel="SettingsModel" SettingsModelPicker="@_modelPicker" OnSettingsModelSelected="HandleModelSelected" OnSettingsModelCancel="CancelModelPicker" @ref="_chatShell" ProjectDirectory="@ProjectRoot.ProjectRoot" DirectoryBrowserOpen="@_directoryBrowserOpen" OnDirectoryChosen="CompleteDirectorySelection" FileExplorerOpen="@_fileExplorerOpen" OnFileExplorerClose="CloseFileExplorer" OnFileExplorerToggle="ToggleFileExplorer" GitChangesOpen="@_gitChangesOpen" OnGitChangesClose="CloseGitChanges" OnGitDiscarded="GitDiscarded" HistoryOpen="@_historyActive" OnHistoryClose="CloseHistory" OnHistoryRestore="RestoreArchivedAgent" OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<ChatShell
+    SnapshotsOpen="@_snapshotsOpen"
+    SnapshotCreate="@_snapshotCreate"
+    SnapshotOffer="@_snapshotOffer"
+    SnapshotContext="@Snapshots"
+    OnSnapshotsClose="CloseSnapshots"
+    OnSnapshotCapture="CaptureSnapshot"
+    OnSnapshotKeepMemory="KeepSnapshotMemory"
+    SetupOpen="@_setupOpen"
+    OnSetupComplete="SetupComplete"
+    OllamaPullOpen="@_ollamaPullOpen"
+    OllamaEndpoint="@Config.OllamaEndpoint"
+    OnOllamaPullClose="CloseOllamaPull"
+    IntegrationsOpen="@_integrationsOpen"
+    IntegrationCoordinator="@(IntegrationCoordinator)"
+    IntegrationKind="@_integrationKind"
+    OnIntegrationsClose="CloseIntegrations"
+    OnManageIntegrations="ManageIntegrations"
+    SettingsOpen="@_settingsOpen"
+    SettingsConfig="@Config"
+    OnSettingsClose="CloseSettings"
+    OnSettingsSave="SaveAgentSettings"
+    OnApplyDefaults="ApplyAgentDefaults"
+    OnSaveDefaults="SaveAgentDefaults"
+    OnSettingsModel="SettingsModel"
+    SettingsModelPicker="@_modelPicker"
+    OnSettingsModelSelected="HandleModelSelected"
+    OnSettingsModelCancel="CancelModelPicker"
+    @ref="_chatShell"
+    ProjectDirectory="@ProjectRoot.ProjectRoot"
+    DirectoryBrowserOpen="@_directoryBrowserOpen"
+    OnDirectoryChosen="CompleteDirectorySelection"
+    FileExplorerOpen="@_fileExplorerOpen"
+    OnFileExplorerClose="CloseFileExplorer"
+    OnFileExplorerToggle="ToggleFileExplorer"
+    GitChangesOpen="@_gitChangesOpen"
+    OnGitChangesClose="CloseGitChanges"
+    OnGitDiscarded="GitDiscarded"
+    HistoryOpen="@_historyActive"
+    OnHistoryClose="CloseHistory"
+    OnHistoryRestore="RestoreArchivedAgent"
+    OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
 <Header>
 <Banner />
 
-@* Banner stays always-on (it's static, no overlap risk). The dynamic section
-   below — static info + connection state + ready/help block — is hidden during
-   /setup via _setupActive so the VDOM doesn't redraw on top of the wizard's
-   imperative AnsiConsole output. Extracted into HomeView so the suppression is
-   a single @if gate rather than wrapping a long inline block. *@
+@* Keep the banner visible, but hide startup details while setup owns the screen.
+   HomeView keeps that visibility rule together instead of repeating it for each detail. *@
 @if (!_setupActive)
 {
     <HomeView
@@ -40,7 +78,7 @@
 {
 @* VDOM input — always rendered once interactive loop starts, disabled during processing.
    Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
-@if (_showPrompt && !_snapshotsOpen && !_setupOpen && !_settingsOpen && !_ollamaPullOpen && !_integrationsOpen && !_directoryBrowserOpen && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+@if (_showPrompt && !_presentation.HidesChatPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
 {
     @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
     {
@@ -146,13 +184,23 @@
 }
 
 @code {
+    private bool HasModalInput => InstructionCoordinator.IsActive || ApprovalMenu.IsActive ||
+        _planSelectActive || _showWizardInput || _showWizardSelect;
+    private bool CanBrowseProject => !_historyActive && !_directoryBrowserOpen && !HasModalInput;
+
+    private CliIntegrationCoordinator IntegrationCoordinator { get; set; } = default!;
+    private CliDelegations Delegations { get; set; } = default!;
+    private AgentModelDefaults ModelDefaults { get; set; } = default!;
+    private ToolUpdateService ToolUpdater => Services.GetRequiredService<ToolUpdateService>();
+    private readonly AgentPresentationState _presentation = new();
     private AIService AI { get; set; } = default!;
-    private bool _directoryBrowserOpen;
-    private bool _fileExplorerOpen;
-    private bool _gitChangesOpen;
-    private bool _settingsOpen;
+    private bool _directoryBrowserOpen { get => _presentation.IsOpen(AgentPanel.DirectoryBrowser); set => _presentation.SetOpen(AgentPanel.DirectoryBrowser, value); }
+    private bool _fileExplorerOpen { get => _presentation.IsOpen(AgentPanel.FileExplorer); set => _presentation.SetOpen(AgentPanel.FileExplorer, value); }
+    private bool _gitChangesOpen { get => _presentation.IsOpen(AgentPanel.GitChanges); set => _presentation.SetOpen(AgentPanel.GitChanges, value); }
+    private bool _settingsOpen { get => _presentation.IsOpen(AgentPanel.Settings); set => _presentation.SetOpen(AgentPanel.Settings, value); }
     private SnapshotContext Snapshots => (Pane?.Services ?? Services).GetRequiredService<SnapshotContext>();
-    private bool _snapshotsOpen, _snapshotCreate, _snapshotOffer;
+    private bool _snapshotsOpen { get => _presentation.IsOpen(AgentPanel.Snapshots); set => _presentation.SetOpen(AgentPanel.Snapshots, value); }
+    private bool _snapshotCreate, _snapshotOffer;
     private TaskCompletionSource? _snapshotCompletion;
     private Task CaptureSnapshot() => Snapshots.CaptureAsync(AI, Config.GetEffectiveModelName(), ProjectRoot.ProjectRoot);
     private Task KeepSnapshotMemory()
@@ -188,7 +236,7 @@
         if (Snapshots.QueuedCount > 0) AnsiConsole.MarkupLine($"[green]Context queued: {Snapshots.QueuedCount} snapshot(s) for your next message.[/]");
         if (_promptInput is not null) await _promptInput.FocusPromptAsync();
     }
-    private bool _ollamaPullOpen;
+    private bool _ollamaPullOpen { get => _presentation.IsOpen(AgentPanel.ModelDownloads); set => _presentation.SetOpen(AgentPanel.ModelDownloads, value); }
     private TaskCompletionSource? _ollamaPullCompletion;
     private async Task ShowOllamaPull()
     {
@@ -206,7 +254,7 @@
         await InvokeAsync(StateHasChanged);
         if (_promptInput is not null) await _promptInput.FocusPromptAsync();
     }
-    private bool _integrationsOpen;
+    private bool _integrationsOpen { get => _presentation.IsOpen(AgentPanel.Integrations); set => _presentation.SetOpen(AgentPanel.Integrations, value); }
     private int _integrationKind;
     private TaskCompletionSource? _integrationsCompletion;
     private bool _returnToSettings;
@@ -260,7 +308,8 @@
     [CascadingParameter] public AgentPane? Pane { get; set; }
     private bool _paneStopped;
     private string? _headerModel;
-    private void StopPane() { _snapshotCompletion?.TrySetResult(); _setupCompletion?.TrySetResult(new(false, true, null)); _historyTcs?.TrySetResult(); _integrationsCompletion?.TrySetResult(); _paneStopped = true; _requestCts?.Cancel(); _peerRequest?.Completion.TrySetResult(new(false, "Agent closed.")); _runningPeerRequest?.Completion.TrySetResult(new(false, "Agent closed.")); if (Pane?.AskPeer == AskPeerAsync) { Pane.AskPeer = null; Pane.ReadConversation = null; } _inputTcs?.TrySetResult(string.Empty); }
+
+
     protected bool _isConnected { get; set; } = false;
     private bool _connectionChecked = false;
     private bool _hasRendered = false;
@@ -474,164 +523,9 @@
         }
     }
 
-    protected override void OnInitialized()
-    {
-        {
-            var agentServices = Pane?.Services ?? Services;
-            AI = agentServices.GetRequiredService<AIService>();
-            AI.UseExplicitPlanningOnly();
-            if (Pane is not null) { Pane.SaveHistory = SaveAgentHistory; Pane.IsHistoryOpen = () => _historyActive; Pane.CloseHistory = CloseHistory; }
-            Config = agentServices.GetRequiredService<MandoCodeConfig>();
-            PlanRunners = agentServices.GetRequiredService<PlanRunnerSelector>();
-            PlanHandoff = agentServices.GetRequiredService<PlanHandoff>();
-            FileProvider = agentServices.GetRequiredService<FileAutocompleteProvider>();
-            TokenTracker = agentServices.GetRequiredService<TokenTrackingService>();
-            MusicPlayer = agentServices.GetRequiredService<MusicPlayerService>();
-            ProjectRoot = agentServices.GetRequiredService<ProjectRootAccessor>();
-            Spinner = agentServices.GetRequiredService<SpinnerService>();
-            OperationRenderer = agentServices.GetRequiredService<OperationDisplayRenderer>();
-            DiffApproval = agentServices.GetRequiredService<DiffApprovalHandler>();
-            KeyCoordinator = agentServices.GetRequiredService<CancelKeyCoordinator>();
-            InstructionCoordinator = agentServices.GetRequiredService<InstructionPromptCoordinator>();
-            ApprovalMenu = agentServices.GetRequiredService<ApprovalSelectCoordinator>();
-            Shell = agentServices.GetRequiredService<ShellCommandHandler>();
-            ThemeService = agentServices.GetRequiredService<TerminalThemeService>();
-            StateMachine = agentServices.GetRequiredService<InputStateMachine>();
-            Skills = agentServices.GetRequiredService<SkillLoader>();
-            McpManager = agentServices.GetRequiredService<McpClientManager>();
-            McpGate = agentServices.GetRequiredService<McpApprovalGate>();
-            PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
-            UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
-            if (Pane is not null) Pane.IsBusy = () => !_hasRendered || _isProcessing || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _snapshotsOpen || _setupOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen;
-            if (Pane is not null) Pane.IsAwaitingInput = () => InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect;
-            if (Pane is not null) Pane.Stop = StopPane;
-            if (Pane is not null) Pane.SubmitCommand = HandleVdomSubmit;
-            if (Pane is not null)
-            {
-                Pane.AskPeer = AskPeerAsync;
-                Pane.ReadConversation = async () =>
-                {
-                    IReadOnlyList<ChatMsg> result = [];
-                    await InvokeAsync(() => result = _messages.Select(m => new ChatMsg { Role = m.Role, Text = m.Text }).ToArray());
-                    return result;
-                };
-                AI.SetHostTools(new CliAgentTools(Pane, Services.GetRequiredService<CliDelegations>()).Functions);
-            }
-            if (Pane is not null) { Pane.ToggleSnapshots = ToggleSnapshots; Pane.ToggleSettings = ToggleSettings; Pane.ToggleFileExplorer = ToggleFileExplorer; Pane.IsFileExplorerOpen = () => _fileExplorerOpen; Pane.ToggleGitChanges = ToggleGitChanges; Pane.IsGitChangesOpen = () => _gitChangesOpen; }
-        }
-        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
-        // Get project root from command line args if available. Flags (--continue/-c, and
-        // anything future starting with '-') are not folder names — same filtering as
-        // Program.cs, or `mandocode --continue` would set the project root to "--continue".
-        var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-        _continueRequested = (Pane is null || Pane.Id == 1) && args.Any(a => a is "--continue" or "-c");
-        var positional = args.Where(a => !a.StartsWith('-')).ToArray();
-        if (Pane?.RestoreFrom is null && positional.Length > 0 && !positional[0].StartsWith("config"))
-        {
-            ProjectRoot.ProjectRoot = positional[0];
-        }
 
-        // Subscribe to function invocation events for UI feedback.
-        // Stored as fields so Dispose can detach them — AIService is a singleton, so
-        // leaving handlers attached after App tears down would leak closures capturing _requestCts.
-        _onFunctionInvokedHandler = OnFunctionInvoked;
-        _onFunctionCompletedHandler = OnFunctionCompleted;
-        AI.OnFunctionInvoked += _onFunctionInvokedHandler;
-        AI.OnFunctionCompleted += _onFunctionCompletedHandler;
-        _onResponseTextDeltaHandler = OnResponseTextDelta;
-        _onResponseStreamStartedHandler = OnResponseStreamStarted;
-        AI.OnResponseTextDelta += _onResponseTextDeltaHandler;
-        AI.OnResponseStreamStarted += _onResponseStreamStartedHandler;
 
-        // Wire the propose_plan tool handoff to the approval + execution UI
-        PlanHandoff.OnPlanRequested = HandleProposedPlanAsync;
 
-        // Re-render when DiffApprovalHandler activates the instruction TextInput.
-        InstructionCoordinator.StateChanged += OnInstructionStateChanged;
-
-        // Re-render when DiffApprovalHandler activates the VDOM approval menu.
-        ApprovalMenu.StateChanged += OnApprovalMenuStateChanged;
-
-        // Wire up diff approval callbacks if enabled
-        if (Config.EnableDiffApprovals)
-        {
-            AI.OnWriteApprovalRequested = DiffApproval.HandleDiffApproval;
-            AI.OnDeleteApprovalRequested = DiffApproval.HandleDeleteApproval;
-            AI.OnCommandApprovalRequested = DiffApproval.HandleCommandApproval;
-            McpGate.OnApprovalRequested = DiffApproval.HandleMcpApproval;
-        }
-
-        // Detect terminal theme and apply curated palette
-        if (Config.EnableThemeCustomization && (Pane is null || Pane.Id == 1))
-        {
-            ThemeService.DetectTheme();
-            ThemeService.ApplyPalette();
-        }
-
-        // Ctrl+C cancels the active AI request instead of killing the process.
-        // Stored as a field so Dispose can detach it — the lambda closes over _requestCts,
-        // which would otherwise keep being dereferenced after teardown.
-        _cancelKeyHandler = (_, e) =>
-        {
-            if (Pane is not null && !Pane.Active) return;
-            var cts = _requestCts;
-            if (cts != null && !cts.IsCancellationRequested)
-            {
-                e.Cancel = true;   // suppress default process termination
-                cts.Cancel();
-            }
-            else
-            {
-                // No active request — clean up palette before process exits
-                ThemeService.ResetPalette();
-            }
-        };
-        Console.CancelKeyPress += _cancelKeyHandler;
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
-        if (Pane is not null && _headerModel != Config.GetEffectiveModelName())
-        {
-            _headerModel = Config.GetEffectiveModelName();
-            Pane.Workspace.Refresh();
-        }
-        if (firstRender && !_connectionChecked)
-        {
-            await InitializeConnectionAsync();
-        }
-
-        if (_connectionChecked && !_hasRendered)
-        {
-            _hasRendered = true;
-            RestoreAgentHistory();
-
-            // --continue: reload the most recent conversation for this project folder,
-            // full fidelity (tool calls included). Failure degrades to a fresh start with
-            // an honest note — never an error.
-            if (_continueRequested)
-            {
-                var savedJson = SessionResumeStore.Load(ProjectRoot.ProjectRoot);
-                var restoredCount = savedJson == null ? 0 : AI.TryRestoreHistoryJson(savedJson);
-                AnsiConsole.MarkupLine(restoredCount > 0
-                    ? $"[green]Conversation restored ({restoredCount} messages) — continuing where you left off.[/]"
-                    : "[dim]No previous session to continue for this folder — starting fresh.[/]");
-                AnsiConsole.WriteLine();
-
-                // Same gesture, so the same place: "continue where I left off" should mention a
-                // plan that was still running as well as the conversation.
-                ShowUnfinishedPlanNotice();
-            }
-
-            // Initialize imperative input with the shared state machine
-            CommandAutocomplete.Initialize(StateMachine);
-
-            // Small delay to ensure UI is fully rendered before accepting input
-            await Task.Delay(100);
-            _ = Task.Run(async () => await RunInteractiveLoopAsync());
-        }
-    }
 
     private async Task InitializeConnectionAsync()
     {
@@ -742,7 +636,7 @@
         if (forceInteractive && contextCleared && Snapshots.Pending is not null) await ShowSnapshots(false, true);
         else Snapshots.ClearPending();
     }
-    private bool _setupOpen;
+    private bool _setupOpen { get => _presentation.IsOpen(AgentPanel.Setup); set => _presentation.SetOpen(AgentPanel.Setup, value); }
     private TaskCompletionSource<OnboardingFlow.FlowResult>? _setupCompletion;
     private void SetupComplete(OnboardingFlow.FlowResult result) => _setupCompletion?.TrySetResult(result);
 
@@ -897,7 +791,7 @@
             var agents = Pane is null ? new[] { Config } :
                 (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
                     .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
-            Services.GetRequiredService<AgentModelDefaults>().Select(modelTag, agents);
+            ModelDefaults.Select(modelTag, agents);
             AnsiConsole.MarkupLine("[dim]Default model updated for new agents.[/]");
         }
 
@@ -936,7 +830,7 @@
         var agentsForDefaults = Pane is null ? new[] { Config } :
             (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
                 .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
-        Services.GetRequiredService<AgentModelDefaults>().UpdateSetting(parts[0], parts[1], agentsForDefaults);
+        ModelDefaults.UpdateSetting(parts[0], parts[1], agentsForDefaults);
         Config.Save();
 
         if (parts[0].Equals("showTips", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } tipsRegistry)
@@ -1323,7 +1217,7 @@
     private Task ToggleFileExplorer() => InvokeAsync(async () =>
     {
         if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
-        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (!CanBrowseProject) return;
         if (_isProcessing && !_fileExplorerOpen) return;
         _fileExplorerOpen = !_fileExplorerOpen;
         _gitChangesOpen = false;
@@ -1334,7 +1228,7 @@
     private Task ToggleGitChanges() => InvokeAsync(async () =>
     {
         if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
-        if (_historyActive || _directoryBrowserOpen || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _planSelectActive || _showWizardInput || _showWizardSelect) return;
+        if (!CanBrowseProject) return;
         _gitChangesOpen = !_gitChangesOpen;
         _fileExplorerOpen = false;
         StateHasChanged();
@@ -1343,7 +1237,7 @@
     private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
     private Task ToggleSettings() => InvokeAsync(() =>
     {
-        if (_snapshotsOpen || _integrationsOpen || Services.GetRequiredService<CliIntegrationCoordinator>().IsUpdating || !_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
+        if (_snapshotsOpen || _integrationsOpen || IntegrationCoordinator.IsUpdating || !_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
         _settingsOpen = !_settingsOpen;
         _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
         StateHasChanged();
@@ -1395,7 +1289,7 @@
     }
     private async Task ApplyAgentDefaults()
     {
-        var defaults = Services.GetRequiredService<AgentModelDefaults>().Snapshot();
+        var defaults = ModelDefaults.Snapshot();
         Config.ModelName = defaults.GetEffectiveModelName();
         Config.ModelPath = null;
         await SaveAgentSettings(new AgentSettingsDraft(defaults));
@@ -1406,7 +1300,7 @@
         var agents = Pane is null ? new[] { Config } :
             (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
                 .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
-        Services.GetRequiredService<AgentModelDefaults>().Promote(Config, agents);
+        ModelDefaults.Promote(Config, agents);
     }
     private void GitDiscarded(string path)
     {
@@ -1462,7 +1356,7 @@
                 using var peerTranscript = Pane!.Session.CaptureAgentExchange(peerRequest.InteractionId, peerRequest.From);
                 try
                 {
-                    input = Services.GetRequiredService<CliDelegations>().WithInbox(Pane!.PersistKey, input);
+                    input = Delegations.WithInbox(Pane!.PersistKey, input);
                     _messages.Add(new ChatMsg { Role = "user", Text = input });
                     var before = _messages.Count;
                     await ProcessDirectRequestAsync(input, cancellationToken: peerRequest.Cancellation);
@@ -1491,332 +1385,9 @@
                 continue;
             }
 
-            // Check if this is a command (starts with /)
             if (InputStateMachine.IsCommand(input))
             {
-                var command = InputStateMachine.GetCommandName(input);
-
-                // Handle special commands
-                if (command == "update")
-                {
-                    await HandleUpdateCommandAsync();
-                    if (Services.GetRequiredService<ToolUpdateService>().Pending) return;
-                    continue;
-                }
-                if (command == "exit")
-                {
-                    StopMusicVisualizer();
-                    MusicPlayer.Dispose();
-                    ThemeService.Dispose();
-                    AnsiConsole.WriteLine("Goodbye!");
-                    Lifetime.StopApplication();
-                    return;
-                }
-
-                if (command == "compact")
-                {
-                    if (await AI.CompactHistoryAsync())
-                    {
-                        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
-                        catch { /* persistence must never break the chat */ }
-            SaveAgentHistory(false);
-                        AnsiConsole.MarkupLine("[green]Conversation context compacted into a recap. The visible transcript is unchanged.[/]");
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine("[dim]Not enough conversation context to compact yet.[/]");
-                    }
-                    continue;
-                }
-
-                if (command == "clear")
-                {
-                    await AI.ClearHistoryAsync();
-                    StateMachine.ClearHistory();
-                    SessionResumeStore.Delete(ProjectRoot.ProjectRoot);   // cleared means cleared — --continue too
-                    TuiConsole.Clear();
-                    _messages.Clear();
-                    if (Pane is not null) Pane.Services.GetRequiredService<AgentArchiveStore>().Delete(Pane.PersistKey);
-                    AnsiConsole.MarkupLine("[yellow]Conversation context wiped completely. Start a new conversation.[/]");
-                    continue;
-                }
-
-                if (command == "plan-resume")
-                {
-                    await HandlePlanCommandAsync("resume");
-                    continue;
-                }
-
-                if (command == "plan-discard")
-                {
-                    await HandlePlanCommandAsync("discard");
-                    continue;
-                }
-
-                if (command == "plan" || command.StartsWith("plan "))
-                {
-                    _messages.Add(new ChatMsg { Role = "user", Text = input });
-                    // GetCommandName lower-cases for dispatch. Recover arguments from the original
-                    // input so paths, identifiers, and quoted goal text keep their casing.
-                    var planCommand = input.TrimStart()[1..];
-                    var planSpace = planCommand.IndexOf(' ');
-                    await HandlePlanCommandAsync(planSpace >= 0 ? planCommand[(planSpace + 1)..].Trim() : "");
-                    continue;
-                }
-
-                if (command is "history" or "agent-history")
-                {
-                    await ShowHistoryAsync();
-                    continue;
-                }
-
-                if (command == "keybindings")
-                {
-                    foreach (var group in Keybindings.All.GroupBy(binding => binding.Group))
-                    {
-                        var bindings = new Spectre.Console.Table { Border = TableBorder.Rounded };
-                        bindings.Title = new TableTitle(group.Key);
-                        bindings.AddColumn("Keys");
-                        bindings.AddColumn("Action");
-                        foreach (var binding in group)
-                            bindings.AddRow(Spectre.Console.Markup.Escape(binding.Keys), Spectre.Console.Markup.Escape(binding.Action));
-                        AnsiConsole.Write(bindings);
-                        AnsiConsole.WriteLine();
-                    }
-                    AnsiConsole.WriteLine("Alt is the default modifier. Windows/Command variants work only when the terminal forwards them.");
-                    continue;
-                }
-                if (command == "help")
-                {
-                    // Append separate entries to the selected pane so the complete reference
-                    // remains scrollable even when it is taller than the terminal viewport.
-                    using var helpOutput = Pane is null ? null : TuiConsole.Enter(Pane.Session);
-                    TuiConsole.MarkupLine("[deepskyblue1]Available commands[/]");
-                    foreach (var entry in SlashCommands.All.Where(entry => SlashCommands.IsAvailable(entry.Key, Config)))
-                    {
-                        TuiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(entry.Key)}[/]  {Spectre.Console.Markup.Escape(entry.Value)}");
-                    }
-                    continue;
-                }
-                if (command == "config" || command.StartsWith("config "))
-                {
-                    // "/config set <key> <value>" — inline setter, no wizard round-trip.
-                    // Args are parsed from the RAW input: GetCommandName lowercases the
-                    // command string, which would mangle case-sensitive values.
-                    var rawConfigArgs = input.TrimStart().TrimStart('/').Trim();
-                    rawConfigArgs = rawConfigArgs.Length > "config".Length
-                        ? rawConfigArgs["config".Length..].Trim()
-                        : "";
-
-                    if (rawConfigArgs.StartsWith("set", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await HandleConfigSetCommandAsync(rawConfigArgs[3..].Trim());
-                        continue;
-                    }
-                    if (rawConfigArgs.Length > 0)
-                    {
-                        AnsiConsole.MarkupLine("[yellow]Unknown /config subcommand.[/]");
-                        AnsiConsole.MarkupLine("[dim]Usage: [deepskyblue1]/config[/] (guided wizard) or [deepskyblue1]/config set <key> <value>[/][/]");
-                        AnsiConsole.WriteLine();
-                        continue;
-                    }
-
-                    await HandleConfigCommandAsync();
-                    continue;
-                }
-
-                if (command == "transcript-save" || command.StartsWith("transcript-save ", StringComparison.Ordinal))
-                {
-                    var args = input.Trim()["/transcript-save".Length..].Trim();
-                    try {
-                        var session = Pane?.Session ?? TuiConsole.Current ?? throw new IOException("The conversation is not available to save.");
-                        var path = await TranscriptExport.SaveAsync(session, Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot, Config.GetEffectiveModelName(), args);
-                        AnsiConsole.MarkupLine($"[green]Transcript saved to {Spectre.Console.Markup.Escape(path)}[/]");
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
-                        var error = Spectre.Console.Markup.Escape("Couldn't save transcript: " + ex.Message);
-                        AnsiConsole.MarkupLine($"[yellow]{error}[/]");
-                    }
-                    continue;
-                }
-                if (command is "context-snap-create" or "context-snap-import") { await CaptureSnapshot(); await ShowSnapshots(command == "context-snap-create"); continue; }
-                if (command == "agent-settings") { _isProcessing = false; await ToggleSettings(); continue; }
-                if (command == "agent-file-explorer")
-                {
-                    _fileExplorerOpen = !_fileExplorerOpen;
-                    _gitChangesOpen = false;
-                    await InvokeAsync(StateHasChanged);
-                    continue;
-                }
-                if (command is "git-changes" or "agent-git-changes")
-                {
-                    await ToggleGitChanges();
-                    continue;
-                }
-                if (command == "change-directory" || command.StartsWith("change-directory "))
-                {
-                    var rawArgs = input.Trim()["/change-directory".Length..].Trim();
-                    string? target;
-                    try { target = rawArgs.Length > 0 ? rawArgs : await PickProjectDirectoryAsync(); }
-                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException or InvalidOperationException or System.IO.IOException)
-                    {
-                        AnsiConsole.WriteLine($"Couldn't open the folder picker: {ex.Message}");
-                        continue;
-                    }
-                    if (!string.IsNullOrWhiteSpace(target))
-                    {
-                        try
-                        {
-                            var directory = Shell.ChangeDirectory(target);
-                            Skills.Reload();
-                            await AI.RefreshSettingsAsync(Config);
-                            AI.AppendUserNote(
-                                $"[Project root changed to: {directory}. Earlier messages refer to the previous folder — " +
-                                "re-read any file you need rather than reusing paths or contents from before this point.]");
-                            AnsiConsole.WriteLine($"Changed directory to {directory}");
-                            AnsiConsole.WriteLine("Switching to the new project — this conversation is kept.");
-                        }
-                        catch (Exception ex) when (ex is System.IO.IOException or ArgumentException or UnauthorizedAccessException)
-                        {
-                            AnsiConsole.WriteLine($"Couldn't change directory: {ex.Message}");
-                        }
-                        await InvokeAsync(StateHasChanged);
-                    }
-                    continue;
-                }
-                if (command == "ollama-pull") { await ShowOllamaPull(); continue; }
-                if (command == "model")
-                {
-                    await HandleModelCommandAsync();
-                    continue;
-                }
-
-                if (command == "setup")
-                {
-                    // Hide the HomeView component (static info + ready + help table)
-                    // while the wizard runs imperatively — without this the VDOM
-                    // redraws that block on top of the wizard's output every time
-                    // SetOnboardingStatus fires StateHasChanged. forceInteractive
-                    // ensures the wizard always shows visible UI rather than hitting
-                    // the silent fast path, so users don't end up with a blank screen.
-                    _setupActive = true;
-                    await InvokeAsync(StateHasChanged);
-
-                    try
-                    {
-                        await RunOnboardingFlowAsync(forceInteractive: true);
-                    }
-                    finally
-                    {
-                        _setupActive = false;
-                    }
-
-                    // Re-probe after the flow so /setup can also recover the connection state.
-                    var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
-                    _isConnected = probe.Ok;
-                    if (_isConnected)
-                    {
-                        await ValidateCurrentModelAsync();
-                    }
-                    await InvokeAsync(StateHasChanged);
-                    continue;
-                }
-
-                if (command == "learn")
-                {
-                    await HandleLearnCommandAsync();
-                    continue;
-                }
-
-                if (command == "retry")
-                {
-                    await HandleRetryCommandAsync();
-                    continue;
-                }
-                if (command == "ollama-serve")
-                {
-                    await HandleRetryCommandAsync();
-                    continue;
-                }
-
-                if (command == "copy")
-                {
-                    HandleCopyCommand();
-                    continue;
-                }
-
-                if (command == "copy-code")
-                {
-                    HandleCopyCodeCommand();
-                    continue;
-                }
-
-                if (command == "rabbit")
-                {
-                    HandleRabbitCommand();
-                    continue;
-                }
-
-                // Music commands
-                if (command == "music")           { HandleMusicCommand("play"); continue; }
-                if (command == "music-stop")      { HandleMusicCommand("stop"); continue; }
-                if (command == "music-pause")     { HandleMusicCommand("pause"); continue; }
-                if (command == "music-next")      { HandleMusicCommand("next"); continue; }
-                if (command == "music-playlist")      { HandleMusicPlaySelection(); continue; }
-                if (command == "music-list")      { HandleMusicCommand("list"); continue; }
-                if (command.StartsWith("music-vol"))
-                {
-                    HandleMusicCommand(command);
-                    continue;
-                }
-
-                if (command == "command" || command.StartsWith("command "))
-                {
-                    var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
-                    await Shell.HandleShellCommandAsync(shellCmd);
-                    continue;
-                }
-
-                if (command == "skills")
-                {
-                    await ShowIntegrationsAsync(1);
-                    continue;
-                }
-
-                if (command == "force-skill" || command.StartsWith("force-skill "))
-                {
-                    var skillName = command.Length > "force-skill".Length
-                        ? command["force-skill".Length..].Trim()
-                        : "";
-                    await HandleForceSkillCommandAsync(skillName);
-                    continue;
-                }
-
-                if (command == "mcp")
-                {
-                    await ShowIntegrationsAsync(0);
-                    continue;
-                }
-
-                if (command == "mcp tools" || command.StartsWith("mcp tools "))
-                {
-                    var serverFilter = command.Length > "mcp tools".Length
-                        ? command["mcp tools".Length..].Trim()
-                        : null;
-                    await HandleMcpToolsCommandAsync(string.IsNullOrWhiteSpace(serverFilter) ? null : serverFilter);
-                    continue;
-                }
-
-                if (command == "mcp-reload")
-                {
-                    await HandleMcpReloadCommandAsync();
-                    continue;
-                }
-
-                // Unknown command
-                AnsiConsole.MarkupLine($"[red]Unknown command: {Spectre.Console.Markup.Escape(input)}[/]");
-                AnsiConsole.MarkupLine("[dim]Type /help for available commands[/]");
-                AnsiConsole.WriteLine();
+                if (await ExecuteSlashCommandAsync(input) == CliCommandResult.Exit) return;
                 continue;
             }
 
@@ -1843,7 +1414,7 @@
             // Process @file references and inject file content
             var processedInput = ProcessFileReferences(input);
             if (Pane is not null) processedInput += new CliAgentDirectory(Pane).ExpandMentions(input)[input.Length..];
-            if (Pane is not null) processedInput = Services.GetRequiredService<CliDelegations>().WithInbox(Pane.PersistKey, processedInput);
+            if (Pane is not null) processedInput = Delegations.WithInbox(Pane.PersistKey, processedInput);
 
             // Add user message to chat history
             _messages.Add(new ChatMsg { Role = "user", Text = input });
@@ -1895,7 +1466,7 @@
 
     private async Task HandleVdomSubmit(string input)
     {
-        if (Services.GetRequiredService<CliIntegrationCoordinator>().IsUpdating) return;
+        if (IntegrationCoordinator.IsUpdating) return;
         var rename = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         if (rename.Length > 0 && (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase)
             || rename[0].Equals("/tips-off", StringComparison.OrdinalIgnoreCase)))
@@ -2007,7 +1578,7 @@
     }
     private async Task HandleUpdateCommandAsync()
     {
-        var updater = Services.GetRequiredService<ToolUpdateService>();
+        var updater = ToolUpdater;
         if (!updater.TryBegin())
         {
             AnsiConsole.MarkupLine("[yellow]An update is already being checked or prepared.[/]");
@@ -2326,124 +1897,6 @@
     // expanding further references and append a notice.
     private const int MaxFileReferenceBudgetChars = 60_000;
 
-    private string ProcessFileReferences(string input)
-    {
-        var matches = FileReferenceToken.Paths(input).ToArray();
-
-        if (matches.Length == 0)
-            return input;
-
-        var contextBlocks = new System.Text.StringBuilder();
-        var referencedFiles = new HashSet<string>();
-        int totalExpansionChars = 0;
-        int skippedForBudget = 0;
-
-        foreach (var filePath in matches)
-        {
-            if (Pane is not null && CliAgentDirectory.IsAgentName(filePath) && new CliAgentDirectory(Pane).Resolve(filePath) is not null) continue;
-
-            // Skip duplicates
-            if (!referencedFiles.Add(filePath))
-                continue;
-
-            if (ImageFileReference.IsImage(filePath))
-            {
-                try
-                {
-                    var clipboard = (Pane?.Services ?? Services).GetService<ClipboardImageStore>();
-                    var image = clipboard?.TryGet(filePath, out var pasted) == true
-                        ? (Bytes: pasted, MediaType: "image/png")
-                        : ImageFileReference.Read(ProjectRoot.ProjectRoot, filePath);
-                    if (!AI.TryAttachImage(image.Bytes, image.MediaType, $"Referenced image: {filePath}", out var error))
-                        throw new IOException(error);
-                    contextBlocks.AppendLine($"Image: {filePath} — attached as image input. Inspect the supplied image directly, rather than reading its binary bytes as text.");
-                    AnsiConsole.MarkupLine($"📷  {Spectre.Console.Markup.Escape(filePath)}");
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-                {
-                    contextBlocks.AppendLine($"Image: {filePath} — not attached: {ex.Message} Do not attempt to infer the image contents from raw bytes.");
-                    AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape($"Image not attached: {filePath}: {ex.Message}")}[/]");
-                }
-                continue;
-            }
-
-            // Total-budget check — stop expanding once we've accumulated enough context.
-            if (totalExpansionChars >= MaxFileReferenceBudgetChars)
-            {
-                skippedForBudget++;
-                continue;
-            }
-
-            var content = FileProvider.ReadFileContent(filePath);
-            if (content != null)
-            {
-                // Truncate files over 10,000 chars
-                if (content.Length > 10_000)
-                    content = content.Substring(0, 10_000) + "\n... [truncated]";
-
-                contextBlocks.AppendLine($"File: {filePath}");
-                contextBlocks.AppendLine("```");
-                contextBlocks.AppendLine(content);
-                contextBlocks.AppendLine("```");
-                contextBlocks.AppendLine();
-                totalExpansionChars += content.Length;
-
-                // Show consistent operation display for @file reads
-                var lineCount = content.Split('\n').Length;
-                var readDisplay = new OperationDisplayEvent
-                {
-                    OperationType = "Read",
-                    FilePath = filePath,
-                    LineCount = lineCount
-                };
-                OperationRenderer.Render(readDisplay);
-            }
-            else
-            {
-                // Check if this is a directory reference
-                var dirListing = FileProvider.GetDirectoryListing(filePath);
-                if (dirListing != null)
-                {
-                    // Dir listings can be huge for big projects — cap at 4k chars per reference.
-                    if (dirListing.Length > 4_000)
-                        dirListing = dirListing.Substring(0, 4_000) + "\n... [truncated]";
-
-                    contextBlocks.AppendLine($"Directory: {filePath}/");
-                    contextBlocks.AppendLine(FileAutocompleteProvider.BuildDirectoryScopeInstruction(filePath));
-                    contextBlocks.AppendLine("Contents:");
-                    contextBlocks.AppendLine(dirListing);
-                    contextBlocks.AppendLine();
-                    totalExpansionChars += dirListing.Length;
-
-                    AnsiConsole.MarkupLine($"[dim][[Directory]][/] [deepskyblue1]{Spectre.Console.Markup.Escape(filePath)}/[/]");
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine($"[dim][[Not found]][/] [yellow]{Spectre.Console.Markup.Escape(filePath)}[/]");
-                }
-            }
-        }
-
-        if (contextBlocks.Length == 0)
-            return input;
-
-        if (skippedForBudget > 0)
-        {
-            contextBlocks.AppendLine($"[Note: {skippedForBudget} additional @reference(s) were skipped — the total expansion budget of {MaxFileReferenceBudgetChars:N0} chars was reached. Re-reference specific files in follow-up messages if needed.]");
-            contextBlocks.AppendLine();
-            AnsiConsole.MarkupLine($"[yellow][[Skipped]][/] [dim]{skippedForBudget} @reference(s) beyond expansion budget ({MaxFileReferenceBudgetChars:N0} chars)[/]");
-        }
-
-        var fullContext = new System.Text.StringBuilder();
-        fullContext.AppendLine("--- Referenced Files ---");
-        fullContext.Append(contextBlocks);
-        fullContext.AppendLine("---");
-        fullContext.AppendLine();
-        fullContext.Append(input);
-
-        return fullContext.ToString();
-    }
-
     private void ShowOfflineGuidance()
     {
         var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
@@ -2504,1420 +1957,6 @@
         }
     }
 
-    private async Task ProcessDirectRequestAsync(string input, string? hostInstruction = null, CancellationToken cancellationToken = default)
-    {
-        _lastRequestError = null;
-        _lastCompletedReply = null;
-        (Pane?.Session ?? TuiConsole.Current)?.BeginToolTurn();
-        // A proposal belongs to the turn that produced it. Without this, a plan proposed during a
-        // turn the user then cancelled would sit in the single slot and execute at the end of some
-        // later, unrelated turn.
-        PlanHandoff.ClearPendingProposal();
-
-        // Reset operation tracking for the new request
-        _recentReadCount = 0;
-        _recentReadFiles.Clear();
-        _lastOperationType = null;
-
-        AnsiConsole.WriteLine();
-
-        _requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var token = _requestCts.Token;
-        StartCancelKeyListener();
-
-        OpenReply();
-        try
-        {
-            var receivedFirstChunk = false;
-            var stream = string.IsNullOrWhiteSpace(hostInstruction)
-                ? AI.ChatStreamAsync(input, token)
-                : AI.ChatStreamWithHostInstructionAsync(input, hostInstruction, token);
-            var enumerator = stream.GetAsyncEnumerator(token);
-
-            try
-            {
-                // Show our controllable spinner while waiting for first chunk
-                // This spinner can be stopped by HandleDiffApproval when it needs user input
-                Spinner.Start("Thinking...");
-
-                if (await enumerator.MoveNextAsync())
-                {
-                    receivedFirstChunk = true;
-                    Snapshots.ClearImports();
-                }
-
-                Spinner.Stop();
-
-                if (!receivedFirstChunk)
-                {
-                    AnsiConsole.MarkupLine("[yellow]No response from model. The request may have exceeded the model's context window.[/]");
-                    AnsiConsole.MarkupLine("[dim]Try a smaller request, or switch to a model with a larger context window via /config.[/]");
-                }
-
-                // Buffer all chunks, then render as rich markdown
-                if (receivedFirstChunk)
-                {
-                    var responseBuffer = new System.Text.StringBuilder();
-                    var lineBuffer = new System.Text.StringBuilder();
-                    var showSpinnerBeforeNextChunk = false;
-
-                    // Each chunk is one finished turn. Print what of it wasn't already printed at a
-                    // tool call, so each turn reads in the order it happened.
-                    void AccumulateChunk(string chunk)
-                    {
-                        // Peer reports carry the final completed assistant turn, rather than all
-                        // of the narration preceding tool calls. The receiver keeps the full transcript.
-                        if (!string.IsNullOrWhiteSpace(chunk)) _lastCompletedReply = chunk.Trim();
-                        var unprinted = SettleReply(chunk);
-                        if (unprinted.Length > 0)
-                        {
-                            PrintReplyHeading();
-                            RenderMarkdownGuarded(unprinted);
-                        }
-
-                        responseBuffer.Append(chunk);
-                        foreach (char c in chunk)
-                        {
-                            if (c == '\n')
-                            {
-                                if (lineBuffer.ToString().Contains('\u2699'))
-                                    showSpinnerBeforeNextChunk = true;
-                                lineBuffer.Clear();
-                            }
-                            else if (c != '\r')
-                            {
-                                lineBuffer.Append(c);
-                            }
-                        }
-                    }
-
-                    AccumulateChunk(enumerator.Current);
-
-                    var hasMore = true;
-                    while (hasMore)
-                    {
-                        if (showSpinnerBeforeNextChunk)
-                        {
-                            showSpinnerBeforeNextChunk = false;
-                            Spinner.Start();
-                            hasMore = await enumerator.MoveNextAsync();
-                            Spinner.Stop();
-                        }
-                        else
-                        {
-                            hasMore = await enumerator.MoveNextAsync();
-                        }
-
-                        if (hasMore)
-                            AccumulateChunk(enumerator.Current);
-                    }
-
-                    // Every turn is on screen by now; the joined text is for history and checks.
-                    var responseText = responseBuffer.ToString().Trim();
-                    if (string.IsNullOrEmpty(responseText))
-                    {
-                        _lastRequestError = "The model returned no answer.";
-                        AnsiConsole.MarkupLine("[yellow]Model returned an empty response. The context may be too large for this model.[/]");
-                        AnsiConsole.MarkupLine("[dim]Try a smaller request, or switch to a model with a larger context window via /config.[/]");
-                    }
-                    else
-                    {
-                        _lastAiResponse = responseText;
-
-                        // Add to chat history (ANSI capture deferred to Phase 2)
-                        _messages.Add(new ChatMsg
-                        {
-                            Role = "assistant",
-                            Text = responseText
-                        });
-                        if (responseText.Contains("Error: Connection to Ollama failed.", StringComparison.Ordinal)
-                            && !await CheckOllamaConnectionAsync())
-                        {
-                            _lastRequestError = "Connection to Ollama failed.";
-                            CloseReply();
-                            await HandleRetryCommandAsync();
-                            if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
-                        }
-
-                        // 401 auto-recovery: if the response is a 401 sign-in error,
-                        // immediately launch the cloud sign-in walkthrough so the user
-                        // can hit "Sign me in now" without typing /setup. Saves a step
-                        // every single time this hits.
-                        if (Looks401(responseText))
-                        {
-                            _lastRequestError = "The model requires sign-in.";
-                            await TryAutoSigninAfter401Async();
-                        }
-
-                        // Show per-response token summary on the left, matching the footer text style.
-                        if (Config.EnableTokenTracking)
-                        {
-                            var lastOp = TokenTracker.LastOperation;
-                            if (lastOp != null)
-                            {
-                                var inLabel = $"In {TokenTrackingService.FormatTokenCount(lastOp.PromptTokens)}";
-                                var outLabel = $"Out {TokenTrackingService.FormatTokenCount(lastOp.CompletionTokens)}";
-                                var tpsLabel = lastOp.TokensPerSecond.HasValue
-                                    ? $" · {lastOp.TokensPerSecond.Value:0.#} tok/s"
-                                    : "";
-                                var tokenSummary = $"{inLabel} · {outLabel}{tpsLabel}";
-                                AnsiConsole.WriteSpaced(new Text(tokenSummary, new Style(Color.Grey62)));
-                            }
-                        }
-
-                    }
-
-                    // Update title bar with latest model/project/token info
-                    ThemeService.UpdateStatusTitle();
-                }
-            }
-            finally
-            {
-                Spinner.Stop();
-                await enumerator.DisposeAsync();
-            }
-
-            AnsiConsole.WriteLine();
-
-            // Spinner ownership note: ExecuteAgentModelCallAsync starts a spinner per model call
-            // and never stops it — it has always relied on the caller. Before plans were deferred
-            // they ran inside the enumerator drain above, so that finally cleaned up. Now they run
-            // out here, so the plan run needs its own guarantee or the last step's spinner keeps
-            // animating after everything has finished.
-            //
-            // The model's turn is fully drained. Only now do we run any plan it proposed — the
-            // plan is a peer of the chat turn, not a child of the propose_plan tool call. Running
-            // it here is what lets the outer stall watchdog and request ceiling stay untouched
-            // (they've already completed), lets the prompt gate be held normally, and leaves the
-            // model with no open turn afterwards to redo the work in.
-            try
-            {
-                await RunPendingPlanAsync();
-            }
-            finally
-            {
-                Spinner.Stop();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            _lastRequestError = "Request cancelled.";
-            Spinner.Stop();
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Request cancelled.[/]");
-            AnsiConsole.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            _lastRequestError = ex.Message;
-            Spinner.Stop();
-            AnsiConsole.WriteLine($"Error: {ex.Message}");
-            AnsiConsole.WriteLine();
-            if (IsOllamaTransportFailure(ex))
-            {
-                CloseReply();
-                await HandleRetryCommandAsync();
-                if (_isConnected) AnsiConsole.MarkupLine("[dim]Connection restored. Send your request again to continue.[/]");
-            }
-        }
-        finally
-        {
-            CloseReply();
-            (Pane?.Session ?? TuiConsole.Current)?.CompleteToolTurn();
-            StopCancelKeyListener();
-            var oldCts = Interlocked.Exchange(ref _requestCts, null);
-            oldCts?.Dispose();
-
-            // Persist the conversation as of this turn for `mandocode --continue`.
-            // Runs on cancel too — whatever the history holds now is what "continue" means.
-            try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
-            catch { /* persistence must never break the chat */ }
-            SaveAgentHistory(false);
-        }
-    }
-
-    /// <summary>
-    /// Renders <paramref name="text"/> as markdown, guarded against rendering hangs on
-    /// malformed/huge content. The expensive part — building the renderable (Markdig parse,
-    /// HTML walk, regex linkify) — runs on a background task; a 1s grace passes before a
-    /// "Rendering..." spinner shows, with a hard cap of
-    /// <see cref="MandoCodeConfig.MarkdownRenderTimeoutSeconds"/>. On timeout or failure it
-    /// falls back to raw text. The console write happens ONLY on the calling thread (never
-    /// on the background task), so a build that overruns the timeout can't later dump a
-    /// second, garbled copy on top of the raw-text fallback. Shared by the direct-chat
-    /// response path and the per-step plan path so neither can freeze the interactive loop.
-    /// </summary>
-    private void RenderMarkdownGuarded(string text)
-    {
-        try
-        {
-            // Build off-thread but DON'T write from there. Building is the expensive,
-            // occasionally-pathological work; the write is fast. Keeping the write on the
-            // calling thread means that if the build overruns the timeout and we fall back
-            // to raw text, the orphaned task just finishes computing a renderable nobody
-            // reads and exits — it can't write to the console out of band and corrupt the
-            // view (or interleave with the next step's output). It also serializes the write
-            // with the surrounding imperative AnsiConsole output on this same thread.
-            // Large responses with many tables/code blocks can take 10+ seconds to build.
-            Spectre.Console.Rendering.IRenderable? renderable = null;
-            var buildTask = Task.Run(() =>
-                renderable = MarkdownHtmlRenderer.BuildRenderable(text, ProjectRoot.ProjectRoot, Pane is null ? null : new CliAgentDirectory(Pane).All.Select(p => p.Name).ToArray()));
-
-            // Show a spinner if the build takes more than 1 second. The remaining
-            // budget comes from config — big tool-grounded responses (MCP, many
-            // tables) can legitimately take 30+ seconds to build.
-            if (!buildTask.Wait(TimeSpan.FromSeconds(1)))
-            {
-                Spinner.Start("Rendering...");
-                var remainingSeconds = Math.Max(1, Config.MarkdownRenderTimeoutSeconds - 1);
-                if (!buildTask.Wait(TimeSpan.FromSeconds(remainingSeconds)))
-                {
-                    Spinner.Stop();
-                    // Build exceeded the configured budget — fall back to raw text. The
-                    // orphaned task finishes computing into a local nobody reads, then exits
-                    // without ever touching the console.
-                    Console.WriteLine();
-                    Console.Write(text);
-                    Console.WriteLine();
-                    AnsiConsole.MarkupLine($"[dim](markdown rendering timed out after {Config.MarkdownRenderTimeoutSeconds}s — showing raw text. Raise with /config or mandocode --config set renderTimeout 120)[/]");
-                    return;
-                }
-                Spinner.Stop();
-            }
-
-            // Build finished within budget (a faulted build rethrows out of Wait above and
-            // lands in the catch below). Write the rendered markdown on this thread.
-            if (renderable != null)
-                AnsiConsole.Write(renderable);
-        }
-        catch (Exception renderEx)
-        {
-            // A faulted Wait throws straight to here, skipping the Spinner.Stop() calls
-            // above — stop it so the "Rendering..." spinner doesn't leak. Stop() is idempotent.
-            Spinner.Stop();
-            System.Diagnostics.Debug.WriteLine($"[MandoCode] Render failed: {renderEx.Message}");
-            // Fallback to raw text if markdown rendering fails
-            Console.Write(text);
-        }
-    }
-
-    /// <summary>
-    /// Called by <see cref="PlanHandoff"/> when the model invokes propose_plan.
-    /// Shows the approval UI, runs execution if approved, and returns a summary
-    /// string that the model will see as the tool result.
-    /// </summary>
-    // Plain labels — ApprovalSelect carries the palette (green = proceed, warm gold =
-    // redirect/stop), so these stay markup-free for clean comparisons and scrollback echo.
-    private const string ExecutePlanLabel = "Execute plan";
-    private const string EditPlanStepLabel = "Edit a step";
-    private const string RejectPlanLabel = "One-shot it";
-    private const string CancelRequestLabel = "Cancel request";
-
-    // App-standard selection treatment for the remaining Spectre prompts — same
-    // black-on-deepskyblue1 as ApprovalSelect, DiffApprovalHandler, and the command
-    // autocomplete, so selection reads the same everywhere.
-    private static readonly Style SelectionHighlight = new(foreground: Color.Black, background: Color.DeepSkyBlue1);
-
-    // Plan-approval select bridge — mirrors the wizard TCS pattern above.
-    private bool _planSelectActive;
-    private TaskCompletionSource<string>? _planSelectTcs;
-    private static readonly ApprovalSelect.Option[] ProposedPlanOptions =
-    {
-        new(ExecutePlanLabel, Color.Green),
-        new(EditPlanStepLabel, Color.DeepSkyBlue1),
-        new(RejectPlanLabel, new Color(255, 200, 80)),
-        new(CancelRequestLabel, new Color(255, 200, 80)),
-    };
-
-    /// <summary>
-    /// Shows the VDOM plan-approval select and awaits the user's choice. Observes
-    /// <paramref name="ct"/> so a cancelled request (Esc, timeout) unwinds the await
-    /// instead of leaving the turn stuck at an orphaned prompt.
-    /// </summary>
-    private IReadOnlyList<ApprovalSelect.Option> _planSelectOptions = ProposedPlanOptions;
-
-    private Task<string> PromptPlanChoiceAsync(CancellationToken ct) =>
-        PromptPlanChoiceAsync("The assistant proposes this plan. What would you like to do?", ProposedPlanOptions, ct);
-
-    private async Task<string> PromptPlanChoiceAsync(string title, IReadOnlyList<ApprovalSelect.Option> options, CancellationToken ct)
-    {
-        _planSelectOptions = options;
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _planSelectTcs = tcs;
-        using var cancelReg = ct.Register(() => tcs.TrySetCanceled(ct));
-
-        // Title goes to scrollback imperatively (same as WizardPromptSelectAsync) so the
-        // VDOM region holds only the option rows — keeps the live-repaint area minimal.
-        AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
-
-        _planSelectActive = true;
-        await InvokeAsync(StateHasChanged);
-
-        string choice;
-        try
-        {
-            choice = await tcs.Task;
-        }
-        finally
-        {
-            _planSelectActive = false;
-            _planSelectTcs = null;
-            await InvokeAsync(StateHasChanged);
-            // Brief wait so the VDOM tears down the select before imperative writes
-            // (matches the wizard primitives' teardown delay).
-            await Task.Delay(50);
-        }
-
-        // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
-        Console.WriteLine($"\u001b[38;2;255;200;80m> {choice}\u001b[0m");
-        return choice;
-    }
-
-    private void HandlePlanSelectSubmit(string choice)
-    {
-        _planSelectTcs?.TrySetResult(choice);
-    }
-
-    /// <summary>
-    /// One line during <c>--continue</c> startup when this project has an unfinished plan.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Shown only for <c>--continue</c>, because that is this app's existing "pick up where I left
-    /// off" gesture. Launching without it means a fresh session, and a plan from a previous one is
-    /// noise there. It also keeps the two halves of "where I left off" together: a resumed plan
-    /// runs with the conversation it came from rather than without it.
-    /// </para>
-    /// <para>
-    /// It notifies rather than resuming. Resuming writes files, and doing that automatically at
-    /// launch would let a plan the user had walked away from start changing their project before
-    /// they had read a single line.
-    /// </para>
-    /// </remarks>
-    private void ShowUnfinishedPlanNotice()
-    {
-        try
-        {
-            if (!PlanRunners.SupportsResume) return;
-
-            var saved = PlanRunners.FindResumable(out _);
-            if (saved == null) return;
-
-            var outstanding = PlanCheckpointStore.OutstandingSteps(saved);
-            if (outstanding == 0) return;
-
-            var done = saved.Steps.Count - outstanding;
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine(
-                $"[yellow]Unfinished plan:[/] {Spectre.Console.Markup.Escape(saved.Goal)} " +
-                $"[dim]({done} of {saved.Steps.Count} steps done)[/]");
-            AnsiConsole.MarkupLine("[dim]/plan-resume[/] to continue, [dim]/plan-discard[/] to forget it.");
-            AnsiConsole.WriteLine();
-        }
-        catch { /* a notice must never stop the session starting */ }
-    }
-
-    /// <summary>
-    /// `/plan` — inspect, resume or discard the plan recorded for this project.
-    /// </summary>
-    /// <remarks>
-    /// Only the workflow engine records progress, so only it can be resumed; the legacy runner
-    /// keeps the plan in a local variable that dies with the process. The command says so rather
-    /// than reporting "nothing to resume", which would be indistinguishable from having lost work.
-    /// </remarks>
-    private async Task HandlePlanCommandAsync(string arg)
-    {
-        AnsiConsole.WriteLine();
-
-        if (!string.IsNullOrWhiteSpace(arg) && arg is not "resume" and not "discard")
-        {
-            await ForcePlanAsync(arg);
-            return;
-        }
-
-        if (arg == "discard")
-        {
-            PlanRunners.DiscardResumable();
-            AnsiConsole.MarkupLine("[dim]Saved plan discarded.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        var saved = PlanRunners.FindResumable(out var refusal);
-
-        if (refusal != null)
-        {
-            // Explain rather than silently offering nothing — the plan is on disk, it just can't
-            // be safely continued as things stand.
-            AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(refusal)}[/]");
-            AnsiConsole.MarkupLine("[dim]Use[/] /plan-discard [dim]to forget it.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        if (saved == null)
-        {
-            AnsiConsole.MarkupLine("[dim]No unfinished plan for this project.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        var outstanding = PlanCheckpointStore.OutstandingSteps(saved);
-        var done = saved.Steps.Count - outstanding;
-
-        if (arg != "resume")
-        {
-            AnsiConsole.MarkupLine(
-                $"[deepskyblue1]Unfinished plan:[/] {Spectre.Console.Markup.Escape(saved.Goal)}");
-            AnsiConsole.MarkupLine($"[dim]{done} of {saved.Steps.Count} steps done.[/]");
-            AnsiConsole.WriteLine();
-            DisplaySavedPlan(saved);
-            AnsiConsole.MarkupLine("[dim]/plan-resume[/] to continue, [dim]/plan-discard[/] to forget it.");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        AnsiConsole.MarkupLine(
-            $"[green]Resuming:[/] {Spectre.Console.Markup.Escape(saved.Goal)} " +
-            $"[dim]({outstanding} step(s) left)[/]");
-        AnsiConsole.WriteLine();
-
-        // The plan was started in a process that no longer exists, so nothing has told the agent
-        // what request it is fulfilling. Steps treat that request as authoritative for WHERE work
-        // happens, so without it a resumed plan can write to the wrong place entirely.
-        AI.SetRequestContext(saved.Goal);
-
-        // Steps already Completed or Skipped keep that status, so the runner steps over them and
-        // only outstanding work executes. ResumeAsync also seeds what earlier steps produced.
-        var plan = PlanCheckpointStore.ToPlan(saved);
-
-        _requestCts = new CancellationTokenSource();
-        StartCancelKeyListener();
-        try
-        {
-            using var execution = PlanHandoff.BeginResumedExecution(saved.FileOperations);
-            var runner = PlanRunners.Current as WorkflowPlanRunner;
-            var progress = runner != null
-                ? runner.ResumeAsync(plan, saved, _requestCts.Token)
-                : PlanRunners.Current.ExecutePlanAsync(plan, _requestCts.Token);
-
-            await foreach (var progressEvent in progress)
-            {
-                await HandleProgressEventAsync(progressEvent, plan, _requestCts.Token);
-            }
-
-            if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !_requestCts.IsCancellationRequested)
-                await ReviewReplacementPlanAsync(plan, revisedInstructions, _requestCts.Token);
-            var manifest = PlanHandoff.BuildManifest(plan, PlanHandoff.FileOperations);
-            AI.AppendAssistantNote(manifest);
-        }
-        catch (OperationCanceledException)
-        {
-            AnsiConsole.MarkupLine("[yellow]Resume cancelled.[/]");
-        }
-        finally
-        {
-            Spinner.Stop();
-            StopCancelKeyListener();
-            var oldCts = Interlocked.Exchange(ref _requestCts, null);
-            oldCts?.Dispose();
-        }
-
-        AnsiConsole.WriteLine();
-    }
-
-    private Task ForcePlanAsync(string goal) => ForcePlanAsync(goal, goal);
-
-    private async Task ForcePlanAsync(string planningRequest, string originalRequest)
-    {
-        _requestCts = new CancellationTokenSource();
-        StartCancelKeyListener();
-        var rejected = false;
-        try
-        {
-            AI.AppendUserNote(originalRequest);
-            Spinner.Start("Creating plan...");
-            var proposal = await AI.GeneratePlanAsync(planningRequest, cancellationToken: _requestCts.Token);
-            Spinner.Stop();
-            _lastPlanOutcome = PlanTurnOutcome.None;
-            var manifest = await PlanHandoff.ProcessAsync(
-                proposal.Goal, proposal.Steps, _requestCts.Token, originalRequest: originalRequest);
-            rejected = _lastPlanOutcome == PlanTurnOutcome.Rejected;
-            if (_lastPlanOutcome == PlanTurnOutcome.Executed && !string.IsNullOrWhiteSpace(manifest))
-                AI.AppendAssistantNote(manifest);
-        }
-        catch (OperationCanceledException)
-        {
-            AnsiConsole.MarkupLine("[yellow]Planning cancelled.[/]");
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Could not create plan:[/] {Spectre.Console.Markup.Escape(ex.Message)}");
-        }
-        finally
-        {
-            Spinner.Stop();
-            StopCancelKeyListener();
-            var oldCts = Interlocked.Exchange(ref _requestCts, null);
-            oldCts?.Dispose();
-        }
-
-        if (rejected)
-        {
-            await ProcessDirectRequestAsync(
-                "Proceed with my original request directly.",
-                "The user reviewed the forced plan and chose to skip stepwise execution. " +
-                "Answer the request directly now. Do not call propose_plan.");
-            PlanHandoff.ClearPendingProposal();
-        }
-    }
-
-    private static void DisplaySavedPlan(PlanRunState saved)
-    {
-        var table = new Spectre.Console.Table { Border = TableBorder.Rounded };
-        table.AddColumn("Step");
-        table.AddColumn("Description");
-        table.AddColumn("Status");
-
-        foreach (var step in saved.Steps)
-        {
-            var status = step.Status switch
-            {
-                TaskStepStatus.Completed => "[green]done[/]",
-                TaskStepStatus.Skipped => "[dim]skipped[/]",
-                TaskStepStatus.Failed => "[red]failed[/]",
-                _ => "[yellow]pending[/]",
-            };
-            table.AddRow(
-                step.Number.ToString(),
-                Spectre.Console.Markup.Escape(step.Description),
-                status);
-        }
-
-        AnsiConsole.Write(table);
-        AnsiConsole.WriteLine();
-    }
-
-    private enum PlanTurnOutcome { None, Executed, Rejected, Cancelled }
-
-    private PlanTurnOutcome _lastPlanOutcome = PlanTurnOutcome.None;
-
-    // Bounds the answer-directly follow-up to a single extra turn. Without it a model that responds
-    // to a rejection by proposing another plan could ping-pong indefinitely.
-    private int _planFollowUpDepth;
-
-    /// <summary>
-    /// Runs a plan the model proposed during the turn that just finished, then records the outcome
-    /// in chat history. No-op when no plan was proposed.
-    /// </summary>
-    /// <remarks>
-    /// An executed plan's manifest goes into history as an assistant note rather than being fed back
-    /// to the model for a closing turn. That is deliberate: giving the model an open turn after a
-    /// plan is exactly what used to make it redo the work, and no amount of "the files already
-    /// exist" phrasing reliably stopped it.
-    /// <para>
-    /// A rejected plan is the one case that does need another turn — the user asked for a direct
-    /// answer instead of stepwise execution, and before plans were deferred the model got that for
-    /// free by simply continuing its open turn.
-    /// </para>
-    /// </remarks>
-    private async Task RunPendingPlanAsync()
-    {
-        if (!PlanHandoff.HasPendingProposal) return;
-
-        // Already inside the post-rejection follow-up: the user has just declined a plan, so
-        // silently running another one would be the opposite of what they asked for.
-        if (_planFollowUpDepth > 0)
-        {
-            PlanHandoff.ClearPendingProposal();
-            return;
-        }
-
-        var ct = _requestCts?.Token ?? CancellationToken.None;
-
-        // The user cancelled this turn; running the plan it proposed is the opposite of what they
-        // asked for, and leaving it queued would run it at the end of some later, unrelated turn.
-        if (ct.IsCancellationRequested)
-        {
-            PlanHandoff.ClearPendingProposal();
-            return;
-        }
-
-        _lastPlanOutcome = PlanTurnOutcome.None;
-        var manifest = await PlanHandoff.RunPendingPlanAsync(ct);
-
-        if (_lastPlanOutcome == PlanTurnOutcome.Rejected)
-        {
-            _planFollowUpDepth++;
-            try
-            {
-                await ProcessDirectRequestAsync(
-                    "Continue with my original request.",
-                    "The user reviewed your proposed plan and chose to skip stepwise execution. "
-                  + "Answer their original request directly now. Do not call propose_plan.");
-            }
-            finally
-            {
-                _planFollowUpDepth--;
-            }
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(manifest)) return;
-
-        AI.AppendAssistantNote(manifest);
-
-        // Keep --continue honest: the plan's outcome is part of this turn.
-        try { if (Pane is null || Pane.Id == 1) SessionResumeStore.Save(ProjectRoot.ProjectRoot, AI.ExportHistoryJson()); }
-        catch { /* persistence must never break the chat */ }
-            SaveAgentHistory(false);
-    }
-
-    private async Task<string> HandleProposedPlanAsync(TaskPlan plan, CancellationToken ct)
-    {
-        string choice;
-        // Serialize the plan-approval prompt against the diff/command/MCP prompts — the
-        // model can emit propose_plan alongside another approval-gated tool call in the
-        // same response. Held ONLY around the prompt, never around plan execution: the
-        // plan's own step approvals acquire this same gate, so holding it across
-        // ExecutePlanAsync would deadlock the first step.
-        using (await PromptGate.AcquireAsync(ct))
-        {
-            // Stop the outer "Thinking..." spinner so it doesn't fight the approval prompt.
-            Spinner.Stop();
-
-            // One suppression scope spans the approval menu AND every follow-up step picker/editor.
-            // Ending it after the first menu lets the background Escape listener race RazorConsole's
-            // keyboard pump and silently steal arrow presses and typed characters.
-            using (KeyCoordinator.Suppress())
-            {
-                // Loops so editing a step returns to the menu: reviewing a plan is iterative, and
-                // being forced to approve or reject immediately after one edit defeats the point.
-                while (true)
-                {
-                    AnsiConsole.WriteLine();
-                    DisplayPlan(plan);
-
-                    // VDOM select instead of a Spectre SelectionPrompt — Spectre's blocking
-                    // ReadKey races RazorConsole's keyboard pump and intermittently lost arrow
-                    // presses (see ApprovalSelect.razor).
-                    choice = await PromptPlanChoiceAsync(ct);
-
-                    if (choice != EditPlanStepLabel) break;
-
-                    await EditPlanStepAsync(plan, ct);
-                }
-            }
-        }
-
-        if (choice == CancelRequestLabel)
-        {
-            _lastPlanOutcome = PlanTurnOutcome.Cancelled;
-            AnsiConsole.MarkupLine("[dim]Plan cancelled.[/]");
-            AnsiConsole.WriteLine();
-            // Cancel the token rather than trusting a "stop here" string. This predates deferred
-            // execution — observed live, the model received exactly that string and went on to
-            // execute the cancelled plan's steps itself via direct tool calls. The model has no
-            // open turn to do that in any more, but cancelling is still what unwinds the plan run
-            // itself (same path as Esc), so it stays.
-            _requestCts?.Cancel();
-            return "User cancelled the request. Stop here and do not take further action.";
-        }
-
-        if (choice == RejectPlanLabel)
-        {
-            _lastPlanOutcome = PlanTurnOutcome.Rejected;
-            AnsiConsole.MarkupLine("[dim]Plan skipped — one-shotting your request.[/]");
-            AnsiConsole.WriteLine();
-            // The caller turns this into a fresh follow-up turn: with execution deferred there is
-            // no open turn left for the model to answer in, so one is started explicitly.
-            return "User rejected the proposed plan.";
-        }
-
-        _lastPlanOutcome = PlanTurnOutcome.Executed;
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[green]Executing plan...[/]");
-        AnsiConsole.WriteLine();
-
-        try
-        {
-            await foreach (var progressEvent in PlanRunners.Current.ExecutePlanAsync(plan, ct))
-            {
-                await HandleProgressEventAsync(progressEvent, plan, ct);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            Spinner.Stop();
-            PlanRunners.Current.CancelPlan(plan);
-        }
-
-        if (PlanHandoff.TakeReplacementInstructions() is { } revisedInstructions && !ct.IsCancellationRequested)
-            return await ReviewReplacementPlanAsync(plan, revisedInstructions, ct);
-
-        AnsiConsole.WriteLine();
-        if (plan.Status == TaskPlanStatus.Completed)
-        {
-            AnsiConsole.MarkupLine("[green]Plan completed successfully![/]");
-        }
-        else if (plan.Status == TaskPlanStatus.CompletedWithIssues)
-        {
-            AnsiConsole.MarkupLine("[yellow]Plan completed with skipped or failed steps.[/]");
-        }
-        else if (plan.Status == TaskPlanStatus.Cancelled)
-        {
-            AnsiConsole.MarkupLine("[yellow]Plan was cancelled.[/]");
-        }
-        else if (plan.Status == TaskPlanStatus.Paused)
-        {
-            AnsiConsole.MarkupLine("[yellow]Plan paused; outstanding work remains saved.[/]");
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Plan completed with errors.[/]");
-        }
-
-        if (!string.IsNullOrEmpty(plan.ExecutionSummary))
-        {
-            AnsiConsole.MarkupLine($"[dim]{Spectre.Console.Markup.Escape(plan.ExecutionSummary)}[/]");
-        }
-        AnsiConsole.WriteLine();
-
-        // The summary alone is pure information — small models treat an open turn as an
-        // invitation to keep building (observed: a completed 5-step plan was followed by
-        // an uninvited duplicate project AND a third plan proposal). End with an explicit
-        // stop directive; the scope-level one-plan-per-turn circuit backs it up mechanically.
-        var summary = plan.ExecutionSummary
-               ?? $"Plan finished with status {plan.Status}.";
-        return summary +
-               "\n\nThe plan has finished. Respond to the user now with a brief summary of the outcome. " +
-               "Do NOT create more files, call more tools, or propose another plan.";
-    }
-
-    private async Task<string> ReviewReplacementPlanAsync(TaskPlan oldPlan, string instructions, CancellationToken ct)
-    {
-        AnsiConsole.MarkupLine("[yellow]The previous plan was stopped because you changed the instructions. Review a replacement before work resumes.[/]");
-        var updatedRequest = $"Original request:\n{oldPlan.OriginalRequest}\n\nLatest user instructions (supersede conflicting earlier requirements):\n{instructions}";
-        AI.AppendUserNote(instructions);
-        AI.SetRequestContext(updatedRequest);
-        Spinner.Start("Creating replacement plan...");
-        TaskPlan replacement;
-        try
-        {
-            var context = "The previous plan was cancelled. Generate new steps and acceptance criteria for the latest instructions. " +
-                "Inspect existing work and retain completed changes that still satisfy the updated request; do not execute tools or repeat work while planning.\n" +
-                "Earlier step results:\n" + string.Join("\n", oldPlan.Steps.Select(step => $"{step.Description}: {step.Result ?? step.ErrorMessage ?? step.Status.ToString()}")) +
-                "\nObserved file changes:\n" + string.Join("\n", PlanHandoff.FileOperations.Select(op => $"{op.Operation}: {op.Path}"));
-            var proposal = await AI.GeneratePlanAsync(updatedRequest, context, ct);
-            replacement = new TaskPlan { OriginalRequest = updatedRequest, Steps = TaskPlannerService.FromProposals(proposal.Steps), Status = TaskPlanStatus.Pending };
-            if (replacement.Steps.Count == 0) throw new InvalidOperationException("The replacement plan contained no steps; the previous plan remains stopped.");
-            PlanFinalQuality.Ensure(replacement);
-        }
-        finally { Spinner.Stop(); }
-        var summary = await HandleProposedPlanAsync(replacement, ct);
-        // The outer handoff builds its manifest from the same plan object. Carry the
-        // reviewed replacement's outcome back so it never reports the stale criteria.
-        oldPlan.OriginalRequest = replacement.OriginalRequest;
-        oldPlan.Steps = replacement.Steps;
-        oldPlan.Status = replacement.Status;
-        oldPlan.ExecutionSummary = replacement.ExecutionSummary;
-        return summary;
-    }
-
-    /// <summary>
-    /// Renders the proposed plan for approval, including each step's instruction.
-    /// </summary>
-    /// <remarks>
-    /// The instruction is shown because it is the text actually sent to the model — the
-    /// description is a ≤60-character label for this table and nothing else. Showing only the
-    /// label meant approving work you had not read: two steps can look identical in summary and
-    /// target completely different files.
-    /// </remarks>
-    private void DisplayPlan(TaskPlan plan)
-    {
-        var table = new Spectre.Console.Table()
-            .Border(TableBorder.Rounded)
-            .AddColumn(new TableColumn("Step").Centered())
-            .AddColumn(new TableColumn("Description"))
-            .AddColumn(new TableColumn("What it will do"));
-
-        foreach (var step in plan.Steps)
-        {
-            var instruction = step.Instruction ?? "";
-            if (step.AcceptanceCriteria.Count > 0) instruction += "\n\n" + PlanAcceptance.Describe(step);
-            // Wrapped rather than truncated: a clipped instruction is the same problem as showing
-            // none — you cannot approve what you cannot read.
-            table.AddRow(
-                $"[deepskyblue1]{step.StepNumber}[/]",
-                Spectre.Console.Markup.Escape(step.Description),
-                $"[dim]{Spectre.Console.Markup.Escape(instruction)}[/]"
-            );
-        }
-
-        AnsiConsole.MarkupLine("[deepskyblue1]Created plan:[/]");
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(table);
-        AnsiConsole.WriteLine();
-    }
-
-    /// <summary>
-    /// Lets the user rewrite a step's instruction before the plan runs.
-    /// </summary>
-    /// <remarks>
-    /// Edits the instruction, not the description: the description is a display label, so changing
-    /// it would alter what the table says without changing what actually happens — the worst of
-    /// both. The step's own text is the thing with consequences.
-    /// </remarks>
-    private async Task<bool> EditPlanStepAsync(
-        TaskPlan plan,
-        CancellationToken ct,
-        int minimumStepNumber = 1,
-        bool reviseFollowingSteps = true)
-    {
-        // This method owns two consecutive VDOM inputs (row selector, then text editor).
-        // Keep the background Escape listener out even if a future caller forgets to suppress it.
-        using var keyboardOwnership = KeyCoordinator.Suppress();
-
-        AnsiConsole.WriteLine();
-
-        const string goBackLabel = "Go back";
-        var selectableSteps = plan.Steps
-            .Where(candidate => candidate.StepNumber >= minimumStepNumber)
-            .ToArray();
-        if (selectableSteps.Length == 0)
-        {
-            AnsiConsole.MarkupLine("[dim]No step selected.[/]");
-            AnsiConsole.WriteLine();
-            return false;
-        }
-
-        var stepLabels = selectableSteps
-            .Select(candidate => $"Step {candidate.StepNumber} — {candidate.Description}")
-            .Append(goBackLabel)
-            .ToArray();
-        var stepOptions = stepLabels
-            .Select((label, index) => new ApprovalSelectCoordinator.Option(
-                label,
-                index < selectableSteps.Length ? Color.DeepSkyBlue1 : new Color(255, 200, 80)))
-            .ToArray();
-
-        // ApprovalSelect keeps a stable row shape while repainting both the highlight and cursor.
-        // RazorConsole's generic Select left its '>' marker behind on the first row even while the
-        // highlight moved. The custom component was written specifically to avoid that VDOM diff bug.
-        AnsiConsole.MarkupLine("[deepskyblue1]Select a step to edit (Up/Down, Enter):[/]");
-        var selectedLabel = await ApprovalMenu.RequestAsync(stepOptions);
-
-        if (selectedLabel == goBackLabel)
-        {
-            AnsiConsole.MarkupLine("[dim]No step selected.[/]");
-            AnsiConsole.WriteLine();
-            return false;
-        }
-
-        var selectedIndex = Array.IndexOf(stepLabels, selectedLabel);
-        if (selectedIndex < 0 || selectedIndex >= selectableSteps.Length)
-            return false;
-
-        var step = selectableSteps[selectedIndex];
-
-        var revised = await InstructionCoordinator.RequestAsync(
-            $"Edit step {step.StepNumber} instruction",
-            step.Instruction, multiline: true);
-
-        if (string.IsNullOrWhiteSpace(revised) ||
-            string.Equals(revised.Trim(), step.Instruction?.Trim(), StringComparison.Ordinal))
-        {
-            AnsiConsole.MarkupLine("[dim]Left unchanged.[/]");
-            AnsiConsole.WriteLine();
-            return false;
-        }
-
-        var trimmed = revised.Trim();
-        step.Instruction = trimmed;
-        step.AcceptanceCriteria = [trimmed];
-        // A stale label makes the review table misleading, so always derive it from the edited text.
-        step.Description = trimmed.Length > 60 ? trimmed[..57] + "..." : trimmed;
-
-        AnsiConsole.MarkupLine($"[green]Step {step.StepNumber} updated.[/]");
-        AnsiConsole.WriteLine();
-
-        if (reviseFollowingSteps && plan.Steps.Any(candidate => candidate.StepNumber > step.StepNumber))
-            await ReviseFollowingStepsAfterEditAsync(plan, step, ct);
-
-        return true;
-    }
-
-    private async Task ReviseFollowingStepsAfterEditAsync(
-        TaskPlan plan,
-        TaskStep editedStep,
-        CancellationToken ct)
-    {
-        AnsiConsole.MarkupLine(
-            $"[dim]Updating steps after {editedStep.StepNumber} so they stay consistent with your edit...[/]");
-        Spinner.Start("Updating dependent steps...");
-
-        try
-        {
-            var earlier = plan.Steps
-                .Where(step => step.StepNumber < editedStep.StepNumber)
-                .Select(step => $"Step {step.StepNumber}: {step.Description}\nInstruction: {step.Instruction}");
-            var later = plan.Steps
-                .Where(step => step.StepNumber > editedStep.StepNumber)
-                .Select(step => $"Step {step.StepNumber}: {step.Description}\nInstruction: {step.Instruction}");
-            var context =
-                $"The user edited step {editedStep.StepNumber}. Their edited instruction is authoritative and must not be changed:\n" +
-                $"{editedStep.Instruction}\n\n" +
-                "Earlier steps that must remain unchanged:\n" + string.Join("\n\n", earlier) + "\n\n" +
-                "Return only replacement steps that come after the edited step. Update paths, values, and verification " +
-                "expectations so they are consistent with the edit. State each replacement as the actual work to execute; " +
-                "never say to replace, update, or revise a plan step, and never refer to old step numbers. " +
-                "Do not repeat earlier or edited steps.\n\n" +
-                "Current later steps to replace:\n" + string.Join("\n\n", later);
-
-            var revision = await AI.GeneratePlanAsync(plan.OriginalRequest, context, ct);
-            if (revision.Steps.Length == 1 &&
-                revision.Steps[0].description == "Complete the requested goal" &&
-                revision.Steps[0].instruction == plan.OriginalRequest.Trim())
-                throw new InvalidOperationException("The model did not return a usable dependent-step revision.");
-
-            var candidate = PlanRevision.CreateFollowingCandidate(plan, editedStep.StepNumber, revision);
-            PlanRevision.ApplyFollowing(plan, editedStep.StepNumber, candidate);
-            AnsiConsole.MarkupLine(
-                "[green]Dependent steps updated.[/] [dim]Review the complete plan before executing it.[/]");
-            AnsiConsole.WriteLine();
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine(
-                $"[yellow]Could not update dependent steps automatically:[/] {Spectre.Console.Markup.Escape(ex.Message)}");
-            AnsiConsole.MarkupLine("[dim]Review the later steps manually before execution.[/]");
-            AnsiConsole.WriteLine();
-        }
-        finally
-        {
-            Spinner.Stop();
-        }
-    }
-
-    private async Task HandleProgressEventAsync(
-        TaskProgressEvent progressEvent,
-        TaskPlan plan,
-        CancellationToken ct)
-    {
-        switch (progressEvent.ProgressType)
-        {
-            case TaskProgressType.StepActivity:
-                Spinner.UpdateActivity(progressEvent.Message ?? "Checking step...");
-                break;
-
-            case TaskProgressType.PlanPaused:
-                Spinner.Stop();
-                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Plan paused.")}[/]");
-                AnsiConsole.MarkupLine("[dim]Outstanding work is saved. Use /plan-resume to continue.[/]");
-                break;
-
-            case TaskProgressType.PersistenceWarning:
-                AnsiConsole.MarkupLine($"[yellow]{Spectre.Console.Markup.Escape(progressEvent.Message ?? "Plan progress could not be saved.")}[/]");
-                break;
-
-            case TaskProgressType.StepStarted:
-                Spinner.Stop();
-                _recentReadCount = 0;
-                _recentReadFiles.Clear();
-                _lastOperationType = null;
-                SpinnerService.SetTaskbarProgress((progressEvent.CurrentStep - 1) * 100 / progressEvent.TotalSteps);
-                AnsiConsole.MarkupLine($"[deepskyblue1]Step {progressEvent.CurrentStep}/{progressEvent.TotalSteps}:[/] {Spectre.Console.Markup.Escape(progressEvent.StepDescription)}");
-                AnsiConsole.WriteLine();
-                Spinner.Start("Working...");
-                break;
-
-            case TaskProgressType.StepCompleted:
-                Spinner.Stop();
-                SpinnerService.SetTaskbarProgress(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
-                if (!string.IsNullOrEmpty(progressEvent.Message))
-                {
-                    // Render through the same guarded markdown pipeline as non-plan AI
-                    // responses so **bold**, lists, inline code, and file-path linkification
-                    // match — AND so a malformed/huge step message can't hang the plan loop.
-                    // Without the guard, one bad step's render froze the whole multi-step run.
-                    RenderMarkdownGuarded(progressEvent.Message);
-                }
-                AnsiConsole.MarkupLine($"[green]Step {progressEvent.CurrentStep} completed.[/]");
-                AnsiConsole.WriteLine();
-                break;
-
-            case TaskProgressType.StepFailed:
-                Spinner.Stop();
-                SpinnerService.SetTaskbarError(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
-                AnsiConsole.MarkupLine($"[red]Step {progressEvent.CurrentStep} failed:[/] {Spectre.Console.Markup.Escape(progressEvent.Message ?? "Unknown error")}");
-
-                // Cancellation is already the user's terminal decision. Diff/command approval
-                // cancellation reports a StepFailed event while also marking the plan cancelled;
-                // do not follow that with a contradictory retry/replan/skip prompt.
-                if (plan.Status == TaskPlanStatus.Cancelled || ct.IsCancellationRequested)
-                {
-                    SpinnerService.ClearTaskbarProgress();
-                    break;
-                }
-
-                // Ask user what to do
-                // Palette: green = try again, gold = redirect (skip), red = destructive.
-                const string retryStepLabel = "Retry this step";
-                const string revisePlanLabel = "Revise the remaining plan";
-                const string skipStepLabel = "Skip this step and continue";
-                const string cancelPlanLabel = "Cancel the plan";
-
-                var stepToDecide = plan.Steps.FirstOrDefault(s => s.StepNumber == progressEvent.CurrentStep);
-
-                // Retry is offered only on the workflow engine. The legacy runner walks the steps
-                // with a foreach and has already moved past this one — it has no way back.
-                var choices = new List<ApprovalSelect.Option>();
-                if (PlanRunners.UsingWorkflowEngine)
-                {
-                    choices.Add(new(retryStepLabel, Color.Green));
-                    choices.Add(new(revisePlanLabel, Color.DeepSkyBlue1));
-                }
-                choices.Add(new(skipStepLabel, new Color(255, 200, 80)));
-                choices.Add(new(cancelPlanLabel, Color.Red));
-
-                string failChoice;
-                using (await PromptGate.AcquireAsync(ct))
-                using (KeyCoordinator.Suppress())
-                {
-                    failChoice = await PromptPlanChoiceAsync("How would you like to proceed?", choices, ct);
-                }
-                if (failChoice == cancelPlanLabel)
-                {
-                    PlanRunners.Current.CancelPlan(plan);
-                }
-                else if (failChoice == retryStepLabel && stepToDecide != null)
-                {
-                    // Pending is the signal triage reads as "run this one again".
-                    stepToDecide.Status = TaskStepStatus.Pending;
-                    AnsiConsole.MarkupLine($"[dim]Retrying step {progressEvent.CurrentStep}...[/]");
-                    AnsiConsole.WriteLine();
-                }
-                else if (failChoice == revisePlanLabel && stepToDecide != null)
-                {
-                    var decision = await ReplanAfterFailureAsync(
-                        plan,
-                        stepToDecide,
-                        progressEvent.Message ?? "Unknown error",
-                        ct);
-                    if (decision == CliReplanDecision.Cancel)
-                        PlanRunners.Current.CancelPlan(plan);
-                    else if (decision == CliReplanDecision.KeepCurrent)
-                        PlanRunners.Current.SkipStep(plan, stepToDecide);
-                }
-                else if (stepToDecide != null)
-                {
-                    PlanRunners.Current.SkipStep(plan, stepToDecide);
-                    SpinnerService.SetTaskbarWarning(progressEvent.CurrentStep * 100 / progressEvent.TotalSteps);
-                }
-                break;
-
-            case TaskProgressType.PlanCompleted:
-                Spinner.Stop();
-                SpinnerService.ClearTaskbarProgress();
-                break;
-
-            case TaskProgressType.PlanCancelled:
-                Spinner.Stop();
-                SpinnerService.ClearTaskbarProgress();
-                break;
-        }
-    }
-
-    private enum CliReplanDecision { Applied, KeepCurrent, Cancel }
-
-    private async Task<CliReplanDecision> ReplanAfterFailureAsync(
-        TaskPlan plan,
-        TaskStep failedStep,
-        string error,
-        CancellationToken ct)
-    {
-        Spinner.Start("Revising plan...");
-        AnsiConsole.MarkupLine("[dim]Revising the unfinished portion of the plan...[/]");
-
-        TaskPlan candidate;
-        try
-        {
-            var settled = plan.Steps
-                .Where(step => step.StepNumber < failedStep.StepNumber)
-                .Select(step => $"Step {step.StepNumber} [{step.Status}]: {step.Description}\nResult: {step.Result ?? "(none)"}");
-            var remaining = plan.Steps
-                .Where(step => step.StepNumber >= failedStep.StepNumber)
-                .Select(step => $"Step {step.StepNumber}: {step.Description}\nInstruction: {step.Instruction}");
-            var context =
-                $"Failed step {failedStep.StepNumber}: {failedStep.Description}\n" +
-                $"Failure: {error}\n\n" +
-                "Settled earlier steps:\n" + string.Join("\n\n", settled) + "\n\n" +
-                "Return only replacements for the failed and later steps. State each replacement as the actual work to " +
-                "execute; never say to replace, update, or revise a plan step, and never refer to old step numbers. " +
-                "Do not repeat settled steps.\n\n" +
-                "Current failed and remaining steps to replace:\n" + string.Join("\n\n", remaining);
-
-            var revision = await AI.GeneratePlanAsync(plan.OriginalRequest, context, ct);
-            if (revision.Steps.Length == 1 &&
-                revision.Steps[0].description == "Complete the requested goal" &&
-                revision.Steps[0].instruction == plan.OriginalRequest.Trim())
-                throw new InvalidOperationException("The model did not return a usable revision.");
-
-            candidate = PlanRevision.CreateCandidate(plan, failedStep.StepNumber, revision);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Could not revise the plan:[/] {Spectre.Console.Markup.Escape(ex.Message)}");
-            return CliReplanDecision.KeepCurrent;
-        }
-        finally
-        {
-            Spinner.Stop();
-        }
-
-        const string useLabel = "Use revised plan";
-        const string editLabel = "Edit a step";
-        const string keepLabel = "Keep current plan and skip this step";
-        const string cancelLabel = "Cancel the plan";
-        string choice;
-
-        // Keep the background Escape listener suppressed across the revised-plan menu and
-        // its nested row selector/text editor. Releasing ownership between those VDOM inputs
-        // makes the listener consume their keys before RazorConsole sees them.
-        using (KeyCoordinator.Suppress())
-        {
-            while (true)
-            {
-                AnsiConsole.WriteLine();
-                DisplayPlan(candidate);
-                AnsiConsole.MarkupLine(
-                    $"[dim]Steps before {failedStep.StepNumber} are settled and will not run again.[/]");
-
-                using (await PromptGate.AcquireAsync(ct))
-                {
-                    choice = await PromptPlanChoiceAsync("Review the revised remaining plan",
-                        new ApprovalSelect.Option[]
-                        {
-                            new(useLabel, Color.Green),
-                            new(editLabel, Color.DeepSkyBlue1),
-                            new(keepLabel, new Color(255, 200, 80)),
-                            new(cancelLabel, Color.Red)
-                        }, ct);
-                }
-                if (choice == editLabel)
-                {
-                    await EditPlanStepAsync(
-                        candidate,
-                        ct,
-                        failedStep.StepNumber,
-                        reviseFollowingSteps: false);
-                    continue;
-                }
-                if (choice == cancelLabel) return CliReplanDecision.Cancel;
-                if (choice == keepLabel) return CliReplanDecision.KeepCurrent;
-
-                PlanRevision.ApplyApproved(plan, failedStep.StepNumber, candidate);
-                AnsiConsole.MarkupLine(
-                    $"[green]Revised plan approved[/] [dim]— resuming at step {failedStep.StepNumber} of {plan.Steps.Count}.[/]");
-                AnsiConsole.WriteLine();
-                return CliReplanDecision.Applied;
-            }
-        }
-    }
-
-
-    /// <summary>
-    /// Shows a fuzzy-searchable picker of installed skills and returns the selected skill
-    /// name (or null if the user cancels or no skills are installed). Uses Spectre's
-    /// SelectionPrompt with EnableSearch so typing filters the list.
-    /// </summary>
-    private string? PromptForSkill()
-    {
-        var skills = Skills.GetAll();
-        if (skills.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No skills installed.[/] Run [deepskyblue1]/skills[/] [yellow]for setup instructions.[/]");
-            AnsiConsole.WriteLine();
-            return null;
-        }
-
-        const string CancelChoice = "(cancel)";
-        const string Separator = "  —  ";
-
-        var entries = new List<string> { CancelChoice };
-        foreach (var s in skills)
-        {
-            entries.Add(string.IsNullOrWhiteSpace(s.Description)
-                ? s.Name
-                : s.Name + Separator + s.Description);
-        }
-
-        string selected;
-        try
-        {
-            selected = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[deepskyblue1]Select a skill to force:[/] [dim](type to filter)[/]")
-                    .HighlightStyle(SelectionHighlight)
-                    .PageSize(10)
-                    .MoreChoicesText("[dim](scroll for more)[/]")
-                    .EnableSearch()
-                    .AddChoices(entries)
-            );
-        }
-        catch (Exception)
-        {
-            AnsiConsole.WriteLine();
-            return null;
-        }
-
-        if (selected == CancelChoice)
-        {
-            AnsiConsole.WriteLine();
-            return null;
-        }
-
-        var dashIdx = selected.IndexOf(Separator, StringComparison.Ordinal);
-        return dashIdx > 0 ? selected[..dashIdx] : selected;
-    }
-
-    private async Task HandleForceSkillCommandAsync(string skillName)
-    {
-        AnsiConsole.WriteLine();
-
-        if (string.IsNullOrWhiteSpace(skillName))
-        {
-            var picked = PromptForSkill();
-            if (picked == null) return;
-            skillName = picked;
-        }
-
-        var skill = Skills.GetByName(skillName);
-        if (skill == null)
-        {
-            AnsiConsole.MarkupLine($"[red]No skill named[/] [deepskyblue1]{Spectre.Console.Markup.Escape(skillName)}[/] [red]is installed.[/]");
-            AnsiConsole.MarkupLine("[dim]Run[/] [deepskyblue1]/skills[/] [dim]to see available skills.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        if (!_isConnected || _modelError)
-        {
-            AnsiConsole.MarkupLine("[yellow]Cannot run skill — no model is connected.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        AnsiConsole.MarkupLine($"[green]✓ Forcing skill:[/] [deepskyblue1]{Spectre.Console.Markup.Escape(skill.Name)}[/]");
-        if (!string.IsNullOrWhiteSpace(skill.Description))
-        {
-            AnsiConsole.MarkupLine($"  [dim]{Spectre.Console.Markup.Escape(skill.Description)}[/]");
-        }
-        AnsiConsole.WriteLine();
-
-        var hostInstruction =
-            $"The user explicitly selected skill '{skill.Name}' via /force-skill. " +
-            $"Follow these instructions for this turn.\n\n# Skill: {skill.Name}\n\n{skill.Body}";
-
-        _messages.Add(new ChatMsg { Role = "user", Text = $"/force-skill {skill.Name}" });
-        await ProcessDirectRequestAsync($"/force-skill {skill.Name}", hostInstruction);
-    }
-
-    private async Task HandleMcpReloadCommandAsync()
-    {
-        var agents = (Pane?.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane?.Workspace.Panes ?? Array.Empty<AgentPane>()).ToArray();
-        if (agents.Any(agent => agent != Pane && agent.IsBusy?.Invoke() == true)) { AnsiConsole.MarkupLine("[yellow]Finish work in other agents before reloading shared integrations.[/]"); return; }
-        var coordinator = Services.GetRequiredService<CliIntegrationCoordinator>();
-        using var update = coordinator.BeginUpdate();
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]Reloading MCP servers...[/]");
-
-        await coordinator.ReloadMcpAsync(agents);
-
-        var active = McpManager.ActiveClients.Count;
-        var failed = McpManager.StartupErrors.Count;
-        AnsiConsole.MarkupLine(failed == 0
-            ? $"[green]MCP reloaded: {active} server(s) connected.[/]"
-            : $"[yellow]MCP reloaded: {active} connected, {failed} failed.[/]");
-        AnsiConsole.WriteLine();
-    }
-
-    /// <summary>
-    /// Lists tools exposed by one or all connected MCP servers, with descriptions.
-    /// If <paramref name="serverFilter"/> is null, iterates every active server.
-    /// </summary>
-    private async Task HandleMcpToolsCommandAsync(string? serverFilter)
-    {
-        AnsiConsole.WriteLine();
-
-        if (McpManager.ActiveClients.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No MCP servers are connected.[/]");
-            AnsiConsole.MarkupLine("[dim]Type /mcp to configure servers.[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        if (serverFilter != null && !McpManager.ActiveClients.ContainsKey(serverFilter))
-        {
-            AnsiConsole.MarkupLine($"[yellow]Server '{Spectre.Console.Markup.Escape(serverFilter)}' is not connected.[/]");
-            AnsiConsole.MarkupLine($"[dim]Connected: {string.Join(", ", McpManager.ActiveClients.Keys)}[/]");
-            AnsiConsole.WriteLine();
-            return;
-        }
-
-        var clients = serverFilter != null
-            ? new[] { (serverFilter, McpManager.ActiveClients[serverFilter]) }
-            : McpManager.ActiveClients.Select(kv => (kv.Key, kv.Value)).ToArray();
-
-        foreach (var (serverName, client) in clients)
-        {
-            IList<ModelContextProtocol.Client.McpClientTool> tools;
-            try
-            {
-                tools = await client.ListToolsAsync();
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(serverName)}:[/] [dim]{Spectre.Console.Markup.Escape(ex.Message)}[/]");
-                continue;
-            }
-
-            var table = new Table().Border(TableBorder.Rounded).Title($"[deepskyblue1]{Spectre.Console.Markup.Escape(serverName)}[/] [dim]({tools.Count} tool{(tools.Count == 1 ? "" : "s")})[/]");
-            table.AddColumn("Tool");
-            table.AddColumn("Description");
-            foreach (var t in tools)
-            {
-                var desc = string.IsNullOrWhiteSpace(t.Description) ? "[dim](no description)[/]" : Spectre.Console.Markup.Escape(t.Description);
-                table.AddRow(Spectre.Console.Markup.Escape(t.Name), desc);
-            }
-            AnsiConsole.Write(table);
-        }
-        AnsiConsole.WriteLine();
-    }
-
-    private async Task HandleLearnCommandAsync()
-    {
-        AnsiConsole.WriteLine();
-        LearnContent.Display();
-
-        if (_isConnected)
-        {
-            var wantChat = await WizardConfirmAsync("Chat with an AI educator to learn more?", false);
-            if (wantChat)
-            {
-                await AI.EnterLearnModeAsync();
-                AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[green]AI Educator mode active![/]");
-                AnsiConsole.MarkupLine("[dim]Ask me anything about local AI! Type /clear to return to normal mode.[/]");
-                AnsiConsole.WriteLine();
-            }
-        }
-    }
-
     private void HandleCopyCommand()
     {
         if (string.IsNullOrEmpty(_lastAiResponse))
@@ -3972,259 +2011,6 @@
 
         AnsiConsole.MarkupLine($"[green]Copied {matches.Count} code block(s) to clipboard[/] [dim]({codeContent.Length} chars)[/]");
         AnsiConsole.WriteLine();
-    }
-
-    private void HandleRabbitCommand()
-    {
-        // Katakana-style characters for the digital rain
-        var rainChars = "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ012345789:・.\"=*+-<>¦╌ꜝ";
-        var rng = Random.Shared;
-        var width = Math.Min(Console.WindowWidth, 120);
-        var height = Math.Min(Console.WindowHeight - 2, 24);
-
-        // Each column has a drop position (head of the rain streak)
-        var drops = new int[width];
-        for (int i = 0; i < width; i++)
-            drops[i] = rng.Next(-height, 0); // stagger start positions
-
-        Console.CursorVisible = false;
-        TuiConsole.Clear();
-
-        // Phase 1: Digital rain (~14 frames)
-        for (int frame = 0; frame < 14; frame++)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append("\u001b[H"); // cursor home
-
-            for (int row = 0; row < height; row++)
-            {
-                for (int col = 0; col < width; col++)
-                {
-                    int dropPos = drops[col];
-                    if (row == dropPos)
-                    {
-                        // Bright head of the streak
-                        sb.Append($"\u001b[97m{rainChars[rng.Next(rainChars.Length)]}\u001b[0m");
-                    }
-                    else if (row < dropPos && row > dropPos - 6)
-                    {
-                        // Green trail
-                        var fade = dropPos - row;
-                        var intensity = fade <= 2 ? "92" : fade <= 4 ? "32" : "2;32";
-                        sb.Append($"\u001b[{intensity}m{rainChars[rng.Next(rainChars.Length)]}\u001b[0m");
-                    }
-                    else
-                    {
-                        sb.Append(' ');
-                    }
-                }
-                if (row < height - 1) sb.Append('\n');
-            }
-            Console.Write(sb.ToString());
-
-            // Advance drops
-            for (int i = 0; i < width; i++)
-            {
-                drops[i] += rng.Next(1, 3);
-                if (drops[i] > height + 6)
-                    drops[i] = rng.Next(-4, 0);
-            }
-
-            Thread.Sleep(80);
-        }
-
-        // Phase 2: Fade to black, then reveal the rabbit
-        TuiConsole.Clear();
-        Thread.Sleep(300);
-
-        var centerY = height / 2 - 1;
-        var rabbit = "🐇";
-        var quote = "Follow the white rabbit.";
-        var rabbitX = Math.Max(0, (width - 2) / 2);
-        var quoteX = Math.Max(0, (width - quote.Length) / 2);
-
-        // Position and print rabbit
-        Console.SetCursorPosition(rabbitX, centerY);
-        Console.Write(rabbit);
-
-        Thread.Sleep(400);
-
-        // Print quote in green below rabbit
-        Console.SetCursorPosition(quoteX, centerY + 2);
-        Console.Write($"\u001b[32m{quote}\u001b[0m");
-
-        Thread.Sleep(1500);
-
-        // Clear and return
-        TuiConsole.Clear();
-        Console.CursorVisible = true;
-    }
-
-    private static readonly string[] _matrixTriggers =
-    {
-        "what is the matrix",
-        "red pill",
-        "follow the white rabbit",
-        "there is no spoon"
-    };
-
-    private static bool ContainsMatrixTrigger(string input)
-    {
-        var lower = input.ToLowerInvariant();
-        foreach (var trigger in _matrixTriggers)
-        {
-            if (lower.Contains(trigger))
-                return true;
-        }
-        return false;
-    }
-
-    private static void PlayMatrixMoment(string input)
-    {
-        var lower = input.ToLowerInvariant();
-        AnsiConsole.WriteLine();
-
-        if (lower.Contains("what is the matrix"))
-        {
-            AnsiConsole.MarkupLine("[green]Unfortunately, no one can be told what the Matrix is. You have to see it for yourself.[/]");
-            Thread.Sleep(1500);
-        }
-        else if (lower.Contains("there is no spoon"))
-        {
-            AnsiConsole.MarkupLine("[green]Then you'll see that it is not the spoon that bends, it is only yourself.[/]");
-            Thread.Sleep(1500);
-        }
-        else if (lower.Contains("red pill"))
-        {
-            AnsiConsole.MarkupLine("[green]Remember, all I'm offering is the truth. Nothing more.[/]");
-            Thread.Sleep(1500);
-        }
-        else if (lower.Contains("follow the white rabbit"))
-        {
-            // Small rabbit hopping across the screen
-            var width = Math.Min(Console.WindowWidth - 4, 60);
-            Console.CursorVisible = false;
-            for (int i = 0; i < width; i += 3)
-            {
-                Console.SetCursorPosition(i, Console.CursorTop);
-                Console.Write("  🐇");
-                Thread.Sleep(80);
-                Console.SetCursorPosition(i, Console.CursorTop);
-                Console.Write("    ");
-            }
-            Console.SetCursorPosition(0, Console.CursorTop);
-            Console.CursorVisible = true;
-        }
-
-        AnsiConsole.WriteLine();
-    }
-
-    private void HandleMusicCommand(string action)
-    {
-        // Stop visualizer before rendering status panels to avoid flicker
-        StopMusicVisualizer();
-
-        // Parse volume from "music-vol 70" style commands
-        if (action.StartsWith("music-vol"))
-        {
-            var parts = action.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 2 && int.TryParse(parts[1], out var vol))
-            {
-                vol = Math.Clamp(vol, 0, 100);
-                MusicPlayer.SetVolume(vol / 100f);
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-            }
-            else
-            {
-                Console.WriteLine();
-                Console.WriteLine("  Usage: /music-vol [0-100]");
-                Console.WriteLine("  Example: /music-vol 70");
-                Console.WriteLine();
-            }
-            // Restart visualizer after panel render
-            StartMusicVisualizer();
-            return;
-        }
-
-        switch (action)
-        {
-            case "play":
-                MusicPlayer.Play();
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
-            case "stop":
-                MusicPlayer.Stop();
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
-            case "pause":
-                MusicPlayer.TogglePause();
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
-            case "next":
-                MusicPlayer.NextTrack();
-                MusicPlayerUI.RenderStatus(MusicPlayer);
-                break;
-
-            case "list":
-                MusicPlayerUI.RenderTrackList(MusicPlayer);
-                break;
-        }
-
-        // Restart visualizer — it will auto-check if music is still active
-        StartMusicVisualizer();
-    }
-
-    private void HandleMusicPlaySelection()
-    {
-        StopMusicVisualizer();
-
-        var genres = MusicPlayer.GetAvailableGenres();
-
-        if (genres.Count == 0)
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]No genres found.[/] Add mp3 files to [deepskyblue1]Audio/<genre>/[/] folders.");
-            AnsiConsole.WriteLine();
-            StartMusicVisualizer();
-            return;
-        }
-
-        if (genres.Count == 1)
-        {
-            MusicPlayer.Play(genres[0]);
-            MusicPlayerUI.RenderStatus(MusicPlayer);
-            StartMusicVisualizer();
-            return;
-        }
-
-        // Build choices: title-cased genre names + Shuffle All
-        var choices = genres
-            .Select(g => char.ToUpper(g[0]) + g[1..])
-            .ToList();
-        choices.Insert(0, "Shuffle All");
-
-        AnsiConsole.WriteLine();
-        var selected = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[deepskyblue1]Select a genre:[/]")
-                .HighlightStyle(SelectionHighlight)
-                .AddChoices(choices)
-        );
-
-        if (selected == "Shuffle All")
-        {
-            MusicPlayer.Play(null);
-        }
-        else
-        {
-            MusicPlayer.Play(selected.ToLowerInvariant());
-        }
-
-        MusicPlayerUI.RenderStatus(MusicPlayer);
-        StartMusicVisualizer();
     }
 
     private async Task HandleRetryCommandAsync()
@@ -4302,7 +2088,7 @@
                 var configuredAgents = Pane is null ? new[] { Config } :
                     (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
                         .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
-                var defaults = Services.GetRequiredService<AgentModelDefaults>();
+                var defaults = ModelDefaults;
                 defaults.UpdateSettings(updatedConfig, configuredAgents);
                 defaults.UpdateSetting("model", updatedConfig.GetEffectiveModelName(), configuredAgents);
                 await AI.ReinitializeAsync(updatedConfig);
@@ -4347,50 +2133,10 @@
         }
     }
 
-    public void Dispose()
-    {
-        SaveAgentHistory(true);
-        if (Pane is not null) Pane.SaveHistory = null;
-        _directorySelection?.TrySetResult(null);
-        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
-        StopPane();
-        StopCancelKeyListener();
-        StopMusicVisualizer();
-        Spinner.Stop();
+    private bool _disposed;
 
-        // Detach event handlers registered in OnInitialized.
-        // AIService is a singleton — if we don't unsubscribe, stale handlers linger
-        // across App lifecycle and capture a disposed _requestCts via closure.
-        if (_onFunctionInvokedHandler != null)
-            AI.OnFunctionInvoked -= _onFunctionInvokedHandler;
-        if (_onFunctionCompletedHandler != null)
-            AI.OnFunctionCompleted -= _onFunctionCompletedHandler;
-        if (_onResponseTextDeltaHandler != null)
-            AI.OnResponseTextDelta -= _onResponseTextDeltaHandler;
-        if (_onResponseStreamStartedHandler != null)
-            AI.OnResponseStreamStarted -= _onResponseStreamStartedHandler;
-        if (_cancelKeyHandler != null)
-            Console.CancelKeyPress -= _cancelKeyHandler;
 
-        InstructionCoordinator.StateChanged -= OnInstructionStateChanged;
-        ApprovalMenu.StateChanged -= OnApprovalMenuStateChanged;
 
-        // Clear the PlanHandoff callback so late-arriving propose_plan calls don't
-        // hit a disposed App. AIService stays, but plan requests just return the
-        // "not wired up" fallback from PlanHandoff.ProcessAsync.
-        PlanHandoff.OnPlanRequested = null;
 
-        var cts = Interlocked.Exchange(ref _requestCts, null);
-        cts?.Dispose();
-        MusicPlayer?.Dispose();
-        if (Pane is null || Pane.Id == 1) ThemeService?.Dispose();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Pane is null) { ((IDisposable)this).Dispose(); return; }
-        Dispose();
-        await Pane.DisposeAsync();
-    }
 
 }

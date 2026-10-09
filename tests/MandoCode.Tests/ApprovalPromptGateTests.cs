@@ -8,6 +8,7 @@ namespace MandoCode.Tests;
 /// tool calls must never render two blocking Spectre prompts at once — the second must
 /// queue until the first releases. See ApprovalPromptGate for the full failure story.
 /// </summary>
+[Trait("Category", "Unit")]
 public class ApprovalPromptGateTests
 {
     [Fact]
@@ -19,8 +20,7 @@ public class ApprovalPromptGateTests
         var secondTask = gate.AcquireAsync();
 
         // Second acquisition must not complete while the first hold is live.
-        var winner = await Task.WhenAny(secondTask, Task.Delay(200));
-        Assert.NotSame(secondTask, winner);
+        Assert.False(secondTask.IsCompleted);
 
         first.Dispose();
 
@@ -39,7 +39,7 @@ public class ApprovalPromptGateTests
 
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(TimeSpan.FromSeconds(5)));
 
         // The cancelled waiter must not have consumed the gate — a fresh acquire
         // succeeds once the original hold releases.
@@ -60,8 +60,7 @@ public class ApprovalPromptGateTests
         // If the double-dispose over-released, two concurrent holds would both succeed.
         var a = await gate.AcquireAsync();
         var bTask = gate.AcquireAsync();
-        var winner = await Task.WhenAny(bTask, Task.Delay(200));
-        Assert.NotSame(bTask, winner);
+        Assert.False(bTask.IsCompleted);
 
         a.Dispose();
         (await bTask.WaitAsync(TimeSpan.FromSeconds(5))).Dispose();

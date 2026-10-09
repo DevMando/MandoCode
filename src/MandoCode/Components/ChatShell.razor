@@ -40,7 +40,13 @@
         @if (GitChangesOpen && !DirectoryBrowserOpen)
         {
             <Box Width="@BrowserWidth" FillHeight="true">
-                <AgentGitChanges Root="@ProjectDirectory" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnGitChangesClose" OnDiffChanged="DiffChanged" OnDiscarded="OnGitDiscarded" />
+                <AgentGitChanges
+                    Root="@ProjectDirectory"
+                    Width="@BrowserWidth"
+                    Height="@PanelHeight"
+                    OnClose="OnGitChangesClose"
+                    OnDiffChanged="DiffChanged"
+                    OnDiscarded="OnGitDiscarded" />
             </Box>
         }
         @if (HistoryOpen)
@@ -52,7 +58,19 @@
         @if (SettingsOpen)
         {
             <Box Width="@BrowserWidth" FillHeight="true">
-                <AgentSettingsPanel Config="@(SettingsConfig!)" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSettingsClose" OnSave="OnSettingsSave" OnModel="OnSettingsModel" ModelPicker="SettingsModelPicker" OnModelSelected="OnSettingsModelSelected" OnModelCancel="OnSettingsModelCancel" OnApplyDefaults="OnApplyDefaults" OnSaveDefaults="OnSaveDefaults" OnManageIntegrations="OnManageIntegrations" />
+                <AgentSettingsPanel
+                    Config="@(SettingsConfig!)"
+                    Width="@BrowserWidth"
+                    Height="@PanelHeight"
+                    OnClose="OnSettingsClose"
+                    OnSave="OnSettingsSave"
+                    OnModel="OnSettingsModel"
+                    ModelPicker="SettingsModelPicker"
+                    OnModelSelected="OnSettingsModelSelected"
+                    OnModelCancel="OnSettingsModelCancel"
+                    OnApplyDefaults="OnApplyDefaults"
+                    OnSaveDefaults="OnSaveDefaults"
+                    OnManageIntegrations="OnManageIntegrations" />
             </Box>
         }
         @if (OllamaPullOpen)
@@ -64,7 +82,17 @@
         @if (SnapshotsOpen)
         {
             <Box Width="@BrowserWidth" FillHeight="true">
-                <ContextSnapshotsPanel Context="@(SnapshotContext!)" Endpoint="@OllamaEndpoint" CurrentModel="@(SettingsConfig!.GetEffectiveModelName())" StartCreating="SnapshotCreate" SwitchOffer="SnapshotOffer" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnSnapshotsClose" OnCapture="OnSnapshotCapture" OnKeepMemory="OnSnapshotKeepMemory" />
+                <ContextSnapshotsPanel
+                    Context="@(SnapshotContext!)"
+                    Endpoint="@OllamaEndpoint"
+                    CurrentModel="@(SettingsConfig!.GetEffectiveModelName())"
+                    StartCreating="SnapshotCreate"
+                    SwitchOffer="SnapshotOffer"
+                    Width="@BrowserWidth"
+                    Height="@PanelHeight"
+                    OnClose="OnSnapshotsClose"
+                    OnCapture="OnSnapshotCapture"
+                    OnKeepMemory="OnSnapshotKeepMemory" />
             </Box>
         }
         @if (SetupOpen)
@@ -76,7 +104,13 @@
         @if (IntegrationsOpen)
         {
             <Box Width="@BrowserWidth" FillHeight="true">
-                <IntegrationSettingsPanel Config="@(SettingsConfig!)" Coordinator="@(IntegrationCoordinator!)" Kind="@IntegrationKind" Width="@BrowserWidth" Height="@PanelHeight" OnClose="OnIntegrationsClose" />
+                <IntegrationSettingsPanel
+                    Config="@(SettingsConfig!)"
+                    Coordinator="@(IntegrationCoordinator!)"
+                    Kind="@IntegrationKind"
+                    Width="@BrowserWidth"
+                    Height="@PanelHeight"
+                    OnClose="OnIntegrationsClose" />
             </Box>
         }
     </Flex>
@@ -97,19 +131,26 @@
                     <Box Width="@DirectoryWidth">
                         <div data-focusable="false" @onclick="OpenProjectDirectory"
                              @onmouseenter="@(() => _directoryHovered = true)" @onmouseleave="@(() => _directoryHovered = false)">
-                            <Markup Content="@DirectoryPathCaption.Fit(ProjectDirectory, DirectoryWidth)"
-                                    Foreground="@PaneColors.For(Pane, _directoryHovered ? Color.Grey93 : new Color(198, 120, 221))" />
+                            <Markup
+                                Content="@DirectoryPathCaption.Fit(ProjectDirectory, DirectoryWidth)"
+                                Foreground="@PaneColors.For(Pane, _directoryHovered ? Color.Grey93 : new Color(198, 120, 221))" />
                         </div>
                     </Box>
                     <Box Width="@ChangeDirectoryButtonWidth">
-                        <WorkspaceButton Content="@WorkspaceTabWindow.Fit(ChangeDirectoryLabel, ChangeDirectoryButtonWidth)"
-                                         Selected="@DirectoryBrowserOpen" SelectedBackground="@(new Color(80, 55, 101))"
-                                         HoverBackground="@(new Color(96, 69, 119))" OnClick="ChangeDirectory" />
+                        <WorkspaceButton
+                            Content="@WorkspaceTabWindow.Fit(ChangeDirectoryLabel, ChangeDirectoryButtonWidth)"
+                            Selected="@DirectoryBrowserOpen"
+                            SelectedBackground="@(new Color(80, 55, 101))"
+                            HoverBackground="@(new Color(96, 69, 119))"
+                            OnClick="ChangeDirectory" />
                     </Box>
                     <Box Width="@FilesButtonWidth">
-                        <WorkspaceButton Content="@WorkspaceTabWindow.Fit(FileExplorerLabel, FilesButtonWidth)"
-                                         Selected="@FileExplorerOpen" SelectedBackground="@(new Color(80, 55, 101))"
-                                         HoverBackground="@(new Color(96, 69, 119))" OnClick="ToggleExplorer" />
+                        <WorkspaceButton
+                            Content="@WorkspaceTabWindow.Fit(FileExplorerLabel, FilesButtonWidth)"
+                            Selected="@FileExplorerOpen"
+                            SelectedBackground="@(new Color(80, 55, 101))"
+                            HoverBackground="@(new Color(96, 69, 119))"
+                            OnClick="ToggleExplorer" />
                     </Box>
                 </Flex>
             </Box>

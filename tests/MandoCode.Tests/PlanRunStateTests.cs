@@ -12,6 +12,7 @@ namespace MandoCode.Tests;
 /// is what MAF captures at each superstep boundary. Anything held only on PlanRunContext is lost —
 /// that object carries live delegates and a cancellation token and cannot be serialized.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanRunStateTests
 {
     private static TaskPlan MakePlan() => new()

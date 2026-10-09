@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 ///   1. edit_file is CRLF-tolerant (models emit LF-only old_text against CRLF files)
 ///   2. ReadFile / EditFile / DeleteFile produce actionable "file not found" diagnostics
 /// </summary>
+[Trait("Category", "Integration")]
 public class FileSystemPluginTests : IDisposable
 {
     private readonly string _tempRoot;

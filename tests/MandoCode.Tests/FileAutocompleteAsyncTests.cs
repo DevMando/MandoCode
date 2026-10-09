@@ -1,6 +1,7 @@
 using MandoCode.Services;
 using Xunit;
 namespace MandoCode.Tests;
+[Trait("Category", "Integration")]
 public class FileAutocompleteAsyncTests
 {
     [Fact]

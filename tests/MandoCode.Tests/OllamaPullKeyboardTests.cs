@@ -11,6 +11,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class OllamaPullKeyboardTests
 {
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;

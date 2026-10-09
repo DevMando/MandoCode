@@ -17,6 +17,7 @@ namespace MandoCode.Tests;
 ///   Act:     call the method under test
 ///   Assert:  verify the result and state are what we expect
 /// </summary>
+[Trait("Category", "Unit")]
 public class InputStateMachineTests
 {
     // ── Helper: builds a state machine with some test commands ──
@@ -465,6 +466,7 @@ public class InputStateMachineTests
     // ════════════════════════════════════════════════════════════
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void ProcessPaste_InsertsAllCharacters()
     {
         var machine = CreateMachine();
@@ -485,6 +487,7 @@ public class InputStateMachineTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void ProcessPaste_NewlinesBecomesSpaces()
     {
         var machine = CreateMachine();
@@ -502,6 +505,7 @@ public class InputStateMachineTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void ProcessPaste_ClosesDropdown()
     {
         var machine = CreateMachine();
@@ -517,6 +521,7 @@ public class InputStateMachineTests
     }
 
     [Fact]
+    [Trait("Behavior", "Compatibility")]
     public void ProcessPaste_CarriageReturnBecomesSpace()
     {
         // CRLF pastes from Windows clipboards deliver '\r' before '\n' — both must be

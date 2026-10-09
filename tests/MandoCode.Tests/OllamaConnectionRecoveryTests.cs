@@ -3,6 +3,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Unit")]
 public class OllamaConnectionRecoveryTests
 {
     private const string Local = "http://localhost:11434";

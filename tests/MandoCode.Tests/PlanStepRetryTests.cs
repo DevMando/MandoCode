@@ -15,6 +15,7 @@ namespace MandoCode.Tests;
 /// Workflow engine only: the legacy runner walks its steps with a foreach and has no way back to
 /// one it has already passed.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanStepRetryTests
 {
     private static TaskPlan MakePlan(params string[] instructions) => new()

@@ -2,6 +2,7 @@ using MandoCode.Services;
 using Spectre.Console;
 using Xunit;
 namespace MandoCode.Tests;
+[Trait("Category", "Unit")]
 public class CommandPreviewTests
 {
     [Fact]

@@ -11,6 +11,7 @@ namespace MandoCode.Tests;
 /// No setup needed: static methods = no constructor, no state.
 /// Just call the method and check the output.
 /// </summary>
+[Trait("Category", "Unit")]
 public class DiffServiceTests
 {
     // ════════════════════════════════════════════════════════════

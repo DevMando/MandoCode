@@ -14,6 +14,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Component")]
 public class MultiAgentExplorerTests
 {
     [Theory]
@@ -36,17 +37,15 @@ public class MultiAgentExplorerTests
         var workspace = services.GetRequiredService<AgentWorkspace>();
         for (var i = 0; i < count; i++) workspace.Add();
         var selected = workspace.SelectedPane!;
-        var type = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
-        var instance = ActivatorUtilities.CreateInstance(services, type, new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
-        await using var renderer = (IAsyncDisposable)instance;
         RenderFragment<AgentPane> body = _ => builder => { builder.OpenComponent<TestApp>(0); builder.CloseComponent(); };
-        var mount = type.GetMethods().Single(method => method.Name == "MountComponentAsync" && method.IsGenericMethodDefinition);
-        await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance, [ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None])!;
-        var dispatcher = (Dispatcher)type.GetProperty("Dispatcher")!.GetValue(instance)!;
+        await using var renderer = await WidgetRendererHarness.MountAsync<AgentWorkspaceView>(services,
+            new() { ["AgentBody"] = body });
+        var dispatcher = renderer.Dispatcher;
         await dispatcher.InvokeAsync(async () => await (gitChanges ? selected.ToggleGitChanges!() : selected.ToggleFileExplorer!()));
-        await Task.Delay(200);
-        var snapshot = type.GetMethod("RefreshSnapshot", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, null)!;
-        var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
+        await renderer.WaitUntilAsync(() => WidgetRendererHarness.Flatten(WidgetRendererHarness.Root(renderer.Snapshot()))
+            .Any(node => node.Key?.StartsWith(gitChanges ? "agent-changes-" : "agent-files-") == true));
+        var snapshot = await dispatcher.InvokeAsync(renderer.Snapshot);
+        var root = WidgetRendererHarness.Root(snapshot);
         var explorer = Assert.Single(Flatten(root), node => node.Key?.StartsWith(gitChanges ? "agent-changes-" : "agent-files-") == true);
         Assert.Equal(explorer.Key, selected.FocusKey);
         var focus = services.GetRequiredService<RazorConsole.Core.Focus.FocusManager>();
@@ -63,7 +62,7 @@ public class MultiAgentExplorerTests
             // Escape must close the explorer even while the prompt owns focus.
             selected.ExplorerFocus.SetPromptFocused(true);
             await dispatcher.InvokeAsync(() => Assert.True(workspace.Key(selected, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Escape" })));
-            await Task.Delay(100);
+            await renderer.WaitUntilAsync(() => !selected.IsFileExplorerOpen!());
             Assert.False(selected.IsFileExplorerOpen!());
         }
     }
@@ -80,20 +79,17 @@ public class MultiAgentExplorerTests
         await using var services = registrations.BuildServiceProvider();
         var workspace = services.GetRequiredService<WorkspaceRegistry>().Active;
         var original = workspace.Add();
-        var type = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
-        var instance = ActivatorUtilities.CreateInstance(services, type, new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
-        await using var renderer = (IAsyncDisposable)instance;
         RenderFragment<AgentPane> body = _ => builder => { builder.OpenComponent<ArchiveApp>(0); builder.CloseComponent(); };
-        var mount = type.GetMethods().Single(method => method.Name == "MountComponentAsync" && method.IsGenericMethodDefinition);
-        await (Task)mount.MakeGenericMethod(typeof(AgentWorkspaceView)).Invoke(instance, [ParameterView.FromDictionary(new Dictionary<string, object?> { ["AgentBody"] = body }), CancellationToken.None])!;
-        var dispatcher = (Dispatcher)type.GetProperty("Dispatcher")!.GetValue(instance)!;
+        await using var renderer = await WidgetRendererHarness.MountAsync<AgentWorkspaceView>(services,
+            new() { ["AgentBody"] = body });
+        var dispatcher = renderer.Dispatcher;
         AgentPane spawned = null!;
         await dispatcher.InvokeAsync(() => { spawned = workspace.Add(); workspace.Add(); });
-        await Task.Delay(200);
+        await renderer.WaitUntilAsync(() => spawned.SaveHistory is not null);
         await dispatcher.InvokeAsync(() => { workspace.Focus(original); workspace.Key(original, new() { Key = "w", AltKey = true }); });
-        await Task.Delay(100);
+        await renderer.WaitUntilAsync(() => !workspace.Panes.Contains(original));
         await dispatcher.InvokeAsync(() => { workspace.Focus(spawned); workspace.Key(spawned, new() { Key = "w", AltKey = true }); });
-        await Task.Delay(100);
+        await renderer.WaitUntilAsync(() => !workspace.Panes.Contains(spawned));
         Assert.Single(workspace.Panes);
         Assert.Contains(folder.Store.Closed(), a => a.Key == original.PersistKey);
         Assert.Contains(folder.Store.Closed(), a => a.Key == spawned.PersistKey);

@@ -13,6 +13,7 @@ namespace MandoCode.Tests;
 /// runs on. Making the root injectable is the prerequisite for covering that, and is worth doing
 /// before the store grows.
 /// </summary>
+[Trait("Category", "Unit")]
 public class PlanCheckpointStoreTests
 {
     private static PlanRunState StateWith(params TaskStepStatus[] statuses) => new()

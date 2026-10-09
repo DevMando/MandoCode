@@ -9,6 +9,7 @@ using Xunit;
 
 namespace MandoCode.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class AgentArchiveTests
 {
     [Fact]

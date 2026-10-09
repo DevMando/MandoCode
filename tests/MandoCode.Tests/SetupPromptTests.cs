@@ -11,6 +11,7 @@ using Xunit;
 namespace MandoCode.Tests;
 
 #pragma warning disable BL0006
+[Trait("Category", "Component")]
 public class SetupPromptTests
 {
     [Theory]

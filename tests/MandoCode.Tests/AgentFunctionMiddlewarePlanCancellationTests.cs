@@ -8,6 +8,7 @@ namespace MandoCode.Tests;
 /// <summary>
 /// MAF-side sibling of PlanCancellationCircuitTests (feat/agent-framework-migration, Phase 6).
 /// </summary>
+[Trait("Category", "Unit")]
 public class AgentFunctionMiddlewarePlanCancellationTests
 {
     private static AIFunction Fn(Delegate method, string name) =>
