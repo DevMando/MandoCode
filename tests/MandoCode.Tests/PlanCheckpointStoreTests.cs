@@ -100,10 +100,10 @@ public class PlanCheckpointStoreTests
     [Fact]
     public void PathIsStablePerProject_AndDistinguishesSameLeafNames()
     {
-        var a = PlanCheckpointStore.PathFor(@"C:\one\api");
-        var b = PlanCheckpointStore.PathFor(@"C:\two\api");
+        var a = PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "one", "api"));
+        var b = PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "two", "api"));
 
-        Assert.Equal(a, PlanCheckpointStore.PathFor(@"C:\one\api\"));   // trailing separator
+        Assert.Equal(a, PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "one", "api") + Path.DirectorySeparatorChar));   // trailing separator
         Assert.NotEqual(a, b);                                          // two folders called "api"
         Assert.Contains("api-", Path.GetFileName(a));                   // readable leaf retained
     }
@@ -111,11 +111,11 @@ public class PlanCheckpointStoreTests
     [Fact]
     public void DesktopAgentCheckpointPaths_DoNotCollideWithinOneProject()
     {
-        var first = PlanCheckpointStore.PathFor(@"C:\work\api", "agent-one");
-        var second = PlanCheckpointStore.PathFor(@"C:\work\api", "agent-two");
+        var first = PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "work", "api"), "agent-one");
+        var second = PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "work", "api"), "agent-two");
 
         Assert.NotEqual(first, second);
-        Assert.Equal(first, PlanCheckpointStore.PathFor(@"C:\work\api\", "agent-one"));
-        Assert.NotEqual(first, PlanCheckpointStore.PathFor(@"C:\other\api", "agent-one"));
+        Assert.Equal(first, PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "work", "api") + Path.DirectorySeparatorChar, "agent-one"));
+        Assert.NotEqual(first, PlanCheckpointStore.PathFor(Path.Combine(Path.GetTempPath(), "other", "api"), "agent-one"));
     }
 }

@@ -98,8 +98,9 @@ public class PlanCheckpointEnvelopeTests
     [Fact]
     public void ProjectRootHash_IsStable_AndCaseInsensitive()
     {
-        var a = PlanCheckpointEnvelope.HashProjectRoot(@"C:\work\Api");
-        var b = PlanCheckpointEnvelope.HashProjectRoot(@"c:\work\api\");
+        var root = Path.Combine(Path.GetTempPath(), "work", "Api");
+        var a = PlanCheckpointEnvelope.HashProjectRoot(root);
+        var b = PlanCheckpointEnvelope.HashProjectRoot(root.ToLowerInvariant() + Path.DirectorySeparatorChar);
 
         Assert.Equal(a, b);
         Assert.Equal(12, a.Length);

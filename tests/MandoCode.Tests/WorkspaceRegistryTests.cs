@@ -30,6 +30,8 @@ public class WorkspaceRegistryTests
         var lines = new[] { " ███╗   ███╗ █████╗ ███╗   ██╗", "[literal] ░▒▓░░▒▓▒░░▒▓░░▒▓▒", " ▓░▒▓░░░▒▓░▒░░▓▒ v0.16.0" };
         var writer = new StringWriter();
         var console = Spectre.Console.AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors });
+        // CI can force ANSI even when settings request plain output. Pin the test profile.
+        console.Profile.Capabilities.Ansi = false;
         console.Profile.Width = width;
         console.Write(new AsciiArtRenderable(lines));
         var output = writer.ToString().Replace("\r", "").TrimEnd('\n').Split('\n');
@@ -757,6 +759,8 @@ public class WorkspaceRegistryTests
         var layout = new LayoutEngine().Layout(services.GetRequiredService<WidgetTranslationContext>().Translate(node), new BoxConstraints(width, width, 30, 30));
         var writer = new StringWriter();
         var console = Spectre.Console.AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors });
+        // CI can force ANSI even when settings request plain output. Pin the test profile.
+        console.Profile.Capabilities.Ansi = false;
         console.Profile.Width = width;
         console.Write(layout.PaintToRenderable());
         return writer.ToString();

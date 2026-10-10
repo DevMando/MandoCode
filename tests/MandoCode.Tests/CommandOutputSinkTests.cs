@@ -9,6 +9,7 @@ namespace MandoCode.Tests;
 /// observational: it must see the full lifecycle, it must see output the model's capped copy
 /// drops, and it must never be able to affect the command it is watching.
 /// </summary>
+[Collection("TUI console routing")]
 [Trait("Category", "Integration")]
 public class CommandOutputSinkTests : IDisposable
 {
@@ -67,7 +68,9 @@ public class CommandOutputSinkTests : IDisposable
         // command header on the display with no output and no completion under it.
         var sink = new RecordingSink();
 
-        await Plugin(sink).ExecuteCommand("cd .");
+        var originalDirectory = Directory.GetCurrentDirectory();
+        try { await Plugin(sink).ExecuteCommand("cd ."); }
+        finally { Directory.SetCurrentDirectory(originalDirectory); }
 
         Assert.Equal(0, sink.Starts);
         Assert.Equal(0, sink.Finishes);

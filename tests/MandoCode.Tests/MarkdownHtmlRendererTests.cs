@@ -186,6 +186,8 @@ public class MarkdownHtmlRendererTests
             ColorSystem = ColorSystemSupport.NoColors,
             Out = new AnsiConsoleOutput(writer),
         });
+        // CI can force ANSI even when settings request plain output. Pin the test profile.
+        console.Profile.Capabilities.Ansi = false;
         console.Profile.Width = width;
         console.Write(renderable);
         return writer.ToString().Replace("\r\n", "\n");
