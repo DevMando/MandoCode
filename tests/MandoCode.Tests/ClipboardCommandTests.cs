@@ -10,27 +10,45 @@ namespace MandoCode.Tests;
 [Trait("Category", "Component")]
 public class ClipboardCommandTests
 {
+    [Fact]
+    public async Task TerminalControlSinksAreIsolatedAndRestoreTheirParentScope()
+    {
+        using var parent = new StringWriter();
+        using var first = new StringWriter();
+        using var second = new StringWriter();
+        using (TuiConsole.Enter(new TuiSession(), parent))
+        {
+            await Task.WhenAll(Write(first, "first"), Write(second, "second"));
+            TuiConsole.WriteTerminalControl("parent");
+        }
+        Assert.Equal("first", first.ToString());
+        Assert.Equal("second", second.ToString());
+        Assert.Equal("parent", parent.ToString());
+        static async Task Write(TextWriter writer, string text)
+        {
+            using var scope = TuiConsole.Enter(new TuiSession(), writer);
+            await Task.Yield();
+            TuiConsole.WriteTerminalControl(text);
+        }
+    }
+
     [Theory]
     [InlineData("HandleCopyCommand", "Reply with Unicode: café 🚀", "Reply with Unicode: café 🚀")]
     [InlineData("HandleCopyCodeCommand", "First\n```cs\nvar name = \"café\";\n```\nThen\n```text\nsecond block 🚀\n```", "var name = \"café\";\n\nsecond block 🚀")]
     public void CopyCommands_SendClipboardSequenceToTerminal_AndOnlyConfirmationToTranscript(string method, string response, string copied)
     {
-        var previous = Console.Out;
         using var terminal = new StringWriter();
-        Console.SetOut(terminal);
-        try
         {
             var session = new TuiSession();
-            using var scope = TuiConsole.Begin(session);
+            using var scope = TuiConsole.Enter(session, terminal);
             var app = new App();
             typeof(App).GetField("_lastAiResponse", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(app, response);
             typeof(App).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(app, null);
-            Console.Out.Flush();
+            terminal.Flush();
             var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(copied));
             Assert.Equal($"\u001b]52;c;{payload}\u0007", terminal.ToString());
             Assert.Single(session.Snapshot().Entries);
         }
-        finally { Console.SetOut(previous); }
     }
 
     [Theory]
@@ -39,20 +57,16 @@ public class ClipboardCommandTests
     [InlineData("HandleCopyCodeCommand", "Reply without code fences")]
     public void CopyCommands_WithNothingToCopy_DoNotSendClipboardSequence(string method, string? response)
     {
-        var previous = Console.Out;
         using var terminal = new StringWriter();
-        Console.SetOut(terminal);
-        try
         {
             var session = new TuiSession();
-            using var scope = TuiConsole.Begin(session);
+            using var scope = TuiConsole.Enter(session, terminal);
             var app = new App();
             typeof(App).GetField("_lastAiResponse", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(app, response);
             typeof(App).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(app, null);
-            Console.Out.Flush();
+            terminal.Flush();
             Assert.Equal("", terminal.ToString());
             Assert.Single(session.Snapshot().Entries);
         }
-        finally { Console.SetOut(previous); }
     }
 }

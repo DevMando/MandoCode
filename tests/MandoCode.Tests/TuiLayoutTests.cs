@@ -333,6 +333,8 @@ public class TuiLayoutTests
         {
             Out = new AnsiConsoleOutput(writer), Ansi = AnsiSupport.No, ColorSystem = ColorSystemSupport.NoColors
         });
+        // CI can force ANSI even when settings request plain output. Pin the test profile.
+        console.Profile.Capabilities.Ansi = false;
         console.Profile.Width = width;
         console.Write(renderable);
         return writer.ToString();

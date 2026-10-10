@@ -20,6 +20,10 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Fixed
 
+- Make clipboard-reader overrides work across platforms while retaining native terminal paste on Linux when only the Windows clipboard reader is available.
+- Isolate clipboard-command test output from process stdout and verify scoped terminal-control sinks across concurrent agents.
+- Stabilize CI layout checks under forced ANSI output, use native paths in checkpoint tests, and restore the process working directory after testing bare `cd` commands.
+
 - Complete pending menu/input requests when an agent closes, including model selection, directory selection, and plan approvals.
 - Release callbacks only when the disposing component still owns them, preventing an old component from clearing callbacks registered by its replacement.
 - Record diagnostic warnings for failed history serialization and context recap persistence.

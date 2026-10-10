@@ -109,13 +109,14 @@
     private async Task<bool> PasteClipboardImage(bool explicitRequest)
     {
         if (Disabled || !ChatFeaturesEnabled || ModelPicker is not null || Pane is { Active: false }) return true;
-        if (!explicitRequest && !OperatingSystem.IsWindows()) return false;
+        var services = Pane?.Services ?? Services;
+        var reader = services.GetService(typeof(IClipboardImageReader)) as IClipboardImageReader ?? new WindowsClipboardImageReader();
+        // Linux terminal paste remains native; an injected reader can provide clipboard support on any OS.
+        if (!explicitRequest && !OperatingSystem.IsWindows() && reader is WindowsClipboardImageReader) return false;
         if (_pastingImage) return true;
         _pastingImage = true; _clipboardError = false; _clipboardStatus = "Reading clipboard…";
         StateHasChanged();
         try {
-            var services = Pane?.Services ?? Services;
-            var reader = services.GetService(typeof(IClipboardImageReader)) as IClipboardImageReader ?? new WindowsClipboardImageReader();
             var png = await reader.ReadPngAsync(_loadingStop.Token);
             if (_disposed) return true;
             if (png is null) {
