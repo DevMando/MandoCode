@@ -9,6 +9,7 @@ public static class TuiConsole
 {
     private static TextWriter? _terminalWriter;
     private static readonly AsyncLocal<TuiSession?> Ambient = new();
+    private static readonly AsyncLocal<TextWriter?> ControlOutput = new();
     private static TuiSession? _fallback;
     public static TuiSession? Current => Ambient.Value ?? _fallback;
     internal static void SetActive(TuiSession session) { if (_fallback is not null) _fallback = session; }
@@ -16,7 +17,16 @@ public static class TuiConsole
     {
         var previous = Ambient.Value;
         Ambient.Value = session;
-        return new SessionScope(previous);
+        return new SessionScope(previous, ControlOutput.Value);
+    }
+    // Scoped terminal sink lets isolated hosts/tests route OSC controls without replacing process stdout.
+    internal static IDisposable Enter(TuiSession session, TextWriter terminalOutput)
+    {
+        var previous = Ambient.Value;
+        var previousOutput = ControlOutput.Value;
+        Ambient.Value = session;
+        ControlOutput.Value = terminalOutput;
+        return new SessionScope(previous, previousOutput);
     }
     public static IDisposable Begin(TuiSession session)
     {
@@ -34,7 +44,7 @@ public static class TuiConsole
     // Send them to the retained terminal writer rather than the transcript sanitizer.
     internal static void WriteTerminalControl(string sequence)
     {
-        if (_terminalWriter is { } writer) writer.Write(sequence);
+        if ((ControlOutput.Value ?? _terminalWriter) is { } writer) writer.Write(sequence);
         else System.Console.Write(sequence);
     }
     public static IAnsiConsole Console { get => PhysicalConsole.Console; set => PhysicalConsole.Console = value; }
@@ -62,9 +72,9 @@ public static class TuiConsole
     public static T Ask<T>(string prompt, T defaultValue) => PhysicalConsole.Ask(prompt, defaultValue);
     public static bool Confirm(string prompt, bool defaultValue = true) => PhysicalConsole.Confirm(prompt, defaultValue);
     public static Status Status() => PhysicalConsole.Status();
-    private sealed class SessionScope(TuiSession? previous) : IDisposable
+    private sealed class SessionScope(TuiSession? previous, TextWriter? previousOutput) : IDisposable
     {
-        public void Dispose() => Ambient.Value = previous;
+        public void Dispose() { Ambient.Value = previous; ControlOutput.Value = previousOutput; }
     }
     private sealed class RoutedTranscriptWriter(TuiSession fallback) : TextWriter
     {
