@@ -4,6 +4,10 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-21
+
+**Startup and component stability.** The chat prompt now waits for model validation and MCP initialization to finish. Prompt state changes run together on the UI dispatcher, and agents closed during startup cannot start an input loop afterward. RazorConsole remains at 0.6.0.
+
 ### Changed
 
 - Improve readability of integration menu navigation, delegation completion, component wiring, and Razor parameter lists; retain intent-focused comments and update outdated engine explanations.
@@ -19,6 +23,8 @@ All notable changes to MandoCode will be documented in this file.
 - Separate component activity updates from direct terminal spinner rendering while preserving the public engine API used by Desktop.
 
 ### Fixed
+
+- Keep the chat input loop closed until model validation and MCP startup finish, even when connection-status updates trigger another render. Apply prompt state changes on the renderer dispatcher and avoid starting input after an agent closes during the startup delay.
 
 - Make clipboard-reader overrides work across platforms while retaining native terminal paste on Linux when only the Windows clipboard reader is available.
 - Isolate clipboard-command test output from process stdout and verify scoped terminal-control sinks across concurrent agents.

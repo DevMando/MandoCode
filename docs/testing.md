@@ -55,6 +55,15 @@ Run repeated component checks locally:
 
 Each iteration runs in a new test process and preserves a separate TRX result under ignored `artifacts/`. A failure stops the script; hang diagnostics bound stalled runs. Passing repeated runs reduces uncertainty but does not prove the absence of intermittent failures.
 
+For startup release checks, focus repetitions on the startup lifecycle regressions:
+
+```powershell
+./scripts/verify-component-stability.ps1 -Framework net10.0 -Iterations 25 -TestFilter "FullyQualifiedName~StartupRenderingTests" -ResultsDirectory artifacts/startup-stability/net10.0
+./scripts/verify-component-stability.ps1 -Framework net8.0 -Iterations 25 -TestFilter "FullyQualifiedName~StartupRenderingTests" -ResultsDirectory artifacts/startup-stability/net8.0
+```
+
+These tests cover renders during incomplete initialization, closing an agent during the startup delay, and retaining one prompt/input owner across refreshes. They do not reproduce every Windows Terminal or Visual Studio launch condition. Before release, also perform 10–20 cold launches from each, type immediately, and create/close agents with Alt+N/Alt+W. Include a slow or unavailable Ollama endpoint and enabled MCP servers, and check narrow/wide windows. Record any duplicated borders, missing focus, or failed submission rather than treating the new-agent workaround as a pass.
+
 The focused mutation probe requires Python and .NET:
 
 ```powershell
