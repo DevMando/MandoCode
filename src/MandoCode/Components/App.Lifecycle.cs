@@ -196,6 +196,8 @@ public partial class App
         return conversation;
     }
 
+    private bool _startupComplete;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
@@ -208,9 +210,12 @@ public partial class App
         if (firstRender && !_connectionChecked)
         {
             await InitializeConnectionAsync();
+            _startupComplete = true;
         }
 
-        if (_connectionChecked && !_hasRendered)
+        // Connection status becomes available before model validation and MCP finish.
+        // Those steps can render again; only the completed startup may claim input.
+        if (_startupComplete && _connectionChecked && !_hasRendered && !_disposed && !_paneStopped)
         {
             _hasRendered = true;
             RestoreAgentHistory();
@@ -232,6 +237,7 @@ public partial class App
             // Component input owns the keyboard; the imperative adapter is compatibility-only.
             // Small delay to ensure UI is fully rendered before accepting input
             await Task.Delay(100);
+            if (_disposed || _paneStopped) return;
             _ = Task.Run(async () => await RunInteractiveLoopAsync());
         }
     }

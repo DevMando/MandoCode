@@ -43,6 +43,8 @@ Named workspaces hold **up to four independent agents each**. Keyboard shortcuts
 
 ## A new way to work in the terminal — v0.16.0
 
+**Patch v0.16.1:** fixes a startup race around prompt activation, keeps prompt state updates on the UI dispatcher, and includes clipboard and component lifecycle improvements. See the [release notes](docs/CHANGELOG.md#0161---2026-10-21).
+
 Built on **RazorConsole 0.6.0**, this release brings multiple workspaces, up to four independent agents per workspace, agent collaboration, portable context snapshots, and saved-agent history into one terminal interface. Explore your files, manage MCP servers and Skills, and keep working while other agents handle their tasks.
 
 The conversation scrolls above a persistent multiline prompt, with searchable pickers and collapsible tool output. See the feature demos below or read the [changelog](docs/CHANGELOG.md) for the full release details.

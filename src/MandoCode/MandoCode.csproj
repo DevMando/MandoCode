@@ -13,14 +13,14 @@
     <PackageId>MandoCode</PackageId>
 
     <!-- NuGet metadata -->
-    <Version>0.16.0</Version>
+    <Version>0.16.1</Version>
     <Authors>Armando Fernandez (DevMando)</Authors>
     <Description>An AI coding assistant built for the developer workflow: independent agents, workspaces, portable context, and local or cloud models through Ollama.</Description>
     <PackageProjectUrl>https://github.com/DevMando/MandoCode</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevMando/MandoCode</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>ai;cli;coding-assistant;ollama;agent-framework;razorconsole;multi-agent;local-llm;dotnet10;dotnet8</PackageTags>
-    <PackageReleaseNotes>v0.16.0 introduces a RazorConsole 0.6.0 terminal layout, multiple agents and workspaces, agent collaboration, context snapshots, history, MCP and Skills managers, vision attachments, and HTML transcript export. Full release notes: https://github.com/DevMando/MandoCode/blob/v0.16.0/docs/CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>v0.16.1 fixes a startup race that could activate the chat prompt before model and MCP initialization finished, keeps prompt updates on the UI dispatcher, and prevents closed agents from starting input. Includes clipboard fixes, component lifecycle refactoring, and stronger regression testing. Full release notes: https://github.com/DevMando/MandoCode/blob/v0.16.1/docs/CHANGELOG.md</PackageReleaseNotes>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>MC.png</PackageIcon>
     <ApplicationIcon>MC.ico</ApplicationIcon>

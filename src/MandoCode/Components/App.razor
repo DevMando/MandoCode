@@ -1875,18 +1875,25 @@
         // of the interactive loop — blocking Spectre prompts, guarded renders, Spinner.Stop's
         // task.Wait) would resume inline ON the dispatcher and freeze the UI. Mirrors
         // InstructionPromptCoordinator, which already uses this for the same reason.
-        _inputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _promptInitialValue = "";
-        _showPrompt = true;
-        _isProcessing = false;
-        await InvokeAsync(StateHasChanged);
+        var inputCompletion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(() =>
+        {
+            _inputTcs = inputCompletion;
+            _promptInitialValue = "";
+            _showPrompt = true;
+            _isProcessing = false;
+            StateHasChanged();
+        });
 
-        var input = await _inputTcs.Task;
+        var input = await inputCompletion.Task;
         if (_paneStopped) return string.Empty;
 
-        _showPrompt = true;
-        _isProcessing = true;
-        await InvokeAsync(StateHasChanged);
+        await InvokeAsync(() =>
+        {
+            _showPrompt = true;
+            _isProcessing = true;
+            StateHasChanged();
+        });
 
         return input;
     }
