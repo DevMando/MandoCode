@@ -4,6 +4,10 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Group CLI components into feature folders for shell, workspaces, conversations, input, project browsing, sessions, settings, onboarding, and activity. Keep component namespaces and behavior unchanged, and document where new components belong.
+
 ## [0.16.1] - 2026-10-21
 
 **Startup and component stability.** The chat prompt now waits for model validation and MCP initialization to finish. Prompt state changes run together on the UI dispatcher, and agents closed during startup cannot start an input loop afterward. RazorConsole remains at 0.6.0.

@@ -1,6 +1,6 @@
 # CLI maintenance boundaries
 
-The CLI is composed from Razor components. `App.razor` retains layout and coordinating state; its partial class files group commands, planning, attachments, integrations, request processing, lifecycle, and terminal effects. Partial files share component state and are not independent services. Extract reusable operations into services rather than adding unrelated responsibilities to these files.
+The CLI is composed from Razor components grouped by feature under `src/MandoCode/Components/`; see the [component folder guide](../src/MandoCode/Components/README.md). Explicit `@namespace MandoCode.Components` declarations preserve component type names after moving files. `Components/Shell/App.razor` retains layout and coordinating state; its partial class files group commands, planning, attachments, integrations, request processing, lifecycle, and terminal effects. Partial files share component state and are not independent services. Extract reusable operations into services rather than adding unrelated responsibilities to these files.
 
 ## State and input
 
@@ -10,7 +10,7 @@ The CLI is composed from Razor components. `App.razor` retains layout and coordi
 
 ## Agent lifetime
 
-`App.Lifecycle.cs` resolves per-agent services from the pane scope, subscribes to events, and releases pending requests on shutdown. `CallbackRegistrations` releases a callback only if it is still owned by that registration. Event delegates must also be detached on disposal. Shared workspace services are resolved from the host; cross-agent operations resolve the target agent's scope.
+`Components/Shell/App.Lifecycle.cs` resolves per-agent services from the pane scope, subscribes to events, and releases pending requests on shutdown. `CallbackRegistrations` releases a callback only if it is still owned by that registration. Event delegates must also be detached on disposal. Shared workspace services are resolved from the host; cross-agent operations resolve the target agent's scope.
 
 ## Shared engine
 

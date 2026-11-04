@@ -1,0 +1,2150 @@
+@namespace MandoCode.Components
+@inject IServiceProvider Services
+@using Microsoft.Extensions.DependencyInjection
+@using MandoCode.Models
+@using MandoCode.Services
+@using System.Collections.Generic
+@using System.Text.RegularExpressions
+@using Spectre.Console
+
+@inject Microsoft.Extensions.Hosting.IHostApplicationLifetime Lifetime
+@implements IDisposable
+@implements IAsyncDisposable
+
+@if (Pane is null || Pane.Visible)
+{
+<ChatShell
+    SnapshotsOpen="@_snapshotsOpen"
+    SnapshotCreate="@_snapshotCreate"
+    SnapshotOffer="@_snapshotOffer"
+    SnapshotContext="@Snapshots"
+    OnSnapshotsClose="CloseSnapshots"
+    OnSnapshotCapture="CaptureSnapshot"
+    OnSnapshotKeepMemory="KeepSnapshotMemory"
+    SetupOpen="@_setupOpen"
+    OnSetupComplete="SetupComplete"
+    OllamaPullOpen="@_ollamaPullOpen"
+    OllamaEndpoint="@Config.OllamaEndpoint"
+    OnOllamaPullClose="CloseOllamaPull"
+    IntegrationsOpen="@_integrationsOpen"
+    IntegrationCoordinator="@(IntegrationCoordinator)"
+    IntegrationKind="@_integrationKind"
+    OnIntegrationsClose="CloseIntegrations"
+    OnManageIntegrations="ManageIntegrations"
+    SettingsOpen="@_settingsOpen"
+    SettingsConfig="@Config"
+    OnSettingsClose="CloseSettings"
+    OnSettingsSave="SaveAgentSettings"
+    OnApplyDefaults="ApplyAgentDefaults"
+    OnSaveDefaults="SaveAgentDefaults"
+    OnSettingsModel="SettingsModel"
+    SettingsModelPicker="@_modelPicker"
+    OnSettingsModelSelected="HandleModelSelected"
+    OnSettingsModelCancel="CancelModelPicker"
+    @ref="_chatShell"
+    ProjectDirectory="@ProjectRoot.ProjectRoot"
+    DirectoryBrowserOpen="@_directoryBrowserOpen"
+    OnDirectoryChosen="CompleteDirectorySelection"
+    FileExplorerOpen="@_fileExplorerOpen"
+    OnFileExplorerClose="CloseFileExplorer"
+    OnFileExplorerToggle="ToggleFileExplorer"
+    GitChangesOpen="@_gitChangesOpen"
+    OnGitChangesClose="CloseGitChanges"
+    OnGitDiscarded="GitDiscarded"
+    HistoryOpen="@_historyActive"
+    OnHistoryClose="CloseHistory"
+    OnHistoryRestore="RestoreArchivedAgent"
+    OnChangeDirectory="@(() => HandleVdomSubmit("/change-directory"))">
+<Header>
+<Banner />
+
+@* Keep the banner visible, but hide startup details while setup owns the screen.
+   HomeView keeps that visibility rule together instead of repeating it for each detail. *@
+@if (!_setupActive)
+{
+    <HomeView
+              SupportsVision="@AI.SupportsImageInput"
+              OllamaEndpoint="@Config.OllamaEndpoint"
+              ConnectionChecked="@_connectionChecked"
+              IsConnected="@_isConnected"
+              OnboardingStatus="@_onboardingStatus"
+              ModelWarning="@_modelWarning"
+              UpdateNotice="@_updateNotice"
+              UpdateCommand="@_updateCommand" />
+}
+
+</Header>
+<Footer>
+@if (Pane?.Workspace.Registry?.IsWorkspacePickerOpen != true)
+{
+@* VDOM input — always rendered once interactive loop starts, disabled during processing.
+   Hidden while an instruction prompt is active so the two text inputs don't fight for focus. *@
+@if (_showPrompt && !_presentation.HidesChatPrompt && !InstructionCoordinator.IsActive && !ApprovalMenu.IsActive && !_planSelectActive && !_showWizardInput && !_showWizardSelect)
+{
+    @if (Config.EnableTokenTracking && TokenTracker.TotalSessionTokens > 0)
+    {
+        <Box FillWidth="true" Height="1"><Markup Content=" " /></Box>
+        <Box FillWidth="true" Height="1">
+            <RazorConsole.Components.Align Horizontal="HorizontalAlignment.Right">
+                <ContextMeterLine TotalSessionTokens="@TokenTracker.TotalSessionTokens"
+                                  ShowContext="@(!MandoCodeConfig.IsCloudModel(Config.GetEffectiveModelName()) && TokenTracker.LastOperation is not null)"
+                                  UsedTokens="@(TokenTracker.LastOperation?.PromptTokens ?? 0)"
+                                  WindowTokens="@ContextMeter.KnownWindow(Config.GetEffectiveModelName(), Config.ContextLength)" />
+            </RazorConsole.Components.Align>
+        </Box>
+    }
+    <PromptInput @ref="_promptInput" @key="@ChatComposerKey" OnSubmit="HandleVdomSubmit"
+                 ModelPicker="@_modelPicker"
+                 OnModelSelected="HandleModelSelected"
+                 OnModelPickerCancel="CancelModelPicker"
+                 OnCancel="CancelCurrentRequest"
+                 OnScroll="ScrollConversation"
+                 InitialValue="@_promptInitialValue"
+                 Disabled="@(_isProcessing || _historyActive)" />
+}
+
+@* Instruction input — surfaced by DiffApprovalHandler's "Provide new instructions" branch.
+   Bridged via InstructionPromptCoordinator (TCS) so the imperative handler can await VDOM input. *@
+@if (InstructionCoordinator.IsActive)
+{
+    @if (InstructionCoordinator.Multiline)
+    {
+        <PlanStepEditor @key="@InstructionCoordinator.RequestId" PersistenceKey="@InstructionCoordinator.RequestId.ToString()" Title="@InstructionCoordinator.Prompt" InitialValue="@InstructionCoordinator.InitialValue"
+                        OnSubmit="HandleInstructionSubmit" OnCancel="InstructionCoordinator.Cancel" />
+    }
+    else
+    {
+    <PromptInput OnSubmit="HandleInstructionSubmit" PersistenceKey="@($"instruction-{InstructionCoordinator.RequestId}")"
+                 InitialValue="@InstructionCoordinator.InitialValue"
+                 Label="@InstructionCoordinator.Prompt"
+                 Placeholder=""
+                 ChatFeaturesEnabled="false"
+                 AllowEmpty="true" />
+    }
+}
+
+@* Approval menu — surfaced by DiffApprovalHandler for write / command / delete / MCP
+   approvals. VDOM ApprovalSelect (same component as plan approval) instead of Spectre's
+   SelectionPrompt so the keyboard pump is the only console reader and arrow keys can't be
+   stolen mid-prompt, which previously hung a plan step. Bridged via
+   ApprovalSelectCoordinator (TCS). *@
+@if (ApprovalMenu.IsActive)
+{
+    @* A decision on something too long to print (a long diff) shows it here, scrolled with
+       PgUp/PgDn from the menu, which keeps focus. *@
+    @if (ApprovalMenu.Preview.Count > 0)
+    {
+        <ScrollPreview Title="@ApprovalMenu.PreviewTitle"
+                       Lines="@ApprovalMenu.Preview"
+                       Offset="@_approvalPreviewOffset"
+                       PageSize="@ApprovalPreviewPageSize" />
+    }
+    <ApprovalSelect Options="@_approvalMenuOptions"
+                    OnSubmit="HandleApprovalMenuSubmit"
+                    OnScroll="HandleApprovalPreviewScroll" />
+}
+
+
+@* Wizard primitives — RazorConsole TextInput / ApprovalSelect that bypass PromptInput's slash/at
+   autocomplete machinery. Used by interactive wizards that need free-form input. *@
+@if (_showWizardInput)
+{
+    <TextInput @bind-Value="_wizardInputValue"
+               OnSubmit="HandleWizardInputSubmit"
+               Placeholder="@_wizardInputPlaceholder"
+               MaskInput="@_wizardInputSecret"
+               ValueColor="@(new Color(255, 200, 80))"
+               PlaceholderColor="Color.Grey"
+               BorderColor="Color.Purple"
+               FocusedBorderColor="Color.Purple"
+               BorderStyle="BoxBorder.Rounded"
+               Expand="true"
+               FocusOrder="0" />
+}
+@if (_showWizardSelect)
+{
+    @if (_wizardSelectTitle is not null)
+    {
+        <Markup Content="@Spectre.Console.Markup.Escape(_wizardSelectTitle)" Foreground="Color.DeepSkyBlue1" />
+    }
+    <ApprovalSelect Options="@_wizardSelectChoices" OnSubmit="HandleWizardSelectSubmit" />
+}
+
+@* Plan-approval select — VDOM replacement for the Spectre SelectionPrompt so arrow keys
+   aren't stolen by the framework's keyboard pump (see ApprovalSelect.razor). Bridged to
+   the awaiting handler with a TCS, same pattern as the wizard primitives above. *@
+@if (_planSelectActive)
+{
+    <ApprovalSelect Options="@_planSelectOptions"
+                    OnSubmit="HandlePlanSelectSubmit" />
+}
+
+}
+</Footer>
+</ChatShell>
+}
+
+@code {
+    private bool HasModalInput => InstructionCoordinator.IsActive || ApprovalMenu.IsActive ||
+        _planSelectActive || _showWizardInput || _showWizardSelect;
+    private bool CanBrowseProject => !_historyActive && !_directoryBrowserOpen && !HasModalInput;
+
+    private CliIntegrationCoordinator IntegrationCoordinator { get; set; } = default!;
+    private CliDelegations Delegations { get; set; } = default!;
+    private AgentModelDefaults ModelDefaults { get; set; } = default!;
+    private ToolUpdateService ToolUpdater => Services.GetRequiredService<ToolUpdateService>();
+    private readonly AgentPresentationState _presentation = new();
+    private AIService AI { get; set; } = default!;
+    private bool _directoryBrowserOpen { get => _presentation.IsOpen(AgentPanel.DirectoryBrowser); set => _presentation.SetOpen(AgentPanel.DirectoryBrowser, value); }
+    private bool _fileExplorerOpen { get => _presentation.IsOpen(AgentPanel.FileExplorer); set => _presentation.SetOpen(AgentPanel.FileExplorer, value); }
+    private bool _gitChangesOpen { get => _presentation.IsOpen(AgentPanel.GitChanges); set => _presentation.SetOpen(AgentPanel.GitChanges, value); }
+    private bool _settingsOpen { get => _presentation.IsOpen(AgentPanel.Settings); set => _presentation.SetOpen(AgentPanel.Settings, value); }
+    private SnapshotContext Snapshots => (Pane?.Services ?? Services).GetRequiredService<SnapshotContext>();
+    private bool _snapshotsOpen { get => _presentation.IsOpen(AgentPanel.Snapshots); set => _presentation.SetOpen(AgentPanel.Snapshots, value); }
+    private bool _snapshotCreate, _snapshotOffer;
+    private TaskCompletionSource? _snapshotCompletion;
+    private Task CaptureSnapshot() => Snapshots.CaptureAsync(AI, Config.GetEffectiveModelName(), ProjectRoot.ProjectRoot);
+    private Task KeepSnapshotMemory()
+    {
+        if (Snapshots.Pending?.HistoryJson is not { } history || AI.TryRestoreHistoryJson(history) == 0)
+            throw new IOException("Memory could not be restored. Create a snapshot instead to save the buffered conversation.");
+        return Task.CompletedTask;
+    }
+    private async Task ShowSnapshots(bool create, bool offer = false)
+    {
+        _snapshotCreate = create; _snapshotOffer = offer;
+        _fileExplorerOpen = _gitChangesOpen = _directoryBrowserOpen = _historyActive = _settingsOpen = false;
+        _snapshotsOpen = true;
+        _snapshotCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(StateHasChanged);
+        await _snapshotCompletion.Task;
+        _snapshotCompletion = null;
+    }
+    private async Task ToggleSnapshots()
+    {
+        if (_snapshotsOpen) { await CloseSnapshots(); return; }
+        if (Pane?.IsBusy?.Invoke() == true || _showWizardInput || _showWizardSelect) return;
+        await CaptureSnapshot();
+        _ = ShowSnapshots(false);
+    }
+    private async Task CloseSnapshots()
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        _snapshotsOpen = false;
+        Snapshots.ClearPending();
+        _snapshotCompletion?.TrySetResult();
+        await InvokeAsync(StateHasChanged);
+        if (Snapshots.QueuedCount > 0) AnsiConsole.MarkupLine($"[green]Context queued: {Snapshots.QueuedCount} snapshot(s) for your next message.[/]");
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    }
+    private bool _ollamaPullOpen { get => _presentation.IsOpen(AgentPanel.ModelDownloads); set => _presentation.SetOpen(AgentPanel.ModelDownloads, value); }
+    private TaskCompletionSource? _ollamaPullCompletion;
+    private async Task ShowOllamaPull()
+    {
+        _fileExplorerOpen = _gitChangesOpen = _directoryBrowserOpen = _historyActive = _settingsOpen = false;
+        _ollamaPullOpen = true;
+        _ollamaPullCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(StateHasChanged);
+        await _ollamaPullCompletion.Task;
+        _ollamaPullCompletion = null;
+    }
+    private async Task CloseOllamaPull()
+    {
+        _ollamaPullOpen = false;
+        _ollamaPullCompletion?.TrySetResult();
+        await InvokeAsync(StateHasChanged);
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    }
+    private bool _integrationsOpen { get => _presentation.IsOpen(AgentPanel.Integrations); set => _presentation.SetOpen(AgentPanel.Integrations, value); }
+    private int _integrationKind;
+    private TaskCompletionSource? _integrationsCompletion;
+    private bool _returnToSettings;
+    private async Task ShowIntegrationsAsync(int tab)
+    {
+        _integrationKind = tab;
+        _fileExplorerOpen = _gitChangesOpen = _directoryBrowserOpen = false;
+        _integrationsOpen = true;
+        _integrationsCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(StateHasChanged);
+        await _integrationsCompletion.Task;
+        _integrationsCompletion = null;
+    }
+    private void ManageIntegrations(int tab)
+    {
+        _returnToSettings = true;
+        _settingsOpen = false;
+        _integrationKind = tab;
+        _integrationsOpen = true;
+    }
+    private async Task CloseIntegrations()
+    {
+        _integrationsOpen = false;
+        _integrationsCompletion?.TrySetResult();
+        if (_returnToSettings) { _returnToSettings = false; _settingsOpen = true; }
+        await InvokeAsync(StateHasChanged);
+        if (!_settingsOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    }
+    private TaskCompletionSource<string?>? _directorySelection;
+    private MandoCodeConfig Config { get; set; } = default!;
+    private PlanRunnerSelector PlanRunners { get; set; } = default!;
+    private PlanHandoff PlanHandoff { get; set; } = default!;
+    private FileAutocompleteProvider FileProvider { get; set; } = default!;
+    private TokenTrackingService TokenTracker { get; set; } = default!;
+    private MusicPlayerService MusicPlayer { get; set; } = default!;
+    private ProjectRootAccessor ProjectRoot { get; set; } = default!;
+    private SpinnerService Spinner { get; set; } = default!;
+    private OperationDisplayRenderer OperationRenderer { get; set; } = default!;
+    private DiffApprovalHandler DiffApproval { get; set; } = default!;
+    private CancelKeyCoordinator KeyCoordinator { get; set; } = default!;
+    private InstructionPromptCoordinator InstructionCoordinator { get; set; } = default!;
+    private ApprovalSelectCoordinator ApprovalMenu { get; set; } = default!;
+    private ShellCommandHandler Shell { get; set; } = default!;
+    private TerminalThemeService ThemeService { get; set; } = default!;
+    private InputStateMachine StateMachine { get; set; } = default!;
+    private SkillLoader Skills { get; set; } = default!;
+    private McpClientManager McpManager { get; set; } = default!;
+    private McpApprovalGate McpGate { get; set; } = default!;
+    private ApprovalPromptGate PromptGate { get; set; } = default!;
+    private UpdateCheckService UpdateCheck { get; set; } = default!;
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private bool _paneStopped;
+    private string? _headerModel;
+
+
+    protected bool _isConnected { get; set; } = false;
+    private bool _connectionChecked = false;
+    private bool _hasRendered = false;
+
+    /// <summary>`mandocode --continue` (or -c): restore this folder's most recent
+    /// conversation once the connection is up — see OnAfterRenderAsync.</summary>
+    private bool _continueRequested = false;
+    private string? _modelWarning = null;
+    private bool _modelError = false;
+    private bool _offerStartupModelPicker;
+
+    // "A newer MandoCode is on NuGet" line, set by the background update check after the
+    // connection is established. Null/empty until then (or when up to date / opted out).
+    private string? _updateNotice = null;
+    private string? _updateCommand = null;
+
+    // Onboarding live status — set by OnboardingFlow during preflight / serve start /
+    // pull progress so the user sees a heartbeat instead of a frozen line. Empty hides
+    // the indicator. Updated through SetOnboardingStatus which fires StateHasChanged.
+    private string _onboardingStatus = "";
+
+    // True while /setup-triggered onboarding is running. Hides the HomeView component
+    // (static info + ready state + help table) so the wizard's imperative AnsiConsole
+    // output isn't overlapped by VDOM redraws of that block. Banner stays visible the
+    // whole time. Toggled with StateHasChanged in the /setup handler.
+    private bool _setupActive = false;
+
+    // Last AI response for /copy command
+    private string? _lastAiResponse;
+
+    // True while an AI request or command is processing — disables the input
+
+    // Chat history for VDOM rendering
+    private List<ChatMsg> _messages = new();
+    private List<string> _pendingOperations = new();
+
+    // Cancellation for active AI requests — triggered by Ctrl+C or Escape
+    private CancellationTokenSource? _requestCts;
+    private CancellationTokenSource? _keyListenerCts;
+
+    // Tracks recent function operations for contextual spinner messages
+    private int _recentReadCount;
+    private readonly List<string> _recentReadFiles = new();
+    private string? _lastOperationType;
+
+    // VDOM input bridge — TaskCompletionSource lets the interactive loop
+    // await user input from the PromptInput Blazor component without blocking
+    private TaskCompletionSource<string>? _inputTcs;
+    private bool _showPrompt = false;
+
+    // Wizard input state — separate from the main prompt so we can spawn bare TextInput/Select
+    // components for interactive wizards without inheriting PromptInput's
+    // slash/at autocomplete state machine.
+    private bool _showWizardInput = false;
+    private bool _wizardInputSecret;
+    private IReadOnlyList<ApprovalSelect.Option> _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+    private string? _wizardSelectTitle;
+    private string _wizardInputValue = "";
+    private string _wizardInputPlaceholder = "";
+    private TaskCompletionSource<string>? _wizardInputTcs;
+
+    private bool _showWizardSelect = false;
+    private TaskCompletionSource<string>? _wizardSelectTcs;
+
+    // Approval menu options — projected from ApprovalSelectCoordinator.Options into the
+    // ApprovalSelect component's own Option type. Rebuilt whenever the coordinator's state
+    // changes (see OnApprovalMenuStateChanged) so the render path stays allocation-free.
+    private IReadOnlyList<ApprovalSelect.Option> _approvalMenuOptions = Array.Empty<ApprovalSelect.Option>();
+
+    private bool _isProcessing = false;
+    private CliPeerRequest? _peerRequest;
+    private CliPeerRequest? _runningPeerRequest;
+    private string? _lastRequestError;
+    private string? _lastCompletedReply;
+    private async Task<CliPeerAnswer> AskPeerAsync(CliPeerRequest request)
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_paneStopped || Pane?.IsBusy?.Invoke() != false || Pane.IsAwaitingInput?.Invoke() == true ||
+                    _inputTcs is null || _inputTcs.Task.IsCompleted || request.Cancellation.IsCancellationRequested)
+                {
+                    request.Accepted.TrySetResult(false);
+                    request.Completion.TrySetResult(new(false, "Agent is busy, starting, awaiting input, or closed."));
+                    return;
+                }
+                _peerRequest = request;
+                _isProcessing = true;
+                Pane.Session.AppendAgentExchange($"{CliAgentPresentation.PlainName(request.From)} · Request from{(request.IsDelegation ? " · " + request.InteractionId : "")}\n{CliAgentPresentation.PlainName(request.From)} → {CliAgentPresentation.PlainName(Pane.Name)}\n\n{request.Question}", Spectre.Console.Color.Purple, request.InteractionId, "Working");
+                _inputTcs.TrySetResult($"A request from agent {request.From}:\n{request.Question}\n\nReturn your answer normally: it is automatically delivered to the requesting agent. Do not also send the same answer with send_agent_message.");
+                request.Accepted.TrySetResult(true);
+                StateHasChanged();
+            });
+            return await request.Completion.Task;
+        }
+        catch (Exception ex)
+        {
+            request.Accepted.TrySetResult(false);
+            return new(false, ex.Message);
+        }
+    }
+    private string _promptInitialValue = "";
+
+
+    // Event handler refs, stored so Dispose can detach them cleanly
+    private Action<FunctionCall>? _onFunctionInvokedHandler;
+    private Action<FunctionExecutionResult>? _onFunctionCompletedHandler;
+    private Action<string>? _onResponseTextDeltaHandler;
+    private Action? _onResponseStreamStartedHandler;
+    private ConsoleCancelEventHandler? _cancelKeyHandler;
+
+    // Reply text streamed since the last print, and what was already printed early for the turn
+    // in flight. A tool call prints the text before it (see PrintReplySoFar); the turn's final
+    // text then prints only the rest (SettleReply). Open only during a direct chat request.
+    private readonly object _replyLock = new();
+    private readonly System.Text.StringBuilder _replyUnprinted = new();
+    private readonly List<string> _replyPrinted = new();
+    private bool _replyOpen;
+    private bool _replyBlockPrinted;
+
+    // Music visualizer — animated equalizer while music plays
+    private CancellationTokenSource? _musicVisCts;
+    private Task? _musicVisTask;
+    private readonly object _musicVisLock = new();
+
+    private void StartMusicVisualizer()
+    {
+        if (TuiConsole.Current is not null) return;
+        // Early-exit if a visualizer CTS is already active
+        lock (_musicVisLock)
+        {
+            if (_musicVisCts != null)
+                return;
+        }
+
+        StopMusicVisualizer();
+
+        if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
+            return;
+
+        ThemeService.IsMusicTitleActive = true;
+
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+
+        var task = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var isPlaying = MusicPlayer.IsPlaying;
+                    var trackName = MusicPlayer.CurrentTrack?.Name ?? "Unknown";
+
+                    if (!MusicPlayer.IsPlaying && !MusicPlayer.IsPaused)
+                        break;
+
+                    // Animated equalizer in the terminal title bar — always visible,
+                    // never overlaps scrollback content
+                    var eq = isPlaying ? MusicAsciiArt.GetEqualizerFrame() : MusicAsciiArt.GetPausedEqualizerFrame();
+                    var note = MusicAsciiArt.GetRandomNote();
+                    var stateIcon = isPlaying ? "\u25b6" : "\u23f8";
+                    var title = $"{note} {trackName}  {eq}  {stateIcon} MandoCode";
+                    Console.Write($"\u001b]0;{title}\u0007");
+
+                    await Task.Delay(isPlaying ? 150 : 500, token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                // Hand title bar back to status display
+                try
+                {
+                    ThemeService.IsMusicTitleActive = false;
+                    ThemeService.UpdateStatusTitle();
+                }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to reset music title: {ex.Message}"); }
+            }
+        });
+
+        lock (_musicVisLock)
+        {
+            _musicVisCts = cts;
+            _musicVisTask = task;
+        }
+    }
+
+    private void StopMusicVisualizer()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+
+        lock (_musicVisLock)
+        {
+            cts = _musicVisCts;
+            task = _musicVisTask;
+            _musicVisCts = null;
+            _musicVisTask = null;
+        }
+
+        if (cts != null)
+        {
+            cts.Cancel();
+            if (task != null)
+            {
+                try { task.Wait(1000); } catch (AggregateException) { }
+            }
+            cts.Dispose();
+        }
+    }
+
+
+
+
+
+    private async Task InitializeConnectionAsync()
+    {
+        // Probe with auto-heal — silently fixes a trailing slash on the configured URL
+        // (the most common config-time foot-gun) before any wizard or warning fires.
+        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        if (probe.WasHealed)
+        {
+            Config.OllamaEndpoint = probe.NormalizedUrl;
+            Config.Save();
+            AnsiConsole.MarkupLine($"[deepskyblue1]Detected trailing slash on Ollama URL — using {Spectre.Console.Markup.Escape(probe.NormalizedUrl)}[/]");
+        }
+
+        // First-run or recovering-from-broken-state: launch the guided wizard. Once a
+        // user has completed (or explicitly skipped) onboarding, an unreachable Ollama
+        // falls through to the static panel + /retry / /setup loop instead.
+        var shouldOnboard = MandoCodeConfig.IsFirstRun() || !Config.HasCompletedOnboarding;
+        if (shouldOnboard)
+        {
+            // Suppress HomeView while the wizard runs — otherwise the VDOM render
+            // loop repaints over imperative AnsiConsole output (most importantly
+            // the `ollama signin` URL, which the user needs to be able to read
+            // and copy as a fallback if the browser auto-launch fails).
+            _setupActive = true;
+            await InvokeAsync(StateHasChanged);
+            try
+            {
+                await RunOnboardingFlowAsync();
+                probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            }
+            finally
+            {
+                _setupActive = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+
+        if (!probe.Ok) probe = await RecoverOllamaConnectionAsync();
+        _isConnected = probe.Ok;
+        _connectionChecked = true;
+
+        if (_isConnected)
+        {
+            await ValidateCurrentModelAsync();
+            await InitializeMcpAsync();
+        }
+
+        // Re-render so the VDOM updates from /learn content to the ready state
+        await InvokeAsync(StateHasChanged);
+
+        // Fire-and-forget the update check — never block the ready state on the network.
+        // It self-throttles to once/24h and fails silent; the notice appears on the next
+        // render once it resolves.
+        _ = CheckForUpdatesAsync();
+    }
+
+    /// <summary>
+    /// Background NuGet "newer version available" check. Sets <see cref="_updateNotice"/>
+    /// and re-renders if an update exists; otherwise leaves the UI untouched. Swallows
+    /// everything — an update nag must never disrupt the session.
+    /// </summary>
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            var update = await UpdateCheck.CheckForUpdateAsync();
+            if (update is null) return;
+
+            // Split so the banner can render the message in gold and the command in green
+            // (Markup escapes inline color tags, so two-color text = two Markup elements).
+            _updateNotice = $"✨ MandoCode {update.LatestVersion} is available!";
+            _updateCommand = $"Run /update to upgrade, or run manually: {update.UpdateCommand}";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Ignore — see method summary.
+        }
+    }
+
+    /// <summary>
+    /// Runs onboarding with component-based URL entry and the same model picker as
+    /// /model. Other installation and sign-in choices retain their existing prompts.
+    /// </summary>
+    private async Task RunOnboardingFlowAsync(bool forceInteractive = false)
+    {
+        if (forceInteractive) await CaptureSnapshot();
+        var contextCleared = false;
+        _setupCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _setupOpen = true;
+        _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var result = await _setupCompletion.Task;
+            if (result.Connected && !string.IsNullOrEmpty(result.FinalModel))
+            {
+                await AI.ReinitializeAsync(Config);
+                contextCleared = true;
+            }
+        }
+        finally
+        {
+            _setupOpen = false;
+            _setupCompletion = null;
+            SetOnboardingStatus("");
+        }
+        if (forceInteractive && contextCleared && Snapshots.Pending is not null) await ShowSnapshots(false, true);
+        else Snapshots.ClearPending();
+    }
+    private bool _setupOpen { get => _presentation.IsOpen(AgentPanel.Setup); set => _presentation.SetOpen(AgentPanel.Setup, value); }
+    private TaskCompletionSource<OnboardingFlow.FlowResult>? _setupCompletion;
+    private void SetupComplete(OnboardingFlow.FlowResult result) => _setupCompletion?.TrySetResult(result);
+
+    private void SetOnboardingStatus(string status)
+    {
+        _onboardingStatus = status ?? "";
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Quick string sniff for "this response is a 401 cloud-auth error." Matches the
+    /// `<red>Error: Ollama returned 401 Unauthorized.</red>` header used by both 401
+    /// branches of <see cref="AIService.FormatHttpFailure"/> / <see cref="AIService.FormatErrorMessage"/>.
+    /// </summary>
+    private static bool Looks401(string responseText)
+        => !string.IsNullOrEmpty(responseText)
+           && responseText.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Quick model-switch flow. Lists pulled models, lets the user pick one with
+    /// cloud/local badges, then pipes them straight into the same context-size picker
+    /// /config uses. Skips the rest of /config (temperature, timeout, ignore dirs) —
+    /// those are reachable via /config as the final tip mentions.
+    /// </summary>
+    private async Task HandleModelCommandAsync()
+    {
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (!gate.TryEnter()) return;
+        try { await SelectModelAsync(); }
+        finally { gate.Exit(); }
+    }
+
+    private readonly AgentModelSelectionGate _modelSelection = new();
+
+    private async Task SelectModelAsync(bool fromSettings = false)
+    {
+        string[] labeled;
+        Spinner.Start(message: "Loading models...");
+        try
+        {
+            var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+            if (!probe.Ok)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Can't reach Ollama at {Spectre.Console.Markup.Escape(Config.OllamaEndpoint)}.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
+
+            var fetched = await OllamaSetupHelper.ListModelsWithStatusAsync(probe.NormalizedUrl);
+            if (!fetched.Ok)
+            {
+                AnsiConsole.MarkupLine("[yellow]Couldn't fetch your model list.[/]");
+                AnsiConsole.MarkupLine($"[dim]Details: {Spectre.Console.Markup.Escape(fetched.Error ?? "unknown error")}[/]");
+                AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, or /setup to walk through setup again.[/]");
+                return;
+            }
+            if (fetched.Models.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No models pulled yet.[/]");
+                AnsiConsole.MarkupLine("[dim]Run /setup to install a starter model.[/]");
+                return;
+            }
+
+            // Same picker layout as /setup's PickModelAsync — cloud bubbles to top,
+            // alphabetical otherwise, badge after each tag, single-space split for
+            // the tag.
+            labeled = fetched.Models
+                .OrderBy(m => MandoCodeConfig.IsCloudModel(m) ? 0 : 1)
+                .ThenBy(m => m, StringComparer.OrdinalIgnoreCase)
+                .Select(m => MandoCodeConfig.IsCloudModel(m)
+                    ? $"{m}   (cloud)"
+                    : $"{m}   (local)")
+                .ToArray();
+
+        }
+        finally { Spinner.Stop(); }
+
+        string modelTag;
+        while (true)
+        {
+            var picked = await PickModelFromPromptAsync(labeled);
+            if (picked is null) return;
+            modelTag = picked.Split(' ')[0];
+            string? error;
+            Spinner.Start($"Checking {modelTag}…");
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                error = await OllamaModelAvailability.CheckCandidateAsync(client, Config.OllamaEndpoint, modelTag);
+            }
+            catch (Exception ex)
+            {
+                _modelWarning = $"Could not check {modelTag}: {ex.Message}. Try /model again.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            finally { Spinner.Stop(); }
+            if (error is null) break;
+            System.Diagnostics.Debug.WriteLine($"[Model selection] {error}");
+            if (!OllamaModelAvailability.OfferStartupPicker(modelTag, error))
+            {
+                _modelWarning = error;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+            _modelWarning = $"{modelTag} is no longer available. Choose another model below.";
+            labeled = labeled.Where(option => option != picked).ToArray();
+            if (labeled.Length == 0)
+            {
+                _modelWarning = "None of the listed cloud models are available. Use /setup to configure another model.";
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+
+        var previousModel = Config.GetEffectiveModelName();
+        if (!fromSettings && !string.Equals(previousModel, modelTag, StringComparison.Ordinal)) await CaptureSnapshot();
+        Config.ModelName = modelTag;
+        Config.ModelPath = null;
+
+        // /model is the QUICK switch — no settings quiz. Response length lives in /config.
+        // Local picks get a context window sized to the hardware tier the tag implies, unless
+        // the user chose one; cloud models manage context server-side.
+        switch (Config.ApplyRecommendedContextLength(previousModel, modelTag))
+        {
+            case MandoCodeConfig.ContextWindowChange.Resized:
+                AnsiConsole.MarkupLine($"[dim]Context window sized to {Config.ContextLength / 1024}k tokens for this model tier.[/]");
+                break;
+            case MandoCodeConfig.ContextWindowChange.Kept:
+                AnsiConsole.MarkupLine($"[dim]Kept your {MandoCodeConfig.ContextLengthLabel(Config.ContextLength)} context window (/config set contextLength auto to size it for each model).[/]");
+                break;
+        }
+
+        Spinner.Start($"Loading {modelTag}…");
+        try
+        {
+            if (fromSettings || string.Equals(previousModel, modelTag, StringComparison.Ordinal)) await AI.RefreshSettingsAsync(Config);
+            else await AI.ReinitializeAsync(Config);
+        }
+        finally { Spinner.Stop(); }
+
+        await ValidateCurrentModelAsync();
+        if (!fromSettings && Snapshots.Pending is not null) await ShowSnapshots(false, true);
+        if (_modelError || fromSettings) return;
+        var defaultChoice = await WizardPromptSelectCoreAsync(
+            $"Make {modelTag} the default model for new agents?",
+            new[] { "No — only this agent", "Yes — new agents use this model" },
+            liveTitle: true);
+        AnsiConsole.MarkupLine($"[green]✓ Now using {Spectre.Console.Markup.Escape(modelTag)}.[/]");
+        if (defaultChoice.StartsWith("Yes", StringComparison.Ordinal))
+        {
+            var agents = Pane is null ? new[] { Config } :
+                (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                    .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+            ModelDefaults.Select(modelTag, agents);
+            AnsiConsole.MarkupLine("[dim]Default model updated for new agents.[/]");
+        }
+
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Inline setting change without leaving the session: "/config set <key> <value>".
+    /// Shares ConfigKeySetter with the CLI's --config set so key names and validation
+    /// can never drift. ApplyScope decides what happens after a successful set: live
+    /// keys just save; kernel-baked keys rebuild the kernel WITHOUT clearing history.
+    /// </summary>
+    private async Task HandleConfigSetCommandAsync(string args)
+    {
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+        {
+            AnsiConsole.MarkupLine("[deepskyblue1]Usage:[/] /config set <key> <value>");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]Available keys (current values):[/]");
+            WriteConfigKeyListing(ConfigKeySetter.DescribeKeys(Config));
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var result = ConfigKeySetter.TrySet(Config, parts[0], parts[1]);
+        AnsiConsole.WriteLine(result.Message);
+
+        if (!result.Ok)
+        {
+            AnsiConsole.MarkupLine("[dim]Run [deepskyblue1]/config set[/] with no arguments to list keys and current values.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var agentsForDefaults = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        ModelDefaults.UpdateSetting(parts[0], parts[1], agentsForDefaults);
+        Config.Save();
+
+        if (parts[0].Equals("showTips", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } tipsRegistry)
+        {
+            foreach (var agent in tipsRegistry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().ShowTips = Config.ShowTips;
+            foreach (var workspace in tipsRegistry.Workspaces) workspace.Refresh();
+        }
+        if (parts[0].Equals("dimUnfocusedAgents", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } dimRegistry)
+        {
+            foreach (var agent in dimRegistry.Workspaces.SelectMany(w => w.Panes))
+            {
+                agent.Services.GetRequiredService<MandoCodeConfig>().DimUnfocusedAgents = Config.DimUnfocusedAgents;
+            }
+            foreach (var workspace in dimRegistry.Workspaces) workspace.Refresh();
+        }
+        if (parts[0].Equals("agentNaming", StringComparison.OrdinalIgnoreCase) && Pane?.Workspace.Registry is { } registry)
+            foreach (var agent in registry.Workspaces.SelectMany(w => w.Panes))
+                agent.Services.GetRequiredService<MandoCodeConfig>().UseAgentNames = Config.UseAgentNames;
+        // Some keys (tavilyKey) carry a live verification probe — instant "your key
+        // works" feedback at set time instead of a silent failure on first real use.
+        if (result.PostSetValidation != null)
+        {
+            AnsiConsole.WriteLine(await result.PostSetValidation());
+        }
+
+        switch (result.Scope)
+        {
+            case ConfigKeySetter.ApplyScope.KernelRebuild:
+                await AI.RefreshSettingsAsync(Config);
+                AnsiConsole.MarkupLine("[dim]Applied — conversation history kept.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.Immediate:
+                AnsiConsole.MarkupLine("[dim]Takes effect on your next message.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.AppRestart:
+                AnsiConsole.MarkupLine("[dim]Saved — takes effect the next time MandoCode starts.[/]");
+                break;
+            case ConfigKeySetter.ApplyScope.DaemonRestart:
+                // The setter's own message already explains the daemon/slider situation.
+                break;
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Renders the plain-text key listing from ConfigKeySetter.DescribeKeys with the
+    /// app palette: key deepskyblue, current value gold, range hint green. The string
+    /// itself stays uncolored because the CLI prints it raw and the anti-drift test
+    /// parses it.
+    /// </summary>
+    private static void WriteConfigKeyListing(string listing)
+    {
+        foreach (var line in listing.Split('\n'))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                line, @"^(\S+)(\s+)(.*?)(\s*\(.*)?$");
+            if (!match.Success)
+            {
+                AnsiConsole.WriteLine(line);
+                continue;
+            }
+
+            var key = Spectre.Console.Markup.Escape(match.Groups[1].Value);
+            var gap = match.Groups[2].Value;
+            var value = Spectre.Console.Markup.Escape(match.Groups[3].Value);
+            var hint = Spectre.Console.Markup.Escape(match.Groups[4].Value);
+            AnsiConsole.MarkupLine(
+                $"[deepskyblue1]{key}[/]{gap}[rgb(255,200,80)]{value}[/][green]{hint}[/]");
+        }
+    }
+
+    /// <summary>
+    /// Auto-launch the cloud sign-in walkthrough after a chat response surfaced a 401.
+    /// Same flow as the menu inside /setup, but invoked inline so the user doesn't have
+    /// to type /setup → re-pick the model → wait for the auth check just to reach the
+    /// "Sign me in now" prompt they obviously need. Hides HomeView via _setupActive so
+    /// the walkthrough's imperative output isn't overlapped by VDOM redraws.
+    /// </summary>
+    private async Task TryAutoSigninAfter401Async()
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[deepskyblue1]Launching sign-in walkthrough so you can fix this now...[/]");
+        AnsiConsole.WriteLine();
+
+        _setupActive = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var flow = new OnboardingFlow(
+                setStatus: SetOnboardingStatus,
+                promptTextVdom: (title, placeholder, validate, initialValue) => WizardPromptTextAsync(title, placeholder, validate, initialValue));
+
+            var signedIn = await flow.WalkThroughCloudSigninAsync(Config.OllamaEndpoint);
+            if (signedIn)
+            {
+                // Reinitialize the kernel against the (now-authenticated) daemon so
+                // the next chat doesn't re-hit a stale connection.
+                await AI.ReinitializeAsync(Config);
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[green]✓ Signed in. Re-send your message to try again.[/]");
+                AnsiConsole.WriteLine();
+            }
+        }
+        finally
+        {
+            SetOnboardingStatus("");
+            _setupActive = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Start MCP clients and attach their tools to the kernel. Failures per-server are
+    /// surfaced via `/mcp` — a broken server never blocks the app from starting.
+    /// </summary>
+    private async Task InitializeMcpAsync()
+    {
+        if (!Config.EnableMcp || Config.McpServers.Count == 0) return;
+
+        try
+        {
+            await McpManager.StartAllAsync();
+            await AI.AttachMcpPluginsAsync();
+
+            var active = McpManager.ActiveClients.Count;
+            var failed = McpManager.StartupErrors.Count;
+            if (active > 0 || failed > 0)
+            {
+                var summary = failed == 0
+                    ? $"[dim]MCP: {active} server(s) connected.[/]"
+                    : $"[dim]MCP: {active} connected, {failed} failed (type /mcp for details).[/]";
+                AnsiConsole.MarkupLine(summary);
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]MCP startup error: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
+        }
+    }
+
+    private async Task ValidateCurrentModelAsync()
+    {
+        // Validate that model supports function calling
+        var (isValid, errorMessage) = await AI.ValidateModelAsync();
+        if (!isValid && errorMessage != null)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Model validation] {errorMessage}");
+            if (errorMessage.Contains("Continue anyway?"))
+            {
+                AnsiConsole.MarkupLine("[yellow]Warning:[/]");
+                AnsiConsole.WriteLine(errorMessage);
+                var continueAnyway = AnsiConsole.Confirm("Continue with this model?", false);
+                if (!continueAnyway)
+                {
+                    AnsiConsole.WriteLine("Please configure a supported model:");
+                    AnsiConsole.WriteLine("  mandocode --config set model qwen2.5-coder:14b");
+                    AnsiConsole.WriteLine("  ollama pull qwen2.5-coder:14b");
+                    ThemeService.ResetPalette();
+                    ThemeService.Dispose();
+                    Environment.ExitCode = 1;
+                    Lifetime.StopApplication();
+                    return;
+                }
+            }
+            else
+            {
+                // Hard error (model not found) — enter limited mode
+                _modelError = true;
+                if (OllamaModelAvailability.OfferStartupPicker(Config.GetEffectiveModelName(), errorMessage))
+                {
+                    _modelWarning = $"{Config.GetEffectiveModelName()} is no longer available. Choose another model below.";
+                    _offerStartupModelPicker = !_hasRendered;
+                }
+                else
+                {
+                    _modelWarning = errorMessage;
+                }
+            }
+        }
+        else
+        {
+            _modelError = false;
+            _modelWarning = null;
+        }
+    }
+
+    private void OnFunctionInvoked(FunctionCall call)
+    {
+        // Pause the spinner so the message renders on a clean line
+        Spinner.Stop();
+
+        // What the model wrote before this call prints now, above the call's line.
+        PrintReplySoFar();
+
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: true);
+
+        // Track operation type for contextual spinner messages
+        _lastOperationType = call.FunctionName.Replace("FileSystem_", "").ToLowerInvariant();
+
+        var activityLabel = call.McpServerName is null ? ToolActivityIcons.Label(call.FunctionName, call.Description) : call.Description;
+        AnsiConsole.MarkupLine($"[#56b6c2]{ToolActivityIcons.For(call.FunctionName, call.McpServerName is not null)} {Spectre.Console.Markup.Escape(activityLabel)}[/]");
+
+        // Show what the model is doing above the spinner in grey
+        Spinner.Start(activityLabel);
+    }
+
+    private void OpenReply()
+    {
+        lock (_replyLock)
+        {
+            _replyOpen = true;
+            _replyBlockPrinted = false;
+            _replyUnprinted.Clear();
+            _replyPrinted.Clear();
+        }
+    }
+
+    private void CloseReply()
+    {
+        lock (_replyLock) _replyOpen = false;
+        Spinner.UpdatePreview(null);
+    }
+
+    // The spinner's live preview only needs the tail of the reply, and copying the whole buffer on
+    // every chunk would make a long reply quadratic.
+    private const int PreviewTailChars = 4000;
+
+    private void OnResponseTextDelta(string text)
+    {
+        string preview;
+        lock (_replyLock)
+        {
+            if (!_replyOpen) return;
+            _replyUnprinted.Append(text);
+            var start = Math.Max(0, _replyUnprinted.Length - PreviewTailChars);
+            preview = _replyUnprinted.ToString(start, _replyUnprinted.Length - start);
+        }
+        Spinner.UpdatePreview(preview);
+    }
+
+    // A retried model call streams its reply again from the start.
+    private void OnResponseStreamStarted()
+    {
+        lock (_replyLock) _replyUnprinted.Clear();
+        Spinner.UpdatePreview(null);
+    }
+
+    /// <summary>
+    /// Prints the reply streamed so far as its own block, ahead of the tool call about to run.
+    /// Only for a call the model made mid-stream (<see cref="AIService.IsStreamingModelCall"/>): a
+    /// tool call written as text runs after the stream, and its raw text is about to be stripped
+    /// from the reply, so it's left for the final text. Scrollback can't take a print back.
+    /// </summary>
+    private void PrintReplySoFar()
+    {
+        string text;
+        lock (_replyLock)
+        {
+            if (!_replyOpen || !AI.IsStreamingModelCall) return;
+            text = _replyUnprinted.ToString().Trim();
+            _replyUnprinted.Clear();
+            if (text.Length == 0) return;
+            _replyPrinted.Add(text);
+        }
+        Spinner.UpdatePreview(null);
+        PrintReplyHeading();
+        RenderMarkdownGuarded(text);
+    }
+
+    private void PrintReplyHeading()
+    {
+        if (_replyBlockPrinted) AnsiConsole.WriteLine(" ");
+        _replyBlockPrinted = true;
+        AnsiConsole.MarkupLine($"[green]{Spectre.Console.Markup.Escape(Config.AgentName ?? "MandoCode")}:[/]");
+    }
+
+    /// <summary>A turn finished with <paramref name="turnText"/>: returns what of it still needs
+    /// printing, and resets for the next turn.</summary>
+    private string SettleReply(string turnText)
+    {
+        List<string> printed;
+        lock (_replyLock)
+        {
+            printed = _replyPrinted.ToList();
+            _replyPrinted.Clear();
+            _replyUnprinted.Clear();
+        }
+        Spinner.UpdatePreview(null);
+        return ReplyText.Unshown(turnText, printed);
+    }
+
+    private void OnFunctionCompleted(MandoCode.Models.FunctionExecutionResult result)
+    {
+        using var toolOutput = (Pane?.Session ?? TuiConsole.Current)?.CaptureToolOutput(invoked: false, success: result.Success);
+        // Pause the spinner so the message renders on a clean line
+        Spinner.Stop();
+
+        if (result.OperationDisplay != null)
+        {
+            // Render directly to stdout (capture deferred to Phase 2)
+            OperationRenderer.Render(result.OperationDisplay);
+
+            // Track consecutive reads for contextual spinner messages
+            if (result.OperationDisplay.OperationType == "Read")
+            {
+                _recentReadCount++;
+                var fileName = Path.GetFileName(result.OperationDisplay.FilePath);
+                if (!string.IsNullOrEmpty(fileName))
+                    _recentReadFiles.Add(fileName);
+            }
+            else
+            {
+                // Non-read operation resets the read tracker
+                _recentReadCount = 0;
+                _recentReadFiles.Clear();
+            }
+        }
+        if (result.Success)
+        {
+            AnsiConsole.MarkupLine("[green]✅ Completed[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[red]✗ Failed · {Spectre.Console.Markup.Escape(result.Result)}[/]");
+        }
+
+        // Refresh file cache after any operation that modifies the file system
+        var fnLower = result.FunctionName.ToLowerInvariant();
+        if (result.Success && !fnLower.StartsWith("list") && (fnLower.Contains("write") || fnLower.Contains("delete") || fnLower.Contains("create") || fnLower.Contains("rename") || fnLower.Contains("move")))
+        {
+            FileProvider.RefreshCache();
+        }
+
+        // Show contextual spinner message based on what just happened
+        var activity = GetContextualActivity(result);
+        Spinner.Start(activity);
+    }
+
+    /// <summary>
+    /// Generates a contextual activity message for the spinner based on recent operations.
+    /// </summary>
+    private string? GetContextualActivity(FunctionExecutionResult result)
+    {
+        var opType = result.OperationDisplay?.OperationType ?? _lastOperationType ?? "";
+
+        return opType switch
+        {
+            "Read" when _recentReadCount >= 2 => $"Analyzing {_recentReadCount} files...",
+            "Read" => "Analyzing file...",
+            "Write" or "Update" => "Applying changes...",
+            "Search" => "Reviewing search results...",
+            "Glob" => "Scanning project structure...",
+            "WebSearch" => "Processing search results...",
+            "WebFetch" => "Reading web content...",
+            "Delete" => "Continuing...",
+            "Command" => "Processing command output...",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Checks if a function name belongs to the FileSystem plugin.
+    /// </summary>
+    private bool IsFileSystemOperation(string functionName)
+    {
+        return functionName.StartsWith("FileSystem_", StringComparison.Ordinal);
+    }
+
+    private async Task<bool> CheckOllamaConnectionAsync()
+    {
+        var probe = await OllamaSetupHelper.ProbeAsync(Config.OllamaEndpoint);
+        if (probe.WasHealed)
+        {
+            // /retry hit the slash bug — heal silently here too so the user doesn't have
+            // to restart to clear the typo.
+            Config.OllamaEndpoint = probe.NormalizedUrl;
+            Config.Save();
+        }
+        return probe.Ok;
+    }
+
+    private Task ToggleFileExplorer() => InvokeAsync(async () =>
+    {
+        if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
+        if (!CanBrowseProject) return;
+        if (_isProcessing && !_fileExplorerOpen) return;
+        _fileExplorerOpen = !_fileExplorerOpen;
+        _gitChangesOpen = false;
+        StateHasChanged();
+        if (!_fileExplorerOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseFileExplorer() => InvokeAsync(async () => { _fileExplorerOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleGitChanges() => InvokeAsync(async () =>
+    {
+        if (_snapshotsOpen || _settingsOpen || _ollamaPullOpen || _integrationsOpen) return;
+        if (!CanBrowseProject) return;
+        _gitChangesOpen = !_gitChangesOpen;
+        _fileExplorerOpen = false;
+        StateHasChanged();
+        if (!_gitChangesOpen && _promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task CloseGitChanges() => InvokeAsync(async () => { _gitChangesOpen = false; StateHasChanged(); if (_promptInput is not null) await _promptInput.FocusPromptAsync(); });
+    private Task ToggleSettings() => InvokeAsync(() =>
+    {
+        if (_snapshotsOpen || _integrationsOpen || IntegrationCoordinator.IsUpdating || !_hasRendered || _isProcessing || _historyActive || InstructionCoordinator.IsActive || ApprovalMenu.IsActive || _showWizardInput || _showWizardSelect || _planSelectActive) return;
+        _settingsOpen = !_settingsOpen;
+        _fileExplorerOpen = _gitChangesOpen = _historyActive = false;
+        StateHasChanged();
+    });
+    private Task CloseSettings() => InvokeAsync(async () =>
+    {
+        _settingsOpen = false;
+        StateHasChanged();
+        if (_promptInput is not null) await _promptInput.FocusPromptAsync();
+    });
+    private Task SettingsModel()
+    {
+        var gate = Pane?.ModelSelection ?? _modelSelection;
+        if (_isProcessing || !gate.TryEnter()) return Task.CompletedTask;
+        _isProcessing = true;
+        _ = RunSettingsModelAsync(gate);
+        return Task.CompletedTask;
+    }
+    private async Task RunSettingsModelAsync(AgentModelSelectionGate gate)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        try { await SelectModelAsync(fromSettings: true); }
+        catch (Exception ex) { _modelWarning = $"Couldn't change the model: {ex.Message}"; }
+        finally { _isProcessing = false; gate.Exit(); await InvokeAsync(StateHasChanged); }
+    }
+    private async Task SaveAgentSettings(AgentSettingsDraft draft)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (_isProcessing) throw new InvalidOperationException("Wait for the current request to finish.");
+        _isProcessing = true;
+        Spinner.Start("Applying settings");
+        try
+        {
+            var mcpChanged = Config.EnableMcp != draft.Config.EnableMcp;
+            draft.ApplyTo(Config);
+            AI.OnWriteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDiffApproval : null;
+            AI.OnDeleteApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleDeleteApproval : null;
+            AI.OnCommandApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleCommandApproval : null;
+            McpGate.OnApprovalRequested = Config.EnableDiffApprovals ? DiffApproval.HandleMcpApproval : null;
+            if (mcpChanged)
+            {
+                await McpManager.StopAllAsync();
+                await InitializeMcpAsync();
+            }
+            await AI.RefreshSettingsAsync(Config);
+            SaveAgentHistory(false);
+        }
+        finally { Spinner.Stop(); _isProcessing = false; }
+    }
+    private async Task ApplyAgentDefaults()
+    {
+        var defaults = ModelDefaults.Snapshot();
+        Config.ModelName = defaults.GetEffectiveModelName();
+        Config.ModelPath = null;
+        await SaveAgentSettings(new AgentSettingsDraft(defaults));
+    }
+    private async Task SaveAgentDefaults(AgentSettingsDraft draft)
+    {
+        await SaveAgentSettings(draft);
+        var agents = Pane is null ? new[] { Config } :
+            (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+        ModelDefaults.Promote(Config, agents);
+    }
+    private void GitDiscarded(string path)
+    {
+        AI.AppendUserNote($"The user DISCARDED uncommitted changes to {path}. Do not re-apply them unless asked.");
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        TuiConsole.MarkupLine($"[green]Discarded changes to {Spectre.Console.Markup.Escape(path)}[/]");
+    }
+    private async Task<string?> PickProjectDirectoryAsync()
+    {
+        _directorySelection = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fileExplorerOpen = false;
+        _gitChangesOpen = false;
+        _directoryBrowserOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _directorySelection.Task; }
+        finally
+        {
+            _directoryBrowserOpen = false;
+            _directorySelection = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private void CompleteDirectorySelection(string? path) => _directorySelection?.TrySetResult(path);
+    private async Task RunInteractiveLoopAsync()
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        if (_offerStartupModelPicker)
+        {
+            _offerStartupModelPicker = false;
+            _isProcessing = true;
+            try { await HandleModelCommandAsync(); }
+            catch (Exception ex)
+            {
+                AnsiConsole.WriteLine($"Could not select a replacement model: {ex.Message}");
+            }
+        }
+        while (true)
+        {
+            // Ensure music visualizer is running if music is active
+            // (it writes to a fixed upper-right screen position via ANSI escapes, no prompt conflict)
+            StartMusicVisualizer();
+
+            // Await user input via VDOM PromptInput component.
+            var input = await WaitForVdomInputAsync();
+            if (_paneStopped) return;
+            var peerRequest = _peerRequest;
+            _peerRequest = null;
+            using var callChain = Pane is null ? null : CliAgentCallChain.Enter(Pane.PersistKey, peerRequest?.Chain, peerRequest?.Kind == "review");
+
+            if (peerRequest is not null)
+            {
+                _runningPeerRequest = peerRequest;
+                using var peerTranscript = Pane!.Session.CaptureAgentExchange(peerRequest.InteractionId, peerRequest.From);
+                try
+                {
+                    input = Delegations.WithInbox(Pane!.PersistKey, input);
+                    _messages.Add(new ChatMsg { Role = "user", Text = input });
+                    var before = _messages.Count;
+                    await ProcessDirectRequestAsync(input, cancellationToken: peerRequest.Cancellation);
+                    var answer = _lastCompletedReply ?? string.Join("\n", _messages.Skip(before).Where(m => m.Role == "assistant").Select(m => m.Text));
+                    var outcome = _lastRequestError is not null ? new CliPeerAnswer(false, _lastRequestError) :
+                        string.IsNullOrWhiteSpace(answer) ? new(false, "The model returned no answer.") : new(true, answer);
+                    Pane?.Session.AppendAgentDetail(peerRequest.InteractionId, $"{CliAgentPresentation.PlainName(peerRequest.From)} · Request from", new Spectre.Console.Text(outcome.Answered ? "Response delivered to the requesting agent." : outcome.Text, new Spectre.Console.Style(outcome.Answered ? Spectre.Console.Color.Green : Spectre.Console.Color.Yellow)), outcome.Answered ? "Completed" : "Failed", problem: !outcome.Answered);
+                    peerRequest.Completion.TrySetResult(outcome);
+                }
+                catch (Exception ex)
+                {
+                    Pane!.Session.AppendAgentDetail(peerRequest.InteractionId, $"{CliAgentPresentation.PlainName(peerRequest.From)} · Request", new Spectre.Console.Text(ex.Message), "Failed", problem: true);
+                    peerRequest.Completion.TrySetResult(new(false, ex.Message));
+                }
+                finally { _runningPeerRequest = null; }
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(input))
+                continue;
+
+            // Shell escape: !<cmd> runs a shell command inline
+            if (input.TrimStart().StartsWith('!'))
+            {
+                await Shell.HandleShellCommandAsync(input.TrimStart()[1..].Trim());
+                continue;
+            }
+
+            if (InputStateMachine.IsCommand(input))
+            {
+                if (await ExecuteSlashCommandAsync(input) == CliCommandResult.Exit) return;
+                continue;
+            }
+
+            if (!_isConnected)
+            {
+                await HandleRetryCommandAsync();
+                if (!_isConnected) continue;
+            }
+
+            // Block AI requests when model is not available
+            if (_modelError)
+            {
+                AnsiConsole.MarkupLine("[yellow]No model loaded.[/] Run [deepskyblue1]/config[/] to select a model, or pull one with [deepskyblue1]ollama pull <model-name>[/].");
+                AnsiConsole.WriteLine();
+                continue;
+            }
+
+            // Matrix easter egg: play a cinematic moment for trigger phrases
+            if (ContainsMatrixTrigger(input))
+            {
+                PlayMatrixMoment(input);
+            }
+
+            // Process @file references and inject file content
+            var processedInput = ProcessFileReferences(input);
+            if (Pane is not null) processedInput += new CliAgentDirectory(Pane).ExpandMentions(input)[input.Length..];
+            if (Pane is not null) processedInput = Delegations.WithInbox(Pane.PersistKey, processedInput);
+
+            // Add user message to chat history
+            _messages.Add(new ChatMsg { Role = "user", Text = input });
+
+            var requestWithContext = Snapshots.WithImports(processedInput);
+            try { await ProcessDirectRequestAsync(requestWithContext); }
+            finally
+            {
+                // A failed provider request can still leave its user message in AI history.
+                // Once accepted into history, the context is already there for the retry.
+                if (Snapshots.QueuedCount > 0 && (await AI.GetHistoryAsync()).Any(m =>
+                    m.Role == Microsoft.Extensions.AI.ChatRole.User && m.Text == requestWithContext))
+                    Snapshots.ClearImports();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called by PromptInput when the user submits text via the VDOM TextInput.
+    /// Completes the TaskCompletionSource so the interactive loop can continue.
+    /// </summary>
+    private ModelPickerState? _modelPicker;
+    private TaskCompletionSource<string?>? _modelPickerTcs;
+    private void HandleModelSelected(string model) => _modelPickerTcs?.TrySetResult(model);
+    private void CancelModelPicker()
+    {
+        _modelWarning = _modelWarning?.Replace("Choose another model below.", "Choose another model with /model.");
+        _modelPickerTcs?.TrySetResult(null);
+    }
+    private async Task<string?> PickModelFromPromptAsync(string[] models)
+    {
+        _modelPickerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _modelPicker = new(models);
+        _showPrompt = true;
+        await InvokeAsync(StateHasChanged);
+        try { return await _modelPickerTcs.Task; }
+        finally
+        {
+            _modelPicker = null;
+            _modelPickerTcs = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private const string ChatComposerKey = "chat-composer";
+    private ChatShell? _chatShell;
+    private PromptInput? _promptInput;
+    private void ScrollConversation(string key) => _chatShell?.Scroll(key);
+    private void CancelCurrentRequest() => _requestCts?.Cancel();
+
+    private async Task HandleVdomSubmit(string input)
+    {
+        if (IntegrationCoordinator.IsUpdating) return;
+        var rename = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (rename.Length > 0 && (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/tips-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            await HandleConfigSetCommandAsync("showTips " + (rename[0].Equals("/tips-on", StringComparison.OrdinalIgnoreCase) ? "on" : "off"));
+            return;
+        }
+        if (rename.Length > 0 && (rename[0].Equals("/agent-dim", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase)
+            || rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase)))
+        {
+            var value = rename[0].Equals("/agent-dim-on", StringComparison.OrdinalIgnoreCase) ? "on"
+                : rename[0].Equals("/agent-dim-off", StringComparison.OrdinalIgnoreCase) ? "off"
+                : rename.Length > 1 ? rename[1] : Config.DimUnfocusedAgents ? "off" : "on";
+            await HandleConfigSetCommandAsync("dimUnfocusedAgents " + value);
+            return;
+        }
+        if (Pane is not null && rename.Length > 0 && rename[0].Equals("/agent-rename", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_isProcessing || Pane.IsBusy?.Invoke() == true)
+            {
+                Pane.Session.Append(new Spectre.Console.Text("Finish or cancel the current request before renaming this agent."));
+                return;
+            }
+            if (Pane.Workspace.Rename(Pane, rename.Length > 1 ? rename[1] : ""))
+            {
+                _isProcessing = true;
+                try
+                {
+                    await AI.RefreshSettingsAsync(Config);
+                    Pane.Session.Append(new Spectre.Console.Text($"Agent renamed to {Pane.Name}."));
+                }
+                finally { _isProcessing = false; }
+            }
+            return;
+        }
+        if (Pane is not null && Pane.Workspace.Command(Pane, input)) return;
+        if (_isProcessing || _inputTcs is null || _inputTcs.Task.IsCompleted) return;
+        if (!string.IsNullOrWhiteSpace(input)) (Pane?.Session ?? TuiConsole.Current)?.AppendUserPrompt(input, Pane is null ? null : new CliAgentDirectory(Pane).All.Select(p => p.Name));
+        _isProcessing = true;
+        _inputTcs.TrySetResult(input);
+    }
+
+    /// <summary>
+    /// Bound to the wizard's bare TextInput.OnSubmit. Completes whichever wizard step is awaiting.
+    /// </summary>
+    private void HandleWizardInputSubmit(string value)
+    {
+        _wizardInputTcs?.TrySetResult(value);
+    }
+
+    /// <summary>
+    /// Bound to the instruction TextInput.OnSubmit. Hands the value back to whichever
+    /// DiffApprovalHandler call is awaiting via the coordinator.
+    /// </summary>
+    private void HandleInstructionSubmit(string value)
+    {
+        InstructionCoordinator.Submit(value ?? string.Empty);
+    }
+
+    private void OnInstructionStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Bound to the approval menu's ApprovalSelect.OnSubmit. Hands the chosen option text
+    /// back to whichever DiffApprovalHandler call is awaiting via the coordinator.
+    /// </summary>
+    private void HandleApprovalMenuSubmit(string value)
+    {
+        ApprovalMenu.Submit(value ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Re-projects the coordinator's options into ApprovalSelect's Option type and
+    /// re-renders. Done here (on state change) rather than inline in markup so the option
+    /// list isn't rebuilt on every unrelated render pass.
+    /// </summary>
+    private bool _historyActive;
+    private TaskCompletionSource? _historyTcs;
+
+    /// <summary>Opens /history and waits for it to close. The loop is idle while it's open, so the
+    /// view owns the screen's live region the way the prompt normally does.</summary>
+    private async Task ShowHistoryAsync()
+    {
+        (Pane?.Services ?? Services).GetRequiredService<AgentArchiveStore>().RecoverAbandoned();
+        // Async continuations, so closing from a Blazor event resumes the loop off the dispatcher
+        // thread (see WaitForVdomInputAsync).
+        _historyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _historyActive = true;
+        _fileExplorerOpen = _gitChangesOpen = false;
+        _showPrompt = true;
+        await InvokeAsync(StateHasChanged);
+
+        await _historyTcs.Task;
+
+        _historyActive = false;
+        await InvokeAsync(StateHasChanged);
+        // Let the VDOM remove the view before anything prints below it.
+        await Task.Delay(100);
+    }
+
+    private void CloseHistory() => _historyTcs?.TrySetResult();
+    private void RestoreArchivedAgent(ArchivedAgent archive)
+    {
+        if (Pane?.Workspace.Registry is not { } registry) return;
+        if (registry.Restore(archive) is not null) CloseHistory();
+    }
+    private async Task HandleUpdateCommandAsync()
+    {
+        var updater = ToolUpdater;
+        if (!updater.TryBegin())
+        {
+            AnsiConsole.MarkupLine("[yellow]An update is already being checked or prepared.[/]");
+            return;
+        }
+        AgentPane[] GetAgents() => (Pane?.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes)
+            ?? Pane?.Workspace.Panes ?? Array.Empty<AgentPane>()).ToArray();
+        var agents = GetAgents();
+        bool OtherAgentBusy() => agents.Any(agent => agent != Pane && agent.IsBusy?.Invoke() == true);
+        _isProcessing = true;
+        try
+        {
+            if (OtherAgentBusy())
+            {
+                AnsiConsole.MarkupLine("[yellow]Finish work and close menus in other agents before updating. /update closes all workspaces.[/]");
+                return;
+            }
+            Spinner.Start("Checking for updates");
+            UpdateInfo? update;
+            try
+            {
+                var problem = await updater.CheckInstallationAsync();
+                if (problem is not null) { AnsiConsole.WriteLine(problem); return; }
+                update = await UpdateCheck.CheckForUpdateAsync(force: true);
+            }
+            finally { Spinner.Stop(); }
+            if (update is null)
+            {
+                AnsiConsole.MarkupLine("[green]MandoCode is already on the latest stable release.[/]");
+                return;
+            }
+            var persistenceNote = agents.Any(agent => !agent.Services.GetRequiredService<MandoCodeConfig>().AllowPersistence)
+                ? " History saving is disabled for some agents; their conversations will not be saved."
+                : " Agent histories will be saved.";
+            if (!await WizardConfirmAsync($"Update to {update.LatestVersion}? MandoCode will close all workspaces.{persistenceNote}", false)) return;
+            agents = GetAgents();
+            if (OtherAgentBusy())
+            {
+                AnsiConsole.MarkupLine("[yellow]Another agent started working. Finish its work before updating.[/]");
+                return;
+            }
+            if (agents.Any(agent => agent.SaveHistory?.Invoke(false) == false))
+            {
+                AnsiConsole.MarkupLine("[yellow]Update cancelled because an agent history could not be saved.[/]");
+                return;
+            }
+            updater.Prepare(update.LatestVersion);
+            Lifetime.StopApplication();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.WriteLine("Could not prepare the update: " + ex.Message);
+            AnsiConsole.WriteLine("Run manually: dotnet tool update -g MandoCode");
+        }
+        finally { Spinner.Stop(); updater.End(); _isProcessing = false; }
+    }
+
+    private DateTimeOffset? _archiveClosedAt;
+    private bool SaveAgentHistory(bool closed)
+    {
+        if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        try
+        {
+            Pane.ArchiveLease ??= store.Claim(Pane.PersistKey);
+            if (Pane.ArchiveLease is null) throw new IOException(store.Error);
+            var archive = new ArchivedAgent(Pane.PersistKey, Pane.Name, ProjectRoot.ProjectRoot, Pane.Workspace.Name,
+                closed ? _archiveClosedAt ?? DateTimeOffset.Now : _archiveClosedAt,
+                new(Config.GetEffectiveModelName(), Config.Temperature, Config.MaxTokens, Config.ContextLength) { OllamaEndpoint = Config.OllamaEndpoint, ContextLengthSetByUser = Config.ContextLengthSetByUser, AgentOptions = AgentSettingsDraft.Capture(Config) },
+                _messages.ToList(), AgentArchiveStore.Capture(Pane.Session), AI.ExportHistoryJson(),
+                TokenTracker.TotalPromptTokens, TokenTracker.TotalCompletionTokens, TokenTracker.LastOperation) { MessageCount = _messages.Count };
+            if (!store.Save(archive)) throw new IOException(store.Error);
+            if (closed) _archiveClosedAt = archive.ClosedAt;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Pane.Session.Append(new Text("Agent history could not be saved. " + ex.Message, new Style(Color.Yellow)));
+            return false;
+        }
+    }
+    private void RestoreAgentHistory()
+    {
+        if (Pane?.RestoreFrom is not { } archive) return;
+        using var output = TuiConsole.Enter(Pane.Session);
+        AgentArchiveStore.Replay(archive, Pane.Session);
+        _messages.AddRange(archive.Messages);
+        TokenTracker.Restore(archive.PromptTokens, archive.CompletionTokens, archive.LastUsage);
+        var restored = archive.HistoryJson is null ? 0 : AI.TryRestoreHistoryJson(archive.HistoryJson);
+        if (restored == 0)
+        {
+            var recent = string.Join("\n\n", archive.Messages.TakeLast(20).Select(m => $"{m.Role}: {m.Text}"));
+            if (recent.Length > 12000) recent = recent[^12000..];
+            AI.AppendUserNote("Restored conversation excerpt (full model memory was unavailable):\n" + recent);
+            AnsiConsole.MarkupLine("[yellow]Transcript restored; recent conversation will be re-briefed to the agent.[/]");
+        }
+        else AnsiConsole.MarkupLine("[green]Agent restored with conversation context.[/]");
+        if (!Directory.Exists(archive.ProjectRoot))
+        {
+            AI.AppendUserNote($"Original project directory {archive.ProjectRoot} is unavailable. Current directory is {ProjectRoot.ProjectRoot}; re-read files before working.");
+            AnsiConsole.MarkupLine("[yellow]Original folder unavailable. Using the current project; /change-directory selects another folder.[/]");
+        }
+        var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
+        if (!store.MarkOpen(archive)) AnsiConsole.MarkupLine("[yellow]Restored agent, but its archive entry could not be updated.[/]");
+        Pane.RestoreFrom = null;
+    }
+
+    private void OnApprovalMenuStateChanged()
+    {
+        _approvalMenuOptions = ApprovalMenu.Options
+            .Select(o => new ApprovalSelect.Option(o.Text, o.Color))
+            .ToList();
+        _approvalPreviewOffset = 0;   // every request starts at the top of its preview
+        InvokeAsync(StateHasChanged);
+    }
+
+    private int _approvalPreviewOffset;
+
+    // Room for the menu's options, the panel's borders and footer, and the question above it.
+    private static int ApprovalPreviewPageSize
+    {
+        get
+        {
+            try { return Math.Clamp(Console.WindowHeight - 16, 6, 30); }
+            catch { return 20; }
+        }
+    }
+
+    private void HandleApprovalPreviewScroll(ApprovalSelect.ScrollKey key)
+    {
+        var count = ApprovalMenu.Preview.Count;
+        if (count == 0) return;
+
+        var page = ApprovalPreviewPageSize;
+        var max = Math.Max(0, count - page);
+        _approvalPreviewOffset = key switch
+        {
+            ApprovalSelect.ScrollKey.PageUp => Math.Max(0, _approvalPreviewOffset - page),
+            ApprovalSelect.ScrollKey.PageDown => Math.Min(max, _approvalPreviewOffset + page),
+            ApprovalSelect.ScrollKey.Home => 0,
+            _ => max,
+        };
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Completes the wizard choice when its focused approval selector submits an option.
+    /// </summary>
+    private void HandleWizardSelectSubmit(string value)
+    {
+        _wizardSelectTcs?.TrySetResult(value);
+    }
+
+    /// <summary>
+    /// Show a single-line text prompt rendered through RazorConsole's TextInput component.
+    /// Avoids Spectre's TextPrompt entirely so there's no Console.ReadLine vs VDOM render-loop
+    /// conflict. Optional <paramref name="validate"/> returns null on success, an error message
+    /// on failure — failure prints the error and re-prompts.
+    /// </summary>
+    private Task<string> WizardPromptTextAsync(string title, string placeholder = "", Func<string, string?>? validate = null, string? initialValue = null) =>
+        WizardPromptTextCoreAsync(title, placeholder, validate, initialValue, false);
+
+    private async Task<string> WizardPromptTextCoreAsync(string title, string placeholder, Func<string, string?>? validate, string? initialValue, bool secret)
+    {
+        var restorePrompt = _showPrompt;
+        _wizardInputSecret = secret;
+        try
+        {
+            while (true)
+            {
+                // Render the title as a separate scrollback line above the input box so it
+                // persists after the input is dismissed.
+                AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+
+                // Pre-fill with initialValue when provided (e.g., default URL for endpoint
+                // entry — user can press Enter to accept or edit in place). Empty otherwise,
+                // and the placeholder hint shows in greyed text until the user types.
+                _wizardInputValue = initialValue ?? "";
+                _wizardInputPlaceholder = placeholder;
+                // Async continuations so the awaiting wizard step resumes off the dispatcher
+                // thread (HandleWizardInputSubmit completes this from a Blazor event). See the
+                // note in WaitForVdomInputAsync.
+                _wizardInputTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _showWizardInput = true;
+                _showPrompt = false;
+                await InvokeAsync(StateHasChanged);
+
+                var result = await _wizardInputTcs.Task;
+
+                _showWizardInput = false;
+                await InvokeAsync(StateHasChanged);
+                // Brief wait so the VDOM tears down the input before we Console.Write the gold echo.
+                await Task.Delay(50);
+
+                if (validate != null)
+                {
+                    var error = validate(result);
+                    if (error != null)
+                    {
+                        AnsiConsole.MarkupLine($"[red]{Spectre.Console.Markup.Escape(error)}[/]");
+                        AnsiConsole.WriteLine();
+                        continue;
+                    }
+                }
+
+                // Persist the answer in scrollback (matches the > gold echo pattern in the main loop).
+                Console.WriteLine($"\u001b[38;2;255;200;80m> {(secret ? "[hidden]" : result)}\u001b[0m");
+                return result;
+            }
+        }
+        finally
+        {
+            _showWizardInput = false;
+            _wizardInputTcs = null;
+            _wizardInputSecret = false;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Show a list of options rendered through the focused approval component. User navigates
+    /// with arrow keys and commits with Enter. Returns the selected option string.
+    /// </summary>
+    private Task<string> WizardPromptSelectAsync(string title, params string[] options) =>
+        WizardPromptSelectCoreAsync(title, options);
+
+    private async Task<string> WizardPromptSelectCoreAsync(string title, string[] options, string? silentChoice = null, bool liveTitle = false)
+    {
+        if (options.Length == 0) throw new ArgumentException("At least one option required", nameof(options));
+
+        // Cancellable navigation menus show the title only in the live region.
+        // Persist it together with the choice only after the user commits an action.
+        _wizardSelectTitle = silentChoice is not null || liveTitle ? title : null;
+        if (silentChoice is null && !liveTitle)
+            AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+
+        _wizardSelectChoices = options.Select(option => new ApprovalSelect.Option(option, Color.DeepSkyBlue1)).ToArray();
+        // Async continuations so the awaiting wizard step resumes off the dispatcher
+        // thread (HandleWizardSelectSubmit completes this from a Blazor event). See the
+        // note in WaitForVdomInputAsync.
+        _wizardSelectTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restorePrompt = _showPrompt;
+        _showWizardSelect = true;
+        _showPrompt = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var result = await _wizardSelectTcs.Task;
+            if (result != silentChoice)
+            {
+                if (silentChoice is not null)
+                    AnsiConsole.MarkupLine($"[deepskyblue1]{Spectre.Console.Markup.Escape(title)}[/]");
+                AnsiConsole.Write(new Text("> " + result, new Style(new Color(255, 200, 80))));
+            }
+            return result;
+        }
+        finally
+        {
+            _showWizardSelect = false;
+            _wizardSelectTcs = null;
+            _wizardSelectChoices = Array.Empty<ApprovalSelect.Option>();
+            _wizardSelectTitle = null;
+            _showPrompt = restorePrompt;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Convenience: yes/no confirm rendered as a component selector. Used by wizards
+    /// instead of <c>AnsiConsole.Confirm</c> so the entire flow stays inside the VDOM render
+    /// pipeline.
+    /// </summary>
+    private async Task<bool> WizardConfirmAsync(string title, bool defaultYes = false)
+    {
+        var yes = "Yes";
+        var no = "No";
+        var options = defaultYes ? new[] { yes, no } : new[] { no, yes };
+        var picked = await WizardPromptSelectAsync(title, options);
+        return picked == yes;
+    }
+
+    /// <summary>
+    /// Shows the VDOM PromptInput component and awaits user submission.
+    /// Returns the submitted text without blocking the Blazor render thread.
+    /// The prompt stays visible but disabled during processing — this avoids
+    /// border artifacts that occur when the component is removed from the VDOM tree.
+    /// </summary>
+    private async Task<string> WaitForVdomInputAsync()
+    {
+        // RunContinuationsAsynchronously is critical: HandleVdomSubmit completes this TCS
+        // from the Blazor dispatcher thread. Without it, the awaiting continuation (the rest
+        // of the interactive loop — blocking Spectre prompts, guarded renders, Spinner.Stop's
+        // task.Wait) would resume inline ON the dispatcher and freeze the UI. Mirrors
+        // InstructionPromptCoordinator, which already uses this for the same reason.
+        var inputCompletion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await InvokeAsync(() =>
+        {
+            _inputTcs = inputCompletion;
+            _promptInitialValue = "";
+            _showPrompt = true;
+            _isProcessing = false;
+            StateHasChanged();
+        });
+
+        var input = await inputCompletion.Task;
+        if (_paneStopped) return string.Empty;
+
+        await InvokeAsync(() =>
+        {
+            _showPrompt = true;
+            _isProcessing = true;
+            StateHasChanged();
+        });
+
+        return input;
+    }
+
+    // Total-budget cap across all @file/@dir expansions in one message. Individual files
+    // are capped at 10k chars each, but many @refs combined can still blow the context
+    // before the chat call even starts. At this size (~60k chars ≈ 15k tokens) we stop
+    // expanding further references and append a notice.
+    private const int MaxFileReferenceBudgetChars = 60_000;
+
+    private void ShowOfflineGuidance()
+    {
+        var endpoint = Spectre.Console.Markup.Escape(Config.OllamaEndpoint);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[yellow]MandoCode can't reach Ollama at {endpoint}.[/]");
+        AnsiConsole.MarkupLine("[dim]Run /retry to reconnect, /ollama-serve to start local Ollama, or /setup to check the server URL. You can also run 'ollama serve' in another terminal.[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Starts a background task that listens for Escape key presses and cancels _requestCts.
+    /// Call StopCancelKeyListener() when the AI request completes to clean up.
+    /// </summary>
+    private void StartCancelKeyListener()
+    {
+        if (TuiConsole.Current is not null) return;
+        var listenerCts = new CancellationTokenSource();
+        _keyListenerCts = listenerCts;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                while (!listenerCts.Token.IsCancellationRequested)
+                {
+                    // Skip ReadKey while a Spectre prompt owns the console — otherwise
+                    // we race the prompt's own reader and silently drop arrow keys.
+                    if (!KeyCoordinator.Suppressed && Console.KeyAvailable)
+                    {
+                        var key = Console.ReadKey(intercept: true);
+                        if (key.Key == ConsoleKey.Escape)
+                        {
+                            var cts = _requestCts;
+                            if (cts != null && !cts.IsCancellationRequested)
+                            {
+                                cts.Cancel();
+                            }
+                            break;
+                        }
+                    }
+                    await Task.Delay(50, listenerCts.Token);
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    /// <summary>
+    /// Stops the background Escape key listener.
+    /// </summary>
+    private void StopCancelKeyListener()
+    {
+        var cts = Interlocked.Exchange(ref _keyListenerCts, null);
+        if (cts != null)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
+    }
+
+    private void HandleCopyCommand()
+    {
+        if (string.IsNullOrEmpty(_lastAiResponse))
+        {
+            AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // OSC 52: copy to system clipboard via terminal escape code
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
+
+        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private void HandleCopyCodeCommand()
+    {
+        if (string.IsNullOrEmpty(_lastAiResponse))
+        {
+            AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Extract fenced code blocks
+        var codeBlockPattern = @"```(?:\w*)\r?\n([\s\S]*?)```";
+        var matches = Regex.Matches(_lastAiResponse, codeBlockPattern);
+
+        if (matches.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No code blocks found in the last response.[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        var codeContent = string.Join("\n\n", matches.Cast<Match>().Select(m => m.Groups[1].Value.TrimEnd()));
+
+        // OSC 52 has a practical payload limit (~74,994 bytes base64)
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(codeContent));
+        if (base64.Length > 74_994)
+        {
+            // Truncate to fit
+            var maxBytes = 74_994 * 3 / 4; // approximate raw byte limit
+            codeContent = codeContent[..Math.Min(codeContent.Length, maxBytes)];
+            base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(codeContent));
+            AnsiConsole.MarkupLine("[yellow]Warning: Code blocks truncated to fit clipboard limit.[/]");
+        }
+
+        TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
+
+        AnsiConsole.MarkupLine($"[green]Copied {matches.Count} code block(s) to clipboard[/] [dim]({codeContent.Length} chars)[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private async Task HandleRetryCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+        var probe = await RecoverOllamaConnectionAsync();
+        _isConnected = probe.Ok;
+
+        if (probe.Ok)
+        {
+            AnsiConsole.MarkupLine("[green]✓ Connected to Ollama![/]");
+            await ValidateCurrentModelAsync();
+        }
+        else
+        {
+            AnsiConsole.WriteLine(probe.Error ?? "Ollama is still unavailable.");
+            ShowOfflineGuidance();
+        }
+
+        AnsiConsole.WriteLine();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<OllamaSetupHelper.ProbeResult> RecoverOllamaConnectionAsync()
+    {
+        var processing = _isProcessing;
+        _isProcessing = true;
+        Spinner.Start(message: "Checking Ollama connection");
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var recovery = (Pane?.Services ?? Services).GetRequiredService<OllamaConnectionRecovery>();
+            var probe = await recovery.RecoverAsync(Config.OllamaEndpoint, Config.ContextLength,
+                message => Spinner.Start(message: message), _requestCts?.Token ?? Lifetime.ApplicationStopping);
+            if (probe.WasHealed)
+            {
+                Config.OllamaEndpoint = probe.NormalizedUrl;
+                Config.Save();
+                await AI.ReinitializeAsync(Config);
+            }
+            return probe;
+        }
+        catch (OperationCanceledException) { return new(false, Config.OllamaEndpoint, false, "Ollama recovery cancelled."); }
+        finally { Spinner.Stop(); _isProcessing = processing; await InvokeAsync(StateHasChanged); }
+    }
+
+    private static bool IsOllamaTransportFailure(Exception error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            if (current is System.Net.Http.HttpRequestException { StatusCode: null } or System.Net.Sockets.SocketException) return true;
+        return false;
+    }
+
+    private async Task HandleConfigCommandAsync()
+    {
+        AnsiConsole.WriteLine();
+        var prompts = new ConfigurationPrompts
+        {
+            Select = (title, options) => WizardPromptSelectAsync(title, options),
+            PickModel = PickModelFromPromptAsync,
+            Text = (title, initial, validate, secret) => WizardPromptTextCoreAsync(title, "", validate, initial, secret)
+        };
+        var choice = await WizardPromptSelectCoreAsync("Configuration Options:", new[]
+        {
+            "Run configuration wizard", "View current configuration", "Agent naming", "Cancel"
+        }, silentChoice: "Cancel");
+
+        switch (choice)
+        {
+            case "Run configuration wizard":
+                await CaptureSnapshot();
+                var updatedConfig = await ConfigurationWizard.RunAsync(
+                    Config,
+                    prompts: prompts);
+                var configuredAgents = Pane is null ? new[] { Config } :
+                    (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                        .Select(p => p.Services.GetRequiredService<MandoCodeConfig>());
+                var defaults = ModelDefaults;
+                defaults.UpdateSettings(updatedConfig, configuredAgents);
+                defaults.UpdateSetting("model", updatedConfig.GetEffectiveModelName(), configuredAgents);
+                await AI.ReinitializeAsync(updatedConfig);
+                if (Snapshots.Pending is not null) await ShowSnapshots(false, true);
+                TuiConsole.Clear();
+                AnsiConsole.WriteLine($"✓ Configuration updated! Now using model: {updatedConfig.GetEffectiveModelName()}\n");
+
+                // Re-validate the model after config change
+                var (isValid, errorMessage) = await AI.ValidateModelAsync();
+                if (isValid)
+                {
+                    if (_modelError)
+                    {
+                        _modelError = false;
+                        _modelWarning = null;
+                        AnsiConsole.MarkupLine("[green]✓ Model validated successfully! You can now use MandoCode.[/]");
+                        AnsiConsole.WriteLine();
+                    }
+                }
+                else
+                {
+                    _modelError = true;
+                    _modelWarning = errorMessage;
+                    AnsiConsole.MarkupLine($"[yellow]Warning:[/] {errorMessage}");
+                    AnsiConsole.MarkupLine("[dim]Pull the model or run /config again to select a different one.[/]");
+                    AnsiConsole.WriteLine();
+                }
+                break;
+
+            case "Agent naming":
+                var naming = await WizardPromptSelectCoreAsync($"Agent naming (current: {(Config.UseAgentNames ? "Names" : "Numbers")}; applies to new agents, existing names stay unchanged):",
+                    new[] { "Names (default): unique callsigns such as Neo or Kernel, like Desktop", "Numbers: sequential labels such as Agent 1 or Agent 2; reuse available numbers", "Cancel" }, silentChoice: "Cancel");
+                if (naming != "Cancel")
+                    await HandleConfigSetCommandAsync("agentNaming " + (naming.StartsWith("Names", StringComparison.Ordinal) ? "names" : "numbers"));
+                break;
+
+            case "View current configuration":
+                AnsiConsole.WriteLine();
+                Config.Display();
+                AnsiConsole.WriteLine();
+                break;
+        }
+    }
+
+    private bool _disposed;
+
+
+
+
+
+}

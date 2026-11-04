@@ -632,7 +632,7 @@ Type `@` anywhere in your input (after a space or at position 0) to trigger file
 
 ```
 explain @src/MandoCode/Services/AIService.cs to me
-what does the ProcessFileReferences method do in @src/MandoCode/Components/App.razor
+what does the ProcessFileReferences method do in @src/MandoCode/Components/Shell/App.razor
 refactor @src/MandoCode/Models/LoadingMessages.cs to use fewer spinners
 ```
 
@@ -892,7 +892,7 @@ This simulation replaces the package update command, verifies the helper waits f
 
 ```
 src/MandoCode/
-  Components/        Razor UI (App, Banner, HelpDisplay, ConfigMenu, Prompt)
+  Components/        Razor UI grouped by feature (see Components/README.md)
   Services/          Core logic (AI, markdown, syntax, tokens, music, diffs, input state machine)
   Models/            Data models, config, system prompts, educational content
   Plugins/           Tool classes bound as AIFunctions (FileSystem, WebSearch, Planning, Skills)
