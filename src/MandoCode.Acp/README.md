@@ -5,7 +5,7 @@ over stdio (newline-delimited JSON-RPC 2.0).
 
 - No third-party ACP libraries; DTOs are hand-written against the official JSON schema.
 - `System.Text.Json` source generation (`AcpJsonContext`), no reflection-based serialization.
-- Targets `net8.0` and `net10.0`.
+- Targets `net8.0` and `net10.0`; depends only on the BCL (no NuGet packages).
 
 ## Schema
 
@@ -23,3 +23,18 @@ run the tests and update the tag here and in `AcpProtocol.SchemaTag`.
 - "Enum" values (stop reasons, tool kinds, statuses, ...) are plain strings with constant
   classes, so values added by newer agents never break parsing.
 - Features are decided from the capabilities the agent returns from `initialize`.
+
+## JSON-RPC layer
+
+`JsonRpc/JsonRpcConnection` runs JSON-RPC 2.0 over a pair of streams (the agent's stdout/stdin):
+
+- one message per line (`
+`, a trailing `` is dropped, blank lines are skipped); a line over
+  32 MB, or several consecutive non-JSON lines, break the connection with an explanation;
+- outgoing ids are numbers; incoming ids (number or string) are echoed back unchanged;
+- the reader never waits on a handler: each incoming request runs on its own task, so a
+  permission prompt can be pending while `session/prompt` is still in flight;
+- incoming notifications are handled by one consumer, in order. A response is dispatched as soon
+  as it is read, so callers that must see every `session/update` that preceded it await
+  `DrainNotificationsAsync()` first;
+- unknown methods get `-32601`, bad params `-32602`, handler failures `-32603` (without details).
