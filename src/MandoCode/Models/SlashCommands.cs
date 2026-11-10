@@ -74,6 +74,7 @@ public static class SlashCommands
         { "/force-skill", "Override: force a specific skill to run now" },
         { "/mcp", $"Manage shared MCP servers: add, edit, test, and enable or disable ({Keybindings.McpServers})" },
         { "/mcp tools", "List tools exposed by connected MCP servers (usage: /mcp tools <server>)" },
+        { "/agent-acp", "Manage external ACP agents: list, add, test, remove, enable, disable (/agent-acp add <name> <command> [args...])" },
         { "/mcp-reload", "Restart all MCP servers and re-register their tools" },
         { "/exit", "Exit MandoCode" }
     };

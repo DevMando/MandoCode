@@ -468,6 +468,14 @@ public class MandoCodeConfig
     public Dictionary<string, McpServerConfig> McpServers { get; set; } = new();
 
     /// <summary>
+    /// External ACP agents (Agent Client Protocol), keyed by a short name. Read only from the user's
+    /// own config (<see cref="GetDefaultConfigPath"/>): an entry is a command that runs with the user's
+    /// permissions, so it is never taken from a project file or any other path (see <see cref="Load"/>).
+    /// </summary>
+    [JsonPropertyName("acpAgents")]
+    public Dictionary<string, AcpAgentConfig> AcpAgents { get; set; } = new();
+
+    /// <summary>
     /// Music player preferences (volume, genre, autoplay).
     /// </summary>
     [JsonPropertyName("music")]
@@ -521,6 +529,7 @@ public class MandoCodeConfig
                 if (config != null)
                 {
                     config.ValidateAndClamp();
+                    config.DropAcpAgentsUnlessUserConfig(configPath);
                     // One-shot, version-gated migrations. Persist immediately if anything
                     // changed so the upgrade (and the version stamp) survives even if the
                     // session never otherwise saves.
@@ -649,6 +658,57 @@ public class MandoCodeConfig
                 }
             }
             McpServers = rebuilt;
+        }
+
+        NormalizeAcpAgents();
+    }
+
+    private void NormalizeAcpAgents()
+    {
+        var rebuilt = new Dictionary<string, AcpAgentConfig>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in AcpAgents ?? new())
+        {
+            if (value is null)
+                continue;
+
+            if (!rebuilt.TryAdd(key, value))
+            {
+                var keptKey = rebuilt.Keys.First(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+                Console.WriteLine($"Warning: acpAgents entry '{key}' collides with '{keptKey}' (names are case-insensitive). Keeping '{keptKey}', ignoring '{key}'. Remove or rename one in {GetDefaultConfigPath()} before saving — otherwise the dropped entry is lost on next write.");
+                continue;
+            }
+
+            value.Args ??= new();
+            value.Env ??= new();
+            value.StartupTimeoutSeconds = Math.Clamp(value.StartupTimeoutSeconds, 5, 300);
+        }
+
+        AcpAgents = rebuilt;
+    }
+
+    /// <summary>
+    /// <c>acpAgents</c> entries launch programs, so they are honoured only when this config came from the
+    /// user's own config file. Anything loaded from another path has them dropped (with a warning).
+    /// </summary>
+    private void DropAcpAgentsUnlessUserConfig(string configPath)
+    {
+        if (AcpAgents.Count == 0 || IsUserConfigPath(configPath))
+            return;
+
+        Console.WriteLine($"Warning: ignoring 'acpAgents' in {configPath}: ACP agents are only read from {GetDefaultConfigPath()}.");
+        AcpAgents = new Dictionary<string, AcpAgentConfig>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsUserConfigPath(string configPath)
+    {
+        try
+        {
+            return string.Equals(Path.GetFullPath(configPath), Path.GetFullPath(GetDefaultConfigPath()),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
         }
     }
 
@@ -823,4 +883,35 @@ public class McpServerConfig
         !string.IsNullOrWhiteSpace(Url) ||
         string.Equals(Transport, "http", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(Transport, "sse", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// One external ACP agent. <see cref="Command"/> must resolve to a native executable; Node adapters are
+/// run as <c>node</c> with the absolute script path as the first argument (never through <c>npx</c>).
+/// </summary>
+public class AcpAgentConfig
+{
+    [JsonPropertyName("command")]
+    public string Command { get; set; } = "";
+
+    [JsonPropertyName("args")]
+    public List<string> Args { get; set; } = new();
+
+    /// <summary>Environment variables added to the agent's environment (they win over inherited ones).</summary>
+    [JsonPropertyName("env")]
+    public Dictionary<string, string> Env { get; set; } = new();
+
+    [JsonPropertyName("disabled")]
+    public bool Disabled { get; set; }
+
+    /// <summary>Pass <c>ANTHROPIC_API_KEY</c> through to the agent. Off by default.</summary>
+    [JsonPropertyName("passAnthropicApiKey")]
+    public bool PassAnthropicApiKey { get; set; }
+
+    [JsonPropertyName("startupTimeoutSeconds")]
+    public int StartupTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>Shown when the agent reports it is not signed in (for example <c>claude auth login</c>).</summary>
+    [JsonPropertyName("authHint")]
+    public string? AuthHint { get; set; }
 }

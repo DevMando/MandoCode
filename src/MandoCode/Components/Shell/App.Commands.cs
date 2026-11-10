@@ -176,6 +176,11 @@ public partial class App
             }
             return CliCommandResult.Continue;
         }
+        if (command == "agent-acp" || command.StartsWith("agent-acp ", StringComparison.Ordinal))
+        {
+            await HandleAcpAgentCommandAsync(parsed.Arguments);
+            return CliCommandResult.Continue;
+        }
         if (command == "ollama-pull") { await ShowOllamaPull(); return CliCommandResult.Continue; }
         if (command == "model")
         {
@@ -310,5 +315,40 @@ public partial class App
         TuiConsole.MarkupLine("[dim]Type /help for available commands[/]");
         TuiConsole.WriteLine();
         return CliCommandResult.Continue;
+    }
+
+    private async Task HandleAcpAgentCommandAsync(string arguments)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        var configs = Pane is null
+            ? new[] { Config }
+            : (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>()).ToArray();
+        var commands = new Services.Acp.AcpAgentCommands(
+            new Services.Acp.ConfigAcpAgentCatalog(Config, configs),
+            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()));
+
+        await commands.ExecuteAsync(arguments, ProjectRoot.ProjectRoot, ConfirmAcpLaunchAsync, Console.Out, Console.Out);
+    }
+
+    private async Task<bool> ConfirmAcpLaunchAsync(Services.Acp.AcpLaunchPlan plan)
+    {
+        using var promptHold = await PromptGate.AcquireAsync();
+        TuiConsole.WriteLine();
+        foreach (var line in plan.Describe())
+            TuiConsole.WriteLine(line);
+        TuiConsole.WriteLine();
+
+        const string trust = "Trust and start";
+        const string cancel = "Cancel";
+        using (KeyCoordinator.Suppress())
+        {
+            var choice = await ApprovalMenu.RequestAsync(new List<ApprovalSelectCoordinator.Option>
+            {
+                new(trust, Color.Green),
+                new(cancel, new Color(255, 200, 80)),
+            });
+            return choice == trust;
+        }
     }
 }

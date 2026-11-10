@@ -24,23 +24,69 @@ An agent command is code that runs with your permissions, so launching is delibe
 - The agent must write only protocol to stdout. stderr is captured (never printed) and shown as a tail on failure.
 - Shutdown closes stdin, waits two seconds, then kills the whole process tree.
 
+## Configuring agents
+
+Agents live under `acpAgents` in `~/.mandocode/config.json` and are read **only** from that file (a config
+loaded from any other path has its `acpAgents` dropped with a warning), so a project cannot add a program to run.
+
+```json
+{
+  "acpAgents": {
+    "myagent": {
+      "command": "node",
+      "args": ["C:/tools/adapter/dist/index.js"],
+      "env": { "SOME_VAR": "value" },
+      "disabled": false,
+      "passAnthropicApiKey": false,
+      "startupTimeoutSeconds": 30,
+      "authHint": "run the agent's own login command"
+    }
+  }
+}
+```
+
+Names are case-insensitive. Text commands (no settings tab):
+
+```
+/agent-acp [list]
+/agent-acp add <name> <command> [args...]     (double quotes group an argument; unsafe commands are refused)
+/agent-acp test <name>                         (initialize + session/new, then shut down)
+/agent-acp remove <name>
+/agent-acp enable <name> | disable <name>
+```
+
+`/agent-acp add claude` (no command) only prints how to set it up: there is no Claude Code preset yet because the
+adapter, its pinned version and the way it finds the Claude Code binary have not been validated (see below).
+`/agent-acp <name>` (opening a pane) is not implemented yet.
+
+## Trust
+
+Before an agent runs for the first time MandoCode shows exactly what will start: the resolved absolute program,
+every argument on its own line, the working directory, the *names* (not values) of extra environment variables, and
+whether `ANTHROPIC_API_KEY` is passed. After you approve, a SHA-256 of `{resolved path, args, env, passAnthropicApiKey}`
+is stored under the agent's name in `~/.mandocode/acp-trust.json` (separate from config.json, so editing the config
+cannot grant trust). Any change to those values, or a different program resolving from `PATH`, asks again.
+The working directory, `disabled`, timeout and hint are not part of the hash. The contents of an adapter script are
+not hashed. `remove` and `add` clear the stored trust for that name.
+
+Every way of starting an agent (`/agent-acp test`, `mandocode --acp-probe`) goes through the same resolver and the
+same trust check; there is no flag or environment variable that skips the question.
+
 ## Probing an agent
 
 ```
-mandocode --acp-probe [--yes] [--cwd <dir>] [--pass-anthropic-api-key] [--] <command> [args...]
+mandocode --acp-probe [--cwd <dir>] <name>
 ```
 
-Prints the full resolved command and asks for confirmation (`--yes` skips the question for scripts), then runs
-`initialize` and `session/new` in the working directory and reports the agent, protocol version, capabilities,
-auth methods and startup time. On failure it prints the exit code and the stderr tail. Exit codes:
-`0` ok, `1` failed, `2` usage, `3` declined. Nothing is stored or trusted by the probe.
+Runs the configured agent `<name>` through the trust question (a terminal y/N), then `initialize` and `session/new`
+in the working directory, and reports the agent, protocol version, capabilities, auth methods and startup time. On
+failure it prints the exit code and the stderr tail. Exit codes: `0` ok, `1` failed, `2` usage or unknown agent,
+`3` launch not approved. In a non-interactive shell an unapproved agent is simply declined.
 
-Examples:
+## API notes
 
-```
-mandocode --acp-probe C:\tools\some-agent.exe --acp
-mandocode --acp-probe node C:\Users\me\agents\adapter\dist\index.js
-```
+`AcpSession.Prompt(...)` keeps its name instead of `PromptAsync`: it returns an `AcpTurn` immediately (updates stream
+from `turn.Updates`, the end arrives on `turn.Completion`), not a `Task`, so an `Async` suffix would mislead.
 
 ## Client behaviour
 

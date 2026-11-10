@@ -47,13 +47,11 @@ class Program
             return;
         }
 
-        // ACP agent probe — launches an agent, runs initialize + session/new, prints the result.
+        // ACP agent probe — launches a configured agent (after the same trust question as /agent-acp),
+        // runs initialize + session/new and prints the result.
         if (args.Length > 0 && args[0].ToLower() == "--acp-probe")
         {
-            var request = Services.Acp.AcpConnectionProbe.Parse(args.Skip(1).ToArray(), Environment.CurrentDirectory, Console.Error);
-            Environment.ExitCode = request is null
-                ? Services.Acp.AcpConnectionProbe.ExitUsage
-                : await Services.Acp.AcpConnectionProbe.RunAsync(request, Console.Out, Console.Error, Console.ReadLine);
+            Environment.ExitCode = await RunAcpProbeAsync(args.Skip(1).ToArray());
             return;
         }
 
@@ -287,6 +285,21 @@ class Program
     /// Preflight check printed in plain text so it works in any terminal. Returns the
     /// suggested process exit code (0 = all good, 1 = at least one problem).
     /// </summary>
+    static async Task<int> RunAcpProbeAsync(string[] probeArgs)
+    {
+        var parsed = Services.Acp.AcpConnectionProbe.Parse(probeArgs, Environment.CurrentDirectory, Console.Error);
+        if (parsed is not { } request)
+            return Services.Acp.AcpConnectionProbe.ExitUsage;
+
+        // acpAgents come from the user's own config only.
+        var config = MandoCodeConfig.Load();
+        return await Services.Acp.AcpConnectionProbe.RunAsync(
+            request.Name, config.AcpAgents, request.WorkingDirectory,
+            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()),
+            Services.Acp.AcpConnectionProbe.ConsoleConfirm(Console.Out, Console.ReadLine),
+            Console.Out, Console.Error);
+    }
+
     static async Task<int> RunDoctorAsync()
     {
         var problems = 0;

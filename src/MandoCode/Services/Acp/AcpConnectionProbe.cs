@@ -2,20 +2,15 @@ using System.Diagnostics;
 using MandoCode.Acp;
 using MandoCode.Acp.Client;
 using MandoCode.Acp.Transport;
+using MandoCode.Models;
 
 namespace MandoCode.Services.Acp;
 
-/// <summary>What <c>mandocode --acp-probe</c> was asked to launch.</summary>
-public sealed record AcpProbeRequest(
-    string Command,
-    IReadOnlyList<string> Args,
-    string WorkingDirectory,
-    bool AssumeYes,
-    bool PassAnthropicApiKey = false);
-
 /// <summary>
-/// Launches an ACP agent, runs <c>initialize</c> and <c>session/new</c>, shuts it down and prints what it found.
-/// Used for manual validation of an agent before it is configured (nothing is stored or trusted here).
+/// Launches a configured ACP agent, runs <c>initialize</c> and <c>session/new</c>, shuts it down and
+/// reports what it found. Shared by <c>mandocode --acp-probe &lt;name&gt;</c> and <c>/agent-acp test &lt;name&gt;</c>:
+/// both resolve the command with <see cref="AcpCommandResolver"/> and go through the same trust check, so
+/// neither can start an agent the user has not approved.
 /// </summary>
 public static class AcpConnectionProbe
 {
@@ -24,58 +19,67 @@ public static class AcpConnectionProbe
     public const int ExitUsage = 2;
     public const int ExitDeclined = 3;
 
-    /// <summary>Parses the arguments that follow <c>--acp-probe</c>. Returns null (after printing why) on bad usage.</summary>
-    public static AcpProbeRequest? Parse(IReadOnlyList<string> args, string defaultWorkingDirectory, TextWriter error)
+    public const string DefaultAuthHint = "Sign in with the agent's own tooling (for Claude Code: `claude auth login`), then try again.";
+
+    /// <summary>Parses what follows <c>--acp-probe</c>: <c>[--cwd &lt;dir&gt;] &lt;name&gt;</c>. Null (after printing why) on bad usage.</summary>
+    public static (string Name, string WorkingDirectory)? Parse(IReadOnlyList<string> args, string defaultWorkingDirectory, TextWriter error)
     {
         var workingDirectory = defaultWorkingDirectory;
-        var assumeYes = false;
-        var passKey = false;
+        string? name = null;
 
-        var i = 0;
-        for (; i < args.Count && args[i].StartsWith("--", StringComparison.Ordinal); i++)
+        for (var i = 0; i < args.Count; i++)
         {
-            switch (args[i])
+            if (args[i] == "--cwd" && i + 1 < args.Count)
+                workingDirectory = Path.GetFullPath(args[++i]);
+            else if (args[i].StartsWith("--", StringComparison.Ordinal) || name is not null)
             {
-                case "--yes":
-                    assumeYes = true;
-                    break;
-                case "--pass-anthropic-api-key":
-                    passKey = true;
-                    break;
-                case "--cwd" when i + 1 < args.Count:
-                    workingDirectory = Path.GetFullPath(args[++i]);
-                    break;
-                case "--":
-                    i++;
-                    goto done;
-                default:
-                    error.WriteLine($"Unknown option '{args[i]}'.");
-                    return null;
+                error.WriteLine($"Unexpected argument '{args[i]}'.");
+                name = null;
+                break;
             }
+            else
+                name = args[i];
         }
 
-        done:
-        if (i >= args.Count)
+        if (name is null)
         {
-            error.WriteLine("Usage: mandocode --acp-probe [--yes] [--cwd <dir>] [--pass-anthropic-api-key] [--] <command> [args...]");
-            error.WriteLine("  <command> must be a native executable (.exe/ELF); for Node adapters use: node <absolute path to the adapter script>");
+            error.WriteLine("Usage: mandocode --acp-probe [--cwd <dir>] <agent name>");
+            error.WriteLine("  The agent must be configured under \"acpAgents\" in ~/.mandocode/config.json.");
             return null;
         }
 
-        return new AcpProbeRequest(args[i], args.Skip(i + 1).ToArray(), workingDirectory, assumeYes, passKey);
+        return (name, workingDirectory);
     }
 
     public static async Task<int> RunAsync(
-        AcpProbeRequest request,
+        string name,
+        IReadOnlyDictionary<string, AcpAgentConfig> agents,
+        string workingDirectory,
+        AcpAgentLauncher launcher,
+        Func<AcpLaunchPlan, Task<bool>> confirm,
         TextWriter output,
         TextWriter error,
-        Func<string?> readLine,
         CancellationToken cancellationToken = default)
     {
-        ResolvedCommand resolved;
+        if (!agents.TryGetValue(name, out var config))
+        {
+            error.WriteLine($"No ACP agent named '{name}' is configured.");
+            error.WriteLine(agents.Count == 0
+                ? "Add one with /agent-acp add, or under \"acpAgents\" in ~/.mandocode/config.json."
+                : "Configured: " + string.Join(", ", agents.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase)));
+            return ExitUsage;
+        }
+
+        if (config.Disabled)
+        {
+            error.WriteLine($"ACP agent '{name}' is disabled. Enable it with /agent-acp enable {name}.");
+            return ExitFailed;
+        }
+
+        AcpLaunchPlan plan;
         try
         {
-            resolved = AcpCommandResolver.Resolve(request.Command, request.Args);
+            plan = launcher.Prepare(name, config, workingDirectory);
         }
         catch (AcpLaunchException ex)
         {
@@ -83,42 +87,25 @@ public static class AcpConnectionProbe
             return ExitFailed;
         }
 
-        output.WriteLine("The agent will be started as:");
-        output.WriteLine("  " + resolved.ExecutablePath);
-        foreach (var argument in resolved.Args)
-            output.WriteLine("    arg: " + argument);
-        output.WriteLine("  working directory: " + request.WorkingDirectory);
-        output.WriteLine(request.PassAnthropicApiKey
-            ? "  ANTHROPIC_API_KEY: passed through (explicitly requested)"
-            : "  ANTHROPIC_API_KEY: removed from the agent's environment");
-        output.WriteLine("It runs with your permissions and may start further processes.");
-
-        if (!request.AssumeYes)
+        if (!await launcher.EnsureTrustedAsync(plan, confirm))
         {
-            output.Write("Start it? [y/N] ");
-            var answer = readLine()?.Trim();
-            if (!string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase))
-            {
-                output.WriteLine("Not started.");
-                return ExitDeclined;
-            }
+            output.WriteLine("Not started: the launch was not approved.");
+            return ExitDeclined;
         }
 
         var stderr = new StderrLog();
-        var spec = new AcpLaunchSpec(
-            Path.GetFileNameWithoutExtension(resolved.ExecutablePath), resolved.ExecutablePath, resolved.Args,
-            null, request.PassAnthropicApiKey, request.WorkingDirectory);
-
         var clock = Stopwatch.StartNew();
         AcpClient? client = null;
         try
         {
-            var transport = AcpProcessTransport.Start(spec, resolved, stderr);
-            client = new AcpClient(transport, new DenyAllClientHandler(), new AcpClientOptions { ClientName = "MandoCode-probe" });
+            var transport = AcpProcessTransport.Start(plan.Spec, plan.Resolved, stderr);
+            client = new AcpClient(transport, new DenyAllClientHandler(), new AcpClientOptions
+            {
+                ClientName = "MandoCode-probe",
+                StartupTimeout = TimeSpan.FromSeconds(config.StartupTimeoutSeconds),
+            });
 
             var initialized = await client.ConnectAsync(cancellationToken);
-            output.WriteLine();
             output.WriteLine($"initialize: ok in {clock.ElapsedMilliseconds} ms");
             output.WriteLine($"  agent:        {initialized.AgentInfo?.Name ?? "(not reported)"} {initialized.AgentInfo?.Version}".TrimEnd());
             output.WriteLine($"  protocol:     v{initialized.ProtocolVersion}");
@@ -131,7 +118,7 @@ public static class AcpConnectionProbe
 
             try
             {
-                var session = await client.NewSessionAsync(request.WorkingDirectory, cancellationToken);
+                var session = await client.NewSessionAsync(workingDirectory, cancellationToken);
                 output.WriteLine($"session/new: ok ({clock.ElapsedMilliseconds} ms), session {session.SessionId}");
                 if (session.Modes is { } modes)
                     output.WriteLine("  modes:        " + string.Join(", ", modes.AvailableModes.Select(m => m.Id)) + $" (current: {modes.CurrentModeId})");
@@ -139,7 +126,7 @@ public static class AcpConnectionProbe
             catch (AcpAuthRequiredException ex)
             {
                 error.WriteLine("session/new: the agent is not signed in. " + ex.Message);
-                error.WriteLine("Sign in with the agent's own tooling (for Claude Code: `claude auth login`), then probe again.");
+                error.WriteLine(config.AuthHint ?? DefaultAuthHint);
                 return ExitFailed;
             }
 
@@ -174,4 +161,17 @@ public static class AcpConnectionProbe
             }
         }
     }
+
+    /// <summary>The terminal version of the trust question: shows the plan and asks y/N. Anything but yes declines.</summary>
+    public static Func<AcpLaunchPlan, Task<bool>> ConsoleConfirm(TextWriter output, Func<string?> readLine) =>
+        plan =>
+        {
+            foreach (var line in plan.Describe())
+                output.WriteLine(line);
+            output.Write("Trust and start it? [y/N] ");
+            var answer = readLine()?.Trim();
+            return Task.FromResult(
+                string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase));
+        };
 }
