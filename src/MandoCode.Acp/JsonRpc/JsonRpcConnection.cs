@@ -16,9 +16,10 @@ public sealed class JsonRpcConnectionOptions
 
     /// <summary>
     /// Builds the exception pending requests fail with when the stream ends. The process transport
-    /// uses it to attach the exit code and stderr tail; the default is a plain message.
+    /// uses it to attach the exit code and stderr tail (the exit code can lag EOF slightly, hence
+    /// async); the default is a plain message.
     /// </summary>
-    public Func<AcpConnectionClosedException>? DescribeClose { get; init; }
+    public Func<Task<AcpConnectionClosedException>>? DescribeClose { get; init; }
 
     /// <summary>Diagnostics sink (ignored frames, handler failures). Never write this to the console.</summary>
     public Action<string>? Diagnostics { get; init; }
@@ -270,7 +271,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or NotSupportedException)
         {
-            Terminate(CreateClosedException(ex));
+            Terminate(await CreateClosedExceptionAsync(ex).ConfigureAwait(false));
         }
         catch (OperationCanceledException)
         {
@@ -339,11 +340,11 @@ public sealed class JsonRpcConnection : IAsyncDisposable
                 end += read;
             }
 
-            Terminate(CreateClosedException(null));
+            Terminate(await CreateClosedExceptionAsync(null).ConfigureAwait(false));
         }
         catch (OperationCanceledException)
         {
-            Terminate(CreateClosedException(null));
+            Terminate(await CreateClosedExceptionAsync(null).ConfigureAwait(false));
         }
         catch (AcpProtocolViolationException ex)
         {
@@ -351,7 +352,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            Terminate(CreateClosedException(ex));
+            Terminate(await CreateClosedExceptionAsync(ex).ConfigureAwait(false));
         }
     }
 
@@ -601,11 +602,19 @@ public sealed class JsonRpcConnection : IAsyncDisposable
             Volatile.Read(ref _closeReason)?.Message ?? "The connection to the agent is closed.",
             inner: Volatile.Read(ref _closeReason));
 
-    private AcpConnectionClosedException CreateClosedException(Exception? inner)
+    private async Task<AcpConnectionClosedException> CreateClosedExceptionAsync(Exception? inner)
     {
-        var described = _options.DescribeClose?.Invoke();
-        if (described is not null)
-            return described;
+        if (_options.DescribeClose is { } describe)
+        {
+            try
+            {
+                return await describe().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Fall through to the generic description.
+            }
+        }
 
         return new AcpConnectionClosedException(
             inner is null ? "The agent closed the connection." : $"The connection to the agent failed: {inner.Message}",

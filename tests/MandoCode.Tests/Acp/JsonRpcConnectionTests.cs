@@ -511,7 +511,7 @@ public class JsonRpcConnectionTests
         using var peer = new FakeAgentPeer();
         await using var connection = peer.CreateConnection(new JsonRpcConnectionOptions
         {
-            DescribeClose = () => new AcpConnectionClosedException("agent exited", exitCode: 3, stderrTail: "fatal: no login"),
+            DescribeClose = () => Task.FromResult(new AcpConnectionClosedException("agent exited", exitCode: 3, stderrTail: "fatal: no login")),
         });
 
         var pending = SendInitialize(connection);

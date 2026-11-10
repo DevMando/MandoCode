@@ -47,3 +47,34 @@ public sealed class AcpProtocolViolationException : Exception
 {
     public AcpProtocolViolationException(string message) : base(message) { }
 }
+
+/// <summary>Why an agent command could not be launched.</summary>
+public enum AcpLaunchFailure
+{
+    /// <summary>The command (or script argument) does not exist or is not on PATH.</summary>
+    NotFound,
+
+    /// <summary>The command is not a real native executable (a .cmd/.bat shim, a shell script, ...).</summary>
+    NotANativeExecutable,
+
+    /// <summary>The command is something MandoCode refuses to run: <c>npx</c>-style downloaders and shells.</summary>
+    Forbidden,
+
+    /// <summary>The arguments are not acceptable (for example a relative script path for <c>node</c>).</summary>
+    InvalidArguments,
+
+    /// <summary>The operating system refused to start the process.</summary>
+    StartFailed,
+}
+
+/// <summary>A launch was refused or failed; <see cref="Exception.Message"/> is written for the user.</summary>
+public sealed class AcpLaunchException : Exception
+{
+    public AcpLaunchFailure Failure { get; }
+
+    public AcpLaunchException(AcpLaunchFailure failure, string message, Exception? inner = null)
+        : base(message, inner)
+    {
+        Failure = failure;
+    }
+}

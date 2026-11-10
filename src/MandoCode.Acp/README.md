@@ -38,3 +38,23 @@ run the tests and update the tag here and in `AcpProtocol.SchemaTag`.
   as it is read, so callers that must see every `session/update` that preceded it await
   `DrainNotificationsAsync()` first;
 - unknown methods get `-32601`, bad params `-32602`, handler failures `-32603` (without details).
+
+## Process transport
+
+`Transport/AcpProcessTransport` runs the agent as a child process.
+
+- Started with `UseShellExecute = false` and `ArgumentList`. No shell (`cmd.exe`, `powershell`,
+  `sh -c`) and no `npx` is ever involved.
+- `AcpCommandResolver` turns the configured command into a real native executable or refuses:
+  Windows accepts only an `.exe` (PE header), Unix only ELF/Mach-O binaries. `.cmd`/`.bat`/`.ps1`
+  shims and `#!` scripts are rejected with an explanation. Package downloaders (`npx`, `pnpm`,
+  `yarn`, ...) and shells are forbidden. For `node`, the first argument must be the absolute
+  path of an existing script. The resolved absolute path is what is executed.
+- `AcpEnvironment` removes `ANTHROPIC_API_KEY` from the inherited environment unless the agent
+  entry opts in; the entry's own `env` is applied on top.
+- stdout is the protocol channel only. stderr is drained into `StderrLog` (ring buffer plus an
+  optional rotated file) and never reaches the console.
+- Shutdown closes stdin, waits a grace period, then kills the whole process tree. A
+  `ProcessExit` hook kills any still-running agents if MandoCode itself exits abruptly.
+
+The integration tests run the real transport against `tests/MandoCode.Acp.MockAgent`.

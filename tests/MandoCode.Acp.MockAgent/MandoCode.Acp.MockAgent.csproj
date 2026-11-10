@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A scriptable fake ACP agent used by the integration tests. It speaks raw JSON-RPC on purpose
+       (no dependency on MandoCode.Acp) so the tests exercise the client against an independent
+       implementation of the wire protocol. Run as: dotnet MandoCode.Acp.MockAgent.dll SCENARIO -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>MandoCode.Acp.MockAgent</RootNamespace>
+  </PropertyGroup>
+
+</Project>
