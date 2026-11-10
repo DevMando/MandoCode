@@ -581,4 +581,53 @@ public class AcpClientTests : IAsyncDisposable
             await Task.Delay(10);
         Assert.True(condition(), "condition not met within 5s");
     }
+
+    // ───────────── modes ─────────────
+
+    [Fact]
+    public async Task SetMode_SendsSessionSetMode_AndRemembersTheMode()
+    {
+        var client = CreateClient();
+        var session = await StartSessionAsync(client);
+        var changes = 0;
+        session.StateChanged += () => changes++;
+
+        var switching = session.SetModeAsync("plan");
+        var request = await _peer.ReadMessageAsync();
+        Assert.Equal("session/set_mode", request.GetProperty("method").GetString());
+        Assert.Equal("s1", request.GetProperty("params").GetProperty("sessionId").GetString());
+        Assert.Equal("plan", request.GetProperty("params").GetProperty("modeId").GetString());
+        _peer.SendResult(request.GetProperty("id"), "{}");
+        await switching.Within();
+
+        Assert.Equal("plan", session.CurrentModeId);
+        Assert.Equal(1, changes);
+    }
+
+    [Fact]
+    public async Task SetMode_Refused_ThrowsAndKeepsTheOldMode()
+    {
+        var client = CreateClient();
+        var session = await StartSessionAsync(client);
+
+        var switching = session.SetModeAsync("plan");
+        var request = await _peer.ReadMessageAsync();
+        _peer.SendError(request.GetProperty("id"), AcpErrorCodes.InvalidParams, "no such mode");
+
+        await Assert.ThrowsAsync<JsonRpcException>(() => switching.Within());
+        Assert.Null(session.CurrentModeId);
+    }
+
+    [Fact]
+    public async Task ModeAndCommandAnnouncements_RaiseStateChanged()
+    {
+        var client = CreateClient();
+        var session = await StartSessionAsync(client);
+        var changes = 0;
+        session.StateChanged += () => Interlocked.Increment(ref changes);
+
+        _peer.SendLine(UpdateJson("s1", "\"sessionUpdate\":\"current_mode_update\",\"currentModeId\":\"plan\""));
+        _peer.SendLine(UpdateJson("s1", "\"sessionUpdate\":\"available_commands_update\",\"availableCommands\":[]"));
+        await WaitFor(() => Volatile.Read(ref changes) == 2);
+    }
 }

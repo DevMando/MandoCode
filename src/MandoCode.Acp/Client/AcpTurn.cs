@@ -8,7 +8,7 @@ namespace MandoCode.Acp.Client;
 /// notifications while it works; <see cref="Completion"/> resolves with the stop reason once the
 /// agent answers <c>session/prompt</c> and every earlier update has been delivered.
 /// </summary>
-public sealed class AcpTurn
+public sealed class AcpTurn : IAcpTurn
 {
     private readonly Channel<SessionUpdate> _updates = Channel.CreateUnbounded<SessionUpdate>(
         new UnboundedChannelOptions { SingleReader = true });
@@ -48,4 +48,14 @@ public sealed class AcpTurn
         _updates.Writer.TryComplete();
         _completion.TrySetException(exception);
     }
+}
+
+/// <summary>What a host needs from a running turn; lets hosts be tested without a real agent.</summary>
+public interface IAcpTurn
+{
+    /// <summary>The turn's <c>session/update</c> notifications, in order. Enumerate once.</summary>
+    IAsyncEnumerable<SessionUpdate> Updates { get; }
+
+    /// <summary>The stop reason, or a fault when the turn failed.</summary>
+    Task<string> Completion { get; }
 }

@@ -911,6 +911,14 @@ public class AcpAgentConfig
     [JsonPropertyName("startupTimeoutSeconds")]
     public int StartupTimeoutSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// The session mode to switch to right after <c>session/new</c>. Unset means <c>default</c> (some agents, such as
+    /// the Claude Code adapter, can start in a more permissive mode). Not part of the trust hash: it changes what the
+    /// agent is allowed to ask for, not what program runs.
+    /// </summary>
+    [JsonPropertyName("startMode")]
+    public string? StartMode { get; set; }
+
     /// <summary>Shown when the agent reports it is not signed in (for example <c>claude auth login</c>).</summary>
     [JsonPropertyName("authHint")]
     public string? AuthHint { get; set; }

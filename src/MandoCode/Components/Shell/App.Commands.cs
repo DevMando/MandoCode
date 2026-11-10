@@ -14,6 +14,13 @@ public partial class App
         var parsed = CliCommand.Parse(input);
         var command = parsed.DispatchText;
 
+        // Commands that configure or drive MandoCode's own model loop mean nothing in an ACP agent pane.
+        if (IsAcpPane && SlashCommands.IsNativeOnly(command))
+        {
+            TuiConsole.WriteLine($"/{command.Split(' ')[0]} is not available in an ACP agent pane: the external agent runs the conversation.");
+            return CliCommandResult.Continue;
+        }
+
         // Handle special commands
         if (command == "update")
         {
@@ -326,7 +333,8 @@ public partial class App
                 .Select(p => p.Services.GetRequiredService<MandoCodeConfig>()).ToArray();
         var commands = new Services.Acp.AcpAgentCommands(
             new Services.Acp.ConfigAcpAgentCatalog(Config, configs),
-            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()));
+            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()),
+            host: new PaneHost(this));
 
         await commands.ExecuteAsync(arguments, ProjectRoot.ProjectRoot, ConfirmAcpLaunchAsync, Console.Out, Console.Out);
     }

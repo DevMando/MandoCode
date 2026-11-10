@@ -144,6 +144,9 @@ class Program
         // Register SpinnerService per agent
         services.AddScoped<SpinnerService>();
 
+        // An ACP pane's external agent lives in the pane's scope, so closing the pane ends its process tree
+        services.AddScoped<Services.Acp.AcpRuntimeHolder>();
+
         // Register UpdateCheckService — background NuGet "newer version available" nag
         services.AddScoped<UpdateCheckService>();
 
@@ -263,7 +266,9 @@ class Program
             var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
             var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
             var config = provider.GetRequiredService<MandoCodeConfig>();
-            return new InputStateMachine(commands, fileProvider, command => SlashCommands.IsAvailable(command, config));
+            var acp = provider.GetRequiredService<Services.Acp.AcpRuntimeHolder>();
+            return new InputStateMachine(commands, fileProvider,
+                command => SlashCommands.IsAvailable(command, config) && !(acp.IsAcpPane && SlashCommands.IsNativeOnly(command)));
         });
 
         // Retain rich markdown/tool renderables inside the widget conversation.

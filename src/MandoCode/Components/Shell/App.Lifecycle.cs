@@ -13,6 +13,7 @@ public partial class App
     {
         _paneStopped = true;
         _requestCts?.Cancel();
+        _acpStartCts?.Cancel();
         _snapshotCompletion?.TrySetResult();
         _setupCompletion?.TrySetResult(new(false, true, null));
         _historyTcs?.TrySetResult();
@@ -137,6 +138,7 @@ public partial class App
         McpGate = agentServices.GetRequiredService<McpApprovalGate>();
         PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
         UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
+        agentServices.GetRequiredService<Services.Acp.AcpRuntimeHolder>().IsAcpPane = IsAcpPane;
     }
 
     /// <summary>Register the component's pane callbacks as owned leases. An old component
@@ -162,8 +164,10 @@ public partial class App
             () => Pane.SubmitCommand, value => Pane.SubmitCommand = value, HandleVdomSubmit);
 
         // Other agents read a snapshot of the transcript on the renderer dispatcher.
-        _paneCallbacks.Bind<Func<CliPeerRequest, Task<CliPeerAnswer>>>(
-            () => Pane.AskPeer, value => Pane.AskPeer = value, AskPeerAsync);
+        // An ACP pane cannot be asked by other agents (peer requests are a native-agent feature).
+        if (!IsAcpPane)
+            _paneCallbacks.Bind<Func<CliPeerRequest, Task<CliPeerAnswer>>>(
+                () => Pane.AskPeer, value => Pane.AskPeer = value, AskPeerAsync);
         _paneCallbacks.Bind<Func<Task<IReadOnlyList<ChatMsg>>>>(
             () => Pane.ReadConversation, value => Pane.ReadConversation = value, ReadPaneConversationAsync);
         AI.SetHostTools(new CliAgentTools(Pane, Delegations).Functions);
@@ -209,7 +213,8 @@ public partial class App
 
         if (firstRender && !_connectionChecked)
         {
-            await InitializeConnectionAsync();
+            if (IsAcpPane) await InitializeAcpAsync();
+            else await InitializeConnectionAsync();
             _startupComplete = true;
         }
 

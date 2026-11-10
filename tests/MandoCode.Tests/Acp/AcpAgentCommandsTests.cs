@@ -346,4 +346,81 @@ public class AcpAgentCommandsTests : IDisposable
         Assert.Null(AcpConnectionProbe.Parse(args, "/default", error));
         Assert.Contains("Usage: mandocode --acp-probe", error.ToString());
     }
+
+    private sealed class FakeHost : IAcpPaneHost
+    {
+        public List<string> Opened { get; } = [];
+        public int Restarts;
+        public string? OpenError { get; set; }
+        public Task<string?> OpenPaneAsync(string agentName) { Opened.Add(agentName); return Task.FromResult(OpenError); }
+        public Task<string?> RestartAsync() { Restarts++; return Task.FromResult<string?>(null); }
+    }
+
+    private Task RunWith(string arguments, IAcpPaneHost? host) =>
+        new AcpAgentCommands(_catalog, new AcpAgentLauncher(_trust), logDirectory: Path.Combine(_work, "logs"), host: host)
+            .ExecuteAsync(arguments, _work, _ => Task.FromResult(true), _out, _err);
+
+    [Fact]
+    public async Task AgentName_OpensANewPane()
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+        var host = new FakeHost();
+
+        await RunWith("CLAUDE", host);
+
+        Assert.Equal(["CLAUDE"], host.Opened);
+        Assert.Contains("Opened ACP agent", _out.ToString());
+    }
+
+    [Fact]
+    public async Task AgentName_ReportsWhyAPaneCouldNotBeOpened()
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+
+        await RunWith("claude", new FakeHost { OpenError = "Four agent panes are already open. Close one first." });
+
+        Assert.Contains("Four agent panes", _err.ToString());
+    }
+
+    [Fact]
+    public async Task ADisabledAgent_IsNotOpened()
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host, Disabled = true };
+        var host = new FakeHost();
+
+        await RunWith("claude", host);
+
+        Assert.Empty(host.Opened);
+        Assert.Contains("disabled", _err.ToString());
+    }
+
+    [Fact]
+    public async Task Restart_GoesToThePaneHost()
+    {
+        var host = new FakeHost();
+
+        await RunWith("restart", host);
+
+        Assert.Equal(1, host.Restarts);
+    }
+
+    [Fact]
+    public async Task Restart_WithoutAnAcpPane_SaysWhere()
+    {
+        await RunWith("restart", host: null);
+
+        Assert.Contains("inside an ACP agent pane", _err.ToString());
+    }
+
+    [Theory]
+    [InlineData("restart")]
+    [InlineData("List")]
+    [InlineData("add")]
+    public async Task CommandWords_CannotBeAgentNames(string name)
+    {
+        await Run($"add {name} {Quoted(_host)}");
+
+        Assert.Empty(_catalog.Stored);
+        Assert.Contains("command word", _err.ToString());
+    }
 }

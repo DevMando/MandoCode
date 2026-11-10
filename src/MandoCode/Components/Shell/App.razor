@@ -60,7 +60,7 @@
 
 @* Keep the banner visible, but hide startup details while setup owns the screen.
    HomeView keeps that visibility rule together instead of repeating it for each detail. *@
-@if (!_setupActive)
+@if (!_setupActive && !IsAcpPane)
 {
     <HomeView
               SupportsVision="@AI.SupportsImageInput"
@@ -1392,6 +1392,13 @@
                 continue;
             }
 
+            // An ACP pane talks to an external agent: none of the Ollama checks below apply to it.
+            if (IsAcpPane)
+            {
+                await ProcessAcpRequestAsync(input);
+                continue;
+            }
+
             if (!_isConnected)
             {
                 await HandleRetryCommandAsync();
@@ -1640,7 +1647,8 @@
     private DateTimeOffset? _archiveClosedAt;
     private bool SaveAgentHistory(bool closed)
     {
-        if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
+        // An ACP pane is an external agent, not a MandoCode conversation: /history must never restore it as one.
+        if (Pane is null || IsAcpPane || !Config.AllowPersistence || _messages.Count == 0) return true;
         var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
         try
         {

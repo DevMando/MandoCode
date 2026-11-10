@@ -57,7 +57,7 @@ Names are case-insensitive. Text commands (no settings tab):
 
 `/agent-acp add claude` (no command) only prints how to set it up: there is no Claude Code preset yet because the
 adapter, its pinned version and the way it finds the Claude Code binary have not been validated (see below).
-`/agent-acp <name>` (opening a pane) is not implemented yet.
+`startMode` (optional, per agent) is the session mode to switch to right after `session/new`; see "The ACP pane".
 
 ## Trust
 
@@ -82,6 +82,55 @@ Runs the configured agent `<name>` through the trust question (a terminal y/N), 
 in the working directory, and reports the agent, protocol version, capabilities, auth methods and startup time. On
 failure it prints the exit code and the stderr tail. Exit codes: `0` ok, `1` failed, `2` usage or unknown agent,
 `3` launch not approved. In a non-interactive shell an unapproved agent is simply declined.
+
+## The ACP pane
+
+`/agent-acp <name>` opens a new pane (the other panes are unchanged; at most four panes exist). The pane does not
+touch Ollama, models or MCP: it runs the trust question, starts the agent, runs `initialize` and `session/new`, and
+then every message you type goes to the agent as a prompt. The agent lives in the pane's service scope, so closing the
+pane ends its whole process tree. `/agent-acp restart` (inside the pane) starts it again.
+
+- Header: `ACP · <adapter name and version> · mode: <current mode> · <project folder>` (the pane name is added when
+  there is more than one pane).
+- Streaming: the reply shows as a live preview; it is rendered as markdown when the agent starts a tool call and when
+  the turn ends. Thoughts show only as a dim "Thinking…" activity line. Unknown updates and fields are ignored.
+- Escape cancels the turn (`session/cancel`). If the agent has not ended the turn 10 seconds later it is shut down
+  (process tree killed) and the pane tells you to `/agent-acp restart`.
+- `@path` in a message adds a `resource_link` for an existing file inside the project (images are not sent yet).
+- Commands that drive MandoCode's own model loop (`/model`, `/plan*`, `/compact`, `/context-snap-*`, `/force-skill`,
+  `/setup`, `/retry`, `/config`, `/agent-settings`, `/ollama-*`) are hidden there and answer with an explanation.
+- ACP panes are never saved to the agent history, so `/history` cannot bring one back as a native agent.
+- Not in this change (they come next): showing tool calls, plans and diffs, answering permission requests, and the
+  `fs/*` handlers. Until then every permission request is answered "cancelled", so an agent in a mode that asks before
+  acting cannot edit files or run commands; `terminal/*` is never offered.
+
+### Session mode
+
+Some agents start in a permissive mode (the Claude Code adapter started in `auto` during validation). After
+`session/new`, if the current mode is not `default` and the agent offers `default`, MandoCode calls
+`session/set_mode("default")`. Set `startMode` on the agent entry to choose another mode. A refused or failed switch is
+only a warning in the transcript; the session keeps working in the mode it has. This is a deviation from the first
+plan, which did not call `session/set_mode` in this phase.
+
+### Errors
+
+| Situation | What you see |
+|---|---|
+| Command not found / refused (`.cmd`, `npx`, shell) | `Cannot start ACP agent '<name>': <reason>` and where to fix it |
+| Launch not approved, or the entry changed | not started; `/agent-acp restart` asks again |
+| Agent exits during startup | exit code, last 20 lines of stderr, path of the full stderr log |
+| `initialize` / `session/new` timeout | "did not complete '<step>' within N seconds", stderr tail, "may not speak ACP" hint; process tree killed |
+| Not signed in | the entry's `authHint` (default: `claude auth login`) |
+| Process dies mid-turn | partial text is kept, exit code and stderr tail shown; `/agent-acp restart` |
+| Agent ignores a cancel | message after 10 s, process tree killed |
+| Non-protocol output on stdout | "wrote non-protocol output to stdout" |
+| Stop reason `refusal`, `max_tokens`, `max_turn_requests` | a sentence for each; unknown stop reasons are reported, not fatal |
+
+Recognising "not signed in" is **pending**: with a valid Claude Code login `session/new` succeeds, so the real error
+for a missing login has not been observed. JSON-RPC `-32000` is treated as an auth error; any other error from
+`session/new` or `session/prompt` whose text reads like authentication (auth, login, sign in, credentials, API key,
+401, ...) is shown with the sign-in hint worded as a possibility ("This looks like a sign-in problem"). Stderr of every
+agent goes to `~/.mandocode/logs/acp/<agent>-<date>.log` (rotated), never to the console.
 
 ## API notes
 
@@ -147,3 +196,5 @@ Deviations from the plan
 - Prompt (not PromptAsync): the method returns an AcpTurn directly.
 - --acp-probe takes a configured agent name and goes through the same
   resolver and trust check as /agent-acp test.
+- session/set_mode is called after session/new (see "Session mode").
+- enable/disable are implemented although the first plan deferred them.

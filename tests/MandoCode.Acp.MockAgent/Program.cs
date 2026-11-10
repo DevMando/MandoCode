@@ -19,6 +19,9 @@ using System.Text.Json.Nodes;
 //   stderr-flood       writes ~1.7 MB to stderr before serving
 //   hang-on-shutdown   ignores stdin EOF and keeps a child process alive
 //   silent-with-child  starts a child process, never answers anything and ignores stdin EOF
+//   auto-mode          session/new reports current mode "auto" (modes: default, auto); session/set_mode works
+//   set-mode-fails     like auto-mode, but session/set_mode answers with an error
+//   only-auto-mode     the only offered mode is "auto" (there is no "default")
 //   sleep              does nothing (used as the child of hang-on-shutdown)
 var scenario = args.Length > 0 ? args[0] : "echo";
 return await new MockAgent(scenario, args).RunAsync();
@@ -34,6 +37,7 @@ internal sealed class MockAgent
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> _pendingClientCalls = new();
     private readonly TaskCompletionSource _cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _nextCallId;
+    private string _mode = "default";
 
     public MockAgent(string scenario, string[] args)
     {
@@ -153,17 +157,38 @@ internal sealed class MockAgent
 
             case "session/new":
                 if (_scenario == "auth-required")
+                {
                     Error(id, -32000, "Authentication required");
+                }
                 else
+                {
+                    var startsInAuto = _scenario is "auto-mode" or "set-mode-fails" or "only-auto-mode";
+                    _mode = startsInAuto ? "auto" : "default";
+                    var offered = new JsonArray();
+                    if (_scenario != "only-auto-mode")
+                        offered.Add(new JsonObject { ["id"] = "default", ["name"] = "Default" });
+                    if (startsInAuto)
+                        offered.Add(new JsonObject { ["id"] = "auto", ["name"] = "Auto" });
                     Reply(id, new JsonObject
                     {
                         ["sessionId"] = SessionId,
-                        ["modes"] = new JsonObject
-                        {
-                            ["currentModeId"] = "default",
-                            ["availableModes"] = new JsonArray(new JsonObject { ["id"] = "default", ["name"] = "Default" }),
-                        },
+                        ["modes"] = new JsonObject { ["currentModeId"] = _mode, ["availableModes"] = offered },
                     });
+                }
+
+                break;
+
+            case "session/set_mode":
+                if (_scenario == "set-mode-fails")
+                {
+                    Error(id, -32602, "Mode change is not allowed");
+                }
+                else
+                {
+                    _mode = message["params"]?["modeId"]?.GetValue<string>() ?? _mode;
+                    Reply(id, new JsonObject());
+                }
+
                 break;
 
             case "session/prompt":
@@ -274,7 +299,7 @@ internal sealed class MockAgent
             }
 
             default:
-                Chunk("echo: " + text);
+                Chunk(text == "/mode" ? "mode: " + _mode : "echo: " + text);
                 Reply(id, new JsonObject { ["stopReason"] = "end_turn" });
                 return;
         }

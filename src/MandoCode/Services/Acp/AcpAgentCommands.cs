@@ -16,6 +16,16 @@ public interface IAcpAgentCatalog
     void Save(IReadOnlyDictionary<string, AcpAgentConfig> agents);
 }
 
+/// <summary>What the pane hosting the command line can do for ACP commands.</summary>
+public interface IAcpPaneHost
+{
+    /// <summary>Opens a new pane running the agent. Null on success, otherwise what to tell the user.</summary>
+    Task<string?> OpenPaneAsync(string agentName);
+
+    /// <summary>Restarts the agent of the current pane. Null on success, otherwise what to tell the user.</summary>
+    Task<string?> RestartAsync();
+}
+
 /// <summary>
 /// The text commands: <c>/agent-acp [list]</c>, <c>add</c>, <c>test</c>, <c>remove</c>, <c>enable</c>, <c>disable</c>.
 /// Nothing here starts an agent except <c>test</c>, which goes through <see cref="AcpConnectionProbe"/> and the trust check.
@@ -23,17 +33,24 @@ public interface IAcpAgentCatalog
 public sealed class AcpAgentCommands
 {
     public const string Usage =
-        "Usage: /agent-acp [list] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+        "Usage: /agent-acp [list] | <name> | restart | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+
+    private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "list", "add", "test", "remove", "enable", "disable", "restart",
+    };
 
     private readonly IAcpAgentCatalog _catalog;
     private readonly AcpAgentLauncher _launcher;
     private readonly IAcpResolverEnvironment? _resolverEnvironment;
     private readonly string? _logDirectory;
+    private readonly IAcpPaneHost? _host;
 
     public AcpAgentCommands(IAcpAgentCatalog catalog, AcpAgentLauncher launcher,
-        IAcpResolverEnvironment? resolverEnvironment = null, string? logDirectory = null)
+        IAcpResolverEnvironment? resolverEnvironment = null, string? logDirectory = null, IAcpPaneHost? host = null)
     {
         _logDirectory = logDirectory;
+        _host = host;
         _catalog = catalog;
         _launcher = launcher;
         _resolverEnvironment = resolverEnvironment;
@@ -70,6 +87,12 @@ public sealed class AcpAgentCommands
             case "disable":
                 SetDisabled(rest, disabled: true, output, error);
                 break;
+            case "restart":
+                if (_host is null)
+                    error.WriteLine("Restart works inside an ACP agent pane.");
+                else if (await _host.RestartAsync() is { } restartError)
+                    error.WriteLine(restartError);
+                break;
             case "test":
                 if (rest.Count != 1)
                     error.WriteLine("Usage: /agent-acp test <name>");
@@ -77,9 +100,16 @@ public sealed class AcpAgentCommands
                     await AcpConnectionProbe.RunAsync(rest[0], _catalog.Agents, workingDirectory, _launcher, confirm, output, error, cancellationToken, _logDirectory);
                 break;
             default:
-                if (_catalog.Agents.ContainsKey(tokens[0]))
+                if (_catalog.Agents.TryGetValue(tokens[0], out var agent))
                 {
-                    output.WriteLine("Opening an ACP agent pane is not available yet. Use /agent-acp test " + tokens[0] + " to check the connection.");
+                    if (agent.Disabled)
+                        error.WriteLine($"ACP agent '{tokens[0]}' is disabled. Enable it with /agent-acp enable {tokens[0]}.");
+                    else if (_host is null)
+                        error.WriteLine("Opening an agent pane is not available here.");
+                    else if (await _host.OpenPaneAsync(tokens[0]) is { } openError)
+                        error.WriteLine(openError);
+                    else
+                        output.WriteLine($"Opened ACP agent '{tokens[0]}' in a new pane.");
                 }
                 else
                 {
@@ -142,9 +172,9 @@ public sealed class AcpAgentCommands
         }
 
         var name = tokens[0];
-        if (!IsValidName(name))
+        if (!IsValidName(name) || Reserved.Contains(name))
         {
-            error.WriteLine("Agent names are 1-40 characters: letters, digits, '-', '_' or '.'.");
+            error.WriteLine("Agent names are 1-40 characters: letters, digits, '-', '_' or '.' (and not a command word such as list, add, test, remove, enable, disable, restart).");
             return;
         }
 
@@ -240,6 +270,7 @@ public sealed class AcpAgentCommands
         Disabled = disabled,
         PassAnthropicApiKey = source.PassAnthropicApiKey,
         StartupTimeoutSeconds = source.StartupTimeoutSeconds,
+        StartMode = source.StartMode,
         AuthHint = source.AuthHint,
     };
 

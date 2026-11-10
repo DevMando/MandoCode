@@ -48,10 +48,30 @@ public sealed class AcpSession
     /// <summary>The slash commands the agent last announced.</summary>
     public IReadOnlyList<AvailableCommand> AvailableCommands { get; private set; } = [];
 
+    /// <summary>Raised when the agent announces new commands or a new mode (on the notification thread).</summary>
+    public event Action? StateChanged;
+
     /// <summary>True while a turn is running.</summary>
     public bool IsBusy
     {
         get { lock (_gate) return _activeTurn is not null; }
+    }
+
+    /// <summary>
+    /// Switches the session to <paramref name="modeId"/> (<c>session/set_mode</c>). Throws
+    /// <see cref="JsonRpcException"/> when the agent refuses; the caller decides whether that matters.
+    /// </summary>
+    public async Task SetModeAsync(string modeId, CancellationToken cancellationToken = default)
+    {
+        await _connection.SendRequestAsync(
+            AcpMethods.SessionSetMode,
+            new SetSessionModeRequest { SessionId = SessionId, ModeId = modeId },
+            AcpJsonContext.Default.SetSessionModeRequest,
+            AcpJsonContext.Default.SetSessionModeResponse,
+            cancellationToken).ConfigureAwait(false);
+
+        CurrentModeId = modeId;
+        StateChanged?.Invoke();
     }
 
     /// <summary>
@@ -189,9 +209,11 @@ public sealed class AcpSession
         {
             case AvailableCommandsUpdate commands:
                 AvailableCommands = commands.AvailableCommands;
+                StateChanged?.Invoke();
                 break;
             case CurrentModeUpdate mode:
                 CurrentModeId = mode.CurrentModeId;
+                StateChanged?.Invoke();
                 break;
         }
 

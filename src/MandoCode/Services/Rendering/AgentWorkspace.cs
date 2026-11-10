@@ -26,7 +26,7 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     // Stable column membership keeps live agent components mounted as the layout changes.
     public static int Column(int slot) => slot is 0 or 3 ? 0 : 1;
     public void Refresh() { Revision++; Changed?.Invoke(); Registry?.Notify(); }
-    public AgentPane Add(ArchivedAgent? restored = null)
+    public AgentPane Add(ArchivedAgent? restored = null, string? acpAgent = null)
     {
         if (_panes.Count >= 4)
         {
@@ -49,6 +49,17 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         var existing = (Registry?.Workspaces.SelectMany(w => w.Panes) ?? Panes).Select(p => p.Name);
         pane.Name = config.UseAgentNames ? (Registry?.Callsigns ?? _callsigns).Next(existing) : AgentNaming.NextFreeName(existing);
         config.AgentName = pane.Name;
+        if (acpAgent is not null)
+        {
+            // An ACP pane is an external agent, not a model: it takes the agent's name (made unique among open panes).
+            pane.Runtime = AgentRuntime.Acp;
+            pane.AcpAgentName = acpAgent;
+            var taken = (Registry?.Workspaces.SelectMany(w => w.Panes) ?? Panes).Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unique = acpAgent;
+            for (var n = 2; taken.Contains(unique); n++) unique = $"{acpAgent} {n}";
+            pane.Name = unique;
+            config.AgentName = unique;
+        }
         if (restored is not null)
         {
             pane.PersistKey = restored.Key;
@@ -219,8 +230,16 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
     }
 }
 
+/// <summary>What drives a pane: MandoCode's own model loop, or an external agent over ACP.</summary>
+public enum AgentRuntime { Native, Acp }
+
 public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace workspace) : IDisposable, IAsyncDisposable
 {
+    public AgentRuntime Runtime { get; internal set; } = AgentRuntime.Native;
+    /// <summary>The <c>acpAgents</c> entry this pane runs, for ACP panes.</summary>
+    public string? AcpAgentName { get; internal set; }
+    /// <summary>Header text for an ACP pane (agent version, mode, folder); set by the pane's component.</summary>
+    public string? AcpHeader { get; set; }
     public int Id { get; } = id;
     public string PersistKey { get; internal set; } = Guid.NewGuid().ToString("N");
     public ArchivedAgent? RestoreFrom { get; internal set; }
@@ -230,7 +249,7 @@ public sealed class AgentPane(int id, AsyncServiceScope scope, AgentWorkspace wo
     public int Slot { get; internal set; }
     public IServiceProvider Services => scope.ServiceProvider;
     public TuiSession Session { get; } = scope.ServiceProvider.GetRequiredService<TuiSession>();
-    public string Model => Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>().GetEffectiveModelName();
+    public string Model => Runtime == AgentRuntime.Acp ? $"ACP · {AcpAgentName}" : Services.GetRequiredService<MandoCode.Models.MandoCodeConfig>().GetEffectiveModelName();
     public AgentWorkspace Workspace { get; } = workspace;
     internal bool Selected { get; set; }
     public bool Active => Selected && Workspace.IsVisible && Workspace.Registry?.IsWorkspacePickerOpen != true;

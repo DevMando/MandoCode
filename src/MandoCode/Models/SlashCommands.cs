@@ -18,6 +18,20 @@ public static class SlashCommands
         _ => true
     };
     /// <summary>
+    /// Commands that configure or drive MandoCode's own model loop (Ollama, plans, context). An ACP agent pane
+    /// runs an external agent, so these are hidden there and answer with an explanation if typed anyway.
+    /// <paramref name="command"/> is the dispatch text without the slash (as in <c>CliCommand.DispatchText</c>) or with it.
+    /// </summary>
+    public static bool IsNativeOnly(string command)
+    {
+        var name = command.TrimStart('/').Split(' ', 2)[0].ToLowerInvariant();
+        return name is "model" or "setup" or "retry" or "compact" or "force-skill" or "config"
+            or "agent-settings" or "plan" or "plan-resume" or "plan-discard"
+            or "context-snap-create" or "context-snap-import"
+            || name.StartsWith("ollama-", StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Command name → description. Keys include the leading slash.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>
@@ -74,7 +88,7 @@ public static class SlashCommands
         { "/force-skill", "Override: force a specific skill to run now" },
         { "/mcp", $"Manage shared MCP servers: add, edit, test, and enable or disable ({Keybindings.McpServers})" },
         { "/mcp tools", "List tools exposed by connected MCP servers (usage: /mcp tools <server>)" },
-        { "/agent-acp", "Manage external ACP agents: list, add, test, remove, enable, disable (/agent-acp add <name> <command> [args...])" },
+        { "/agent-acp", "External ACP agents: /agent-acp <name> opens one in a new pane; also list, restart, add, test, remove, enable, disable" },
         { "/mcp-reload", "Restart all MCP servers and re-register their tools" },
         { "/exit", "Exit MandoCode" }
     };
