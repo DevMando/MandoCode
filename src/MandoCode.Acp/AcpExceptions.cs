@@ -78,3 +78,40 @@ public sealed class AcpLaunchException : Exception
         Failure = failure;
     }
 }
+
+/// <summary>
+/// The agent is not signed in (JSON-RPC error <c>-32000</c>, "auth required"). MandoCode does not call
+/// <c>authenticate</c>: the user signs in with the agent's own tooling (for Claude Code: <c>claude auth login</c>).
+/// </summary>
+public sealed class AcpAuthRequiredException : Exception
+{
+    /// <summary>The authentication methods the agent advertised in <c>initialize</c>.</summary>
+    public IReadOnlyList<Protocol.AuthMethod> AuthMethods { get; }
+
+    public AcpAuthRequiredException(string message, IReadOnlyList<Protocol.AuthMethod> authMethods, Exception? inner = null)
+        : base(message, inner)
+    {
+        AuthMethods = authMethods;
+    }
+}
+
+/// <summary>The agent does not speak ACP protocol version 1.</summary>
+public sealed class AcpProtocolVersionException : Exception
+{
+    public int AgentVersion { get; }
+
+    public AcpProtocolVersionException(int agentVersion)
+        : base($"The agent speaks ACP protocol version {agentVersion}, but MandoCode only supports version {Protocol.AcpProtocol.Version}.")
+    {
+        AgentVersion = agentVersion;
+    }
+}
+
+/// <summary>An operation did not finish in time (startup handshake, for example).</summary>
+public sealed class AcpTimeoutException : Exception
+{
+    public AcpTimeoutException(string operation, TimeSpan timeout)
+        : base($"The agent did not complete '{operation}' within {timeout.TotalSeconds:0} seconds.")
+    {
+    }
+}

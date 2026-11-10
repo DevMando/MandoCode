@@ -47,6 +47,16 @@ class Program
             return;
         }
 
+        // ACP agent probe — launches an agent, runs initialize + session/new, prints the result.
+        if (args.Length > 0 && args[0].ToLower() == "--acp-probe")
+        {
+            var request = Services.Acp.AcpConnectionProbe.Parse(args.Skip(1).ToArray(), Environment.CurrentDirectory, Console.Error);
+            Environment.ExitCode = request is null
+                ? Services.Acp.AcpConnectionProbe.ExitUsage
+                : await Services.Acp.AcpConnectionProbe.RunAsync(request, Console.Out, Console.Error, Console.ReadLine);
+            return;
+        }
+
         // Get project root from the first POSITIONAL arg (flags like --continue/-c are not
         // folder names) or use the current directory. App.razor applies the same filtering
         // when it re-reads the raw command line.

@@ -238,8 +238,10 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     public Task DrainNotificationsAsync()
     {
         var marker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Once the connection is closed the queue accepts nothing more, but what was queued before the
+        // close is still being delivered: wait for the consumer to finish it.
         if (!_notifications.Writer.TryWrite(new NotificationWork(null, null, marker)))
-            marker.TrySetResult();
+            return _notificationLoop;
         return marker.Task;
     }
 

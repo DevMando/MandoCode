@@ -406,7 +406,7 @@ public class JsonRpcConnectionTests
         connection.RegisterNotificationHandler(AcpMethods.SessionUpdate, AcpJsonContext.Default.SessionNotification,
             async n =>
             {
-                await Task.Delay(1); // yield so an unordered consumer would interleave
+                await Task.Yield(); // yield so an unordered consumer would interleave
                 lock (seen)
                     seen.Add(((AgentMessageChunk)n.Update).Content is TextContent t ? t.Text : "?");
             });
