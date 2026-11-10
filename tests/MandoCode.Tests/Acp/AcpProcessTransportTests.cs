@@ -12,6 +12,7 @@ namespace MandoCode.Tests.Acp;
 /// Runs the real <see cref="AcpProcessTransport"/> against the mock agent (a separate .NET process),
 /// so process launching, stdio plumbing, environment and shutdown are exercised for real.
 /// </summary>
+[Collection("AcpProcesses")]
 public class AcpProcessTransportTests : IDisposable
 {
     private readonly string _workDir = Path.Combine(Path.GetTempPath(), "mandocode-acp-work-" + Guid.NewGuid().ToString("N"));

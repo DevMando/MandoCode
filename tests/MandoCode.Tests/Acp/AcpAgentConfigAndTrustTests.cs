@@ -263,10 +263,10 @@ public class AcpTrustTests : IDisposable
 
         var text = string.Join("\n", plan.Describe());
 
-        Assert.Contains(plan.Resolved.ExecutablePath, text);
-        Assert.Contains("argument 1: one", text);
-        Assert.Contains("argument 2: two words", text);
-        Assert.Contains(_dir, text);
+        Assert.Contains("\"" + plan.Resolved.ExecutablePath + "\"", text);
+        Assert.Contains("argument 1:" + Environment.NewLine + "    \"one\"", string.Join(Environment.NewLine, plan.Describe()));
+        Assert.Contains("argument 2:" + Environment.NewLine + "    \"two words\"", string.Join(Environment.NewLine, plan.Describe()));
+        Assert.Contains("\"" + _dir + "\"", text);
         Assert.Contains("SECRET_NAME", text);
         Assert.DoesNotContain("secret-value", text);
         Assert.Contains("ANTHROPIC_API_KEY: removed", text);

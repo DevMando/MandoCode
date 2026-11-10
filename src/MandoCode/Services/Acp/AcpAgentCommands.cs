@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MandoCode.Acp;
 using MandoCode.Acp.Transport;
 using MandoCode.Models;
@@ -26,9 +28,12 @@ public sealed class AcpAgentCommands
     private readonly IAcpAgentCatalog _catalog;
     private readonly AcpAgentLauncher _launcher;
     private readonly IAcpResolverEnvironment? _resolverEnvironment;
+    private readonly string? _logDirectory;
 
-    public AcpAgentCommands(IAcpAgentCatalog catalog, AcpAgentLauncher launcher, IAcpResolverEnvironment? resolverEnvironment = null)
+    public AcpAgentCommands(IAcpAgentCatalog catalog, AcpAgentLauncher launcher,
+        IAcpResolverEnvironment? resolverEnvironment = null, string? logDirectory = null)
     {
+        _logDirectory = logDirectory;
         _catalog = catalog;
         _launcher = launcher;
         _resolverEnvironment = resolverEnvironment;
@@ -69,7 +74,7 @@ public sealed class AcpAgentCommands
                 if (rest.Count != 1)
                     error.WriteLine("Usage: /agent-acp test <name>");
                 else
-                    await AcpConnectionProbe.RunAsync(rest[0], _catalog.Agents, workingDirectory, _launcher, confirm, output, error, cancellationToken);
+                    await AcpConnectionProbe.RunAsync(rest[0], _catalog.Agents, workingDirectory, _launcher, confirm, output, error, cancellationToken, _logDirectory);
                 break;
             default:
                 if (_catalog.Agents.ContainsKey(tokens[0]))
@@ -163,7 +168,7 @@ public sealed class AcpAgentCommands
 
         var agents = Copy(_catalog.Agents);
         agents[name] = entry;
-        _catalog.Save(agents);
+        if (!TrySave(agents, error)) return;
         _launcher.Forget(name);
         output.WriteLine($"Added ACP agent '{name}'. Check it with /agent-acp test {name}; you will be asked to approve the exact command before it first runs.");
     }
@@ -184,7 +189,7 @@ public sealed class AcpAgentCommands
 
         var agents = Copy(_catalog.Agents);
         agents.Remove(tokens[0]);
-        _catalog.Save(agents);
+        if (!TrySave(agents, error)) return;
         _launcher.Forget(tokens[0]);
         output.WriteLine($"Removed ACP agent '{tokens[0]}' and its trust record.");
     }
@@ -206,8 +211,22 @@ public sealed class AcpAgentCommands
 
         var agents = Copy(_catalog.Agents);
         agents[tokens[0]] = Clone(existing, disabled);
-        _catalog.Save(agents);
+        if (!TrySave(agents, error)) return;
         output.WriteLine($"ACP agent '{tokens[0]}' is now {(disabled ? "disabled" : "enabled")}.");
+    }
+
+    private bool TrySave(IReadOnlyDictionary<string, AcpAgentConfig> agents, TextWriter error)
+    {
+        try
+        {
+            _catalog.Save(agents);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            error.WriteLine("Could not save the ACP agent list: " + ex.Message);
+            return false;
+        }
     }
 
     private static Dictionary<string, AcpAgentConfig> Copy(IReadOnlyDictionary<string, AcpAgentConfig> source) =>
@@ -268,27 +287,63 @@ public sealed class AcpAgentCommands
 }
 
 /// <summary>
-/// The catalog backed by the user's config. Saving updates every open pane's config copy (so a later save
-/// from another pane cannot drop the change) and writes the user's config file.
+/// The catalog backed by the user's config file. Saving re-reads the file from disk, replaces only its
+/// <c>acpAgents</c> section and writes it back under a process-wide lock, so other settings (changed by another
+/// pane, or by hand while MandoCode runs) are never overwritten with stale in-memory values. Then every open
+/// pane's config copy is updated, so a later save from any pane carries the change.
 /// </summary>
 public sealed class ConfigAcpAgentCatalog : IAcpAgentCatalog
 {
+    private static readonly object FileLock = new();
+
     private readonly MandoCodeConfig _config;
     private readonly IReadOnlyList<MandoCodeConfig> _allConfigs;
+    private readonly string _path;
 
-    public ConfigAcpAgentCatalog(MandoCodeConfig config, IReadOnlyList<MandoCodeConfig> allConfigs)
+    public ConfigAcpAgentCatalog(MandoCodeConfig config, IReadOnlyList<MandoCodeConfig> allConfigs, string? configPath = null)
     {
         _config = config;
         _allConfigs = allConfigs;
+        _path = configPath ?? MandoCodeConfig.GetDefaultConfigPath();
     }
 
     public IReadOnlyDictionary<string, AcpAgentConfig> Agents => _config.AcpAgents;
 
     public void Save(IReadOnlyDictionary<string, AcpAgentConfig> agents)
     {
+        if (_config.AllowPersistence)
+            WriteSection(agents);
+
         foreach (var config in _allConfigs.Append(_config).Distinct())
             config.AcpAgents = new Dictionary<string, AcpAgentConfig>(agents, StringComparer.OrdinalIgnoreCase);
+    }
 
-        _config.Save();
+    private void WriteSection(IReadOnlyDictionary<string, AcpAgentConfig> agents)
+    {
+        lock (FileLock)
+        {
+            JsonObject root;
+            if (File.Exists(_path))
+            {
+                // A file that cannot be parsed is not overwritten: that would destroy the user's other settings.
+                root = JsonNode.Parse(File.ReadAllText(_path)) as JsonObject
+                       ?? throw new InvalidDataException($"{_path} is not a JSON object; fix it by hand first.");
+            }
+            else
+            {
+                root = new JsonObject();
+            }
+
+            root["acpAgents"] = JsonSerializer.SerializeToNode(
+                agents.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase), ConfigJsonOptions.WriteOptions);
+
+            var directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            var temp = _path + ".tmp";
+            File.WriteAllText(temp, root.ToJsonString(ConfigJsonOptions.WriteOptions));
+            File.Move(temp, _path, overwrite: true);
+        }
     }
 }

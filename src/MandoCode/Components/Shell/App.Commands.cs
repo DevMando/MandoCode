@@ -331,24 +331,7 @@ public partial class App
         await commands.ExecuteAsync(arguments, ProjectRoot.ProjectRoot, ConfirmAcpLaunchAsync, Console.Out, Console.Out);
     }
 
-    private async Task<bool> ConfirmAcpLaunchAsync(Services.Acp.AcpLaunchPlan plan)
-    {
-        using var promptHold = await PromptGate.AcquireAsync();
-        TuiConsole.WriteLine();
-        foreach (var line in plan.Describe())
-            TuiConsole.WriteLine(line);
-        TuiConsole.WriteLine();
-
-        const string trust = "Trust and start";
-        const string cancel = "Cancel";
-        using (KeyCoordinator.Suppress())
-        {
-            var choice = await ApprovalMenu.RequestAsync(new List<ApprovalSelectCoordinator.Option>
-            {
-                new(trust, Color.Green),
-                new(cancel, new Color(255, 200, 80)),
-            });
-            return choice == trust;
-        }
-    }
+    private Task<bool> ConfirmAcpLaunchAsync(Services.Acp.AcpLaunchPlan plan) =>
+        new Services.Acp.AcpTrustPrompt(PromptGate, ApprovalMenu, () => KeyCoordinator.Suppress(), TuiConsole.WriteLine)
+            .ConfirmAsync(plan);
 }

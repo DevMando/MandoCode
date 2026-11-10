@@ -19,6 +19,8 @@ public static class AcpConnectionProbe
     public const int ExitUsage = 2;
     public const int ExitDeclined = 3;
 
+    public const string NotAcpHint = "This program may not speak ACP; use an ACP adapter (see docs/acp.md).";
+
     public const string DefaultAuthHint = "Sign in with the agent's own tooling (for Claude Code: `claude auth login`), then try again.";
 
     /// <summary>Parses what follows <c>--acp-probe</c>: <c>[--cwd &lt;dir&gt;] &lt;name&gt;</c>. Null (after printing why) on bad usage.</summary>
@@ -59,7 +61,8 @@ public static class AcpConnectionProbe
         Func<AcpLaunchPlan, Task<bool>> confirm,
         TextWriter output,
         TextWriter error,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? logDirectory = null)
     {
         if (!agents.TryGetValue(name, out var config))
         {
@@ -93,7 +96,7 @@ public static class AcpConnectionProbe
             return ExitDeclined;
         }
 
-        var stderr = new StderrLog();
+        var stderr = new StderrLog(filePath: AcpLogPaths.For(name, logDirectory));
         var clock = Stopwatch.StartNew();
         AcpClient? client = null;
         try
@@ -142,7 +145,13 @@ public static class AcpConnectionProbe
             error.WriteLine("The agent went away: " + ex.Message);
             return ExitFailed;
         }
-        catch (Exception ex) when (ex is AcpTimeoutException or AcpProtocolVersionException or JsonRpcException or OperationCanceledException)
+        catch (AcpTimeoutException ex)
+        {
+            error.WriteLine("Probe failed: " + ex.Message);
+            error.WriteLine(NotAcpHint);
+            return ExitFailed;
+        }
+        catch (Exception ex) when (ex is AcpProtocolVersionException or JsonRpcException or OperationCanceledException)
         {
             error.WriteLine("Probe failed: " + ex.Message);
             return ExitFailed;
@@ -152,13 +161,17 @@ public static class AcpConnectionProbe
             if (client is not null)
                 await client.DisposeAsync();
 
-            var tail = stderr.Tail(15);
+            // The tail only: the whole of stderr (which can be very verbose) goes to the log file.
+            var tail = stderr.Tail(20);
             if (!string.IsNullOrWhiteSpace(tail))
             {
                 error.WriteLine();
                 error.WriteLine("Agent stderr (last lines):");
                 error.WriteLine(tail);
             }
+
+            if (stderr.FilePath is { } logFile && File.Exists(logFile))
+                error.WriteLine("Full agent stderr: " + logFile);
         }
     }
 
@@ -174,4 +187,17 @@ public static class AcpConnectionProbe
                 string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase));
         };
+}
+
+/// <summary>Where agent stderr is kept: <c>~/.mandocode/logs/acp/&lt;agent&gt;-&lt;date&gt;.log</c> (rotated by <see cref="StderrLog"/>).</summary>
+public static class AcpLogPaths
+{
+    public static string DefaultDirectory() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "logs", "acp");
+
+    public static string For(string agentName, string? directory = null)
+    {
+        var safe = new string(agentName.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_').ToArray());
+        return Path.Combine(directory ?? DefaultDirectory(), $"{safe}-{DateTime.Now:yyyyMMdd}.log");
+    }
 }

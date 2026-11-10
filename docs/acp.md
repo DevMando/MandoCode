@@ -99,16 +99,51 @@ from `turn.Updates`, the end arrives on `turn.Completion`), not a `Task`, so an 
 - "Not signed in" (JSON-RPC `-32000` on `session/new` or `session/prompt`) is reported as such; `authenticate`
   is not called. Sign in with the agent's own tooling.
 
-## Validation with Claude Code
+## Validation with Claude Code (manual, 2026-11-10)
 
-Status: the protocol layer is covered by unit tests, in-memory peer tests and end-to-end tests against a mock agent
-(`tests/MandoCode.Acp.MockAgent`). **A run against a real Claude Code adapter has not been done yet.** Checklist to fill in:
+Environment: Windows, MandoCode feat/acp-client, .NET SDK 10.x.
 
-| Question | Result |
-|---|---|
-| Adapter package name and the pinned version tested | _pending_ |
-| Can the adapter use a native `claude.exe` (no Node)? | _pending_ |
-| Does it route file access through client `fs/*` or write files itself? | _pending_ |
-| How is a missing login signalled (error code, `authMethods`)? | _pending_ |
-| Agent capabilities reported by `initialize` | _pending_ |
-| Startup time | _pending_ |
+Findings
+- The native `claude.exe` (installed under the user's profile) has no
+  ACP mode: `claude --help` lists no ACP flag. Starting it directly
+  as an ACP agent makes `initialize` time out (the CLI waits for
+  interactive input).
+- An adapter is required. Used: @agentclientprotocol/claude-agent-acp
+  0.103.0 (installed into a separate folder with a pinned version and
+  started as `node <path>\dist\index.js`; no npx).
+  Older names (@zed-industries/claude-code-acp,
+  @zed-industries/claude-agent-acp) are superseded.
+- initialize: ok (~450 ms), ACP protocol v1.
+- Agent capabilities: loadSession=true; prompt: image=true,
+  audio=false, embeddedContext=true.
+- authMethods: none advertised. session/new succeeded without an
+  explicit authenticate step using the existing Claude Code login
+  (stderr reported apiType=native, baseUrl=native).
+- session/new (~1.5 s) reports modes: default, acceptEdits, plan,
+  auto, bypassPermissions; the initial mode was `auto`.
+- stderr is verbose (session/create phase timings), so it goes to a
+  log file; only the tail is shown on failures.
+- ANTHROPIC_API_KEY was removed from the agent's environment by
+  default.
+
+Decisions
+- MandoCode sets the session mode to `default` after session/new
+  unless the agent entry specifies `startMode` (deviation from the
+  initial plan: session/set_mode is called in phase 2).
+- Agents are started without a shell (no cmd/npx), with a resolved
+  absolute path; the launch is confirmed through the trust dialog.
+
+Pending / unverified
+- Whether the adapter uses the client's fs/read_text_file and
+  fs/write_text_file or accesses files itself (needs a real prompt).
+- The exact error returned when Claude Code is not signed in.
+- stopReason values observed on cancel.
+- Whether usage through the adapter counts against the Claude
+  subscription limits or the separate Agent SDK credit: not verified;
+  check in the account usage page after real prompts.
+- Windows behavior of tree-kill for node -> claude after cancel/exit.
+
+Deviations from the plan
+- Prompt (not PromptAsync): the method returns an AcpTurn directly.
+- --acp-probe takes a configured agent name and goes through the same
+  resolver and trust check as /agent-acp test.

@@ -18,6 +18,7 @@ using System.Text.Json.Nodes;
 //   stdout-garbage     writes non-protocol lines to stdout
 //   stderr-flood       writes ~1.7 MB to stderr before serving
 //   hang-on-shutdown   ignores stdin EOF and keeps a child process alive
+//   silent-with-child  starts a child process, never answers anything and ignores stdin EOF
 //   sleep              does nothing (used as the child of hang-on-shutdown)
 var scenario = args.Length > 0 ? args[0] : "echo";
 return await new MockAgent(scenario, args).RunAsync();
@@ -67,6 +68,12 @@ internal sealed class MockAgent
             case "hang-on-shutdown":
                 StartChild();
                 break;
+
+            case "silent-with-child":
+                StartChild();
+                Console.Error.WriteLine("mock-agent: booting, loading models...");
+                await Task.Delay(Timeout.Infinite);
+                return 0;
         }
 
         using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));

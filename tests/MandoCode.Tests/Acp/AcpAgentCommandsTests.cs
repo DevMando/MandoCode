@@ -5,6 +5,7 @@ using Xunit;
 
 namespace MandoCode.Tests.Acp;
 
+[Collection("AcpProcesses")]
 public class AcpAgentCommandsTests : IDisposable
 {
     private readonly string _work = Path.Combine(Path.GetTempPath(), "mandocode-acp-cmd-" + Guid.NewGuid().ToString("N"));
@@ -40,7 +41,7 @@ public class AcpAgentCommandsTests : IDisposable
 
     private Task Run(string arguments)
     {
-        var commands = new AcpAgentCommands(_catalog, new AcpAgentLauncher(_trust));
+        var commands = new AcpAgentCommands(_catalog, new AcpAgentLauncher(_trust), logDirectory: Path.Combine(_work, "logs"));
         return commands.ExecuteAsync(arguments, _work, _ => { _asked++; return Task.FromResult(_answer); }, _out, _err);
     }
 
@@ -283,7 +284,7 @@ public class AcpAgentCommandsTests : IDisposable
         // The mock reports ANTHROPIC_API_KEY from its own environment in initialize._meta; here we only check the plan text.
         _catalog.Stored["mock"] = new AcpAgentConfig { Command = _host, Args = [MockDll, "echo"] };
         var seen = new List<string>();
-        var commands = new AcpAgentCommands(_catalog, new AcpAgentLauncher(_trust));
+        var commands = new AcpAgentCommands(_catalog, new AcpAgentLauncher(_trust), logDirectory: Path.Combine(_work, "logs"));
 
         await commands.ExecuteAsync("test mock", _work, plan => { seen.AddRange(plan.Describe()); return Task.FromResult(false); }, _out, _err);
 

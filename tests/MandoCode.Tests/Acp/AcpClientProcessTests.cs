@@ -7,6 +7,7 @@ using Xunit;
 namespace MandoCode.Tests.Acp;
 
 /// <summary>End-to-end: <see cref="AcpClient"/> over a real <see cref="AcpProcessTransport"/> talking to the mock agent.</summary>
+[Collection("AcpProcesses")]
 public class AcpClientProcessTests : IAsyncDisposable
 {
     private readonly string _work = Path.Combine(Path.GetTempPath(), "mandocode-acp-client-" + Guid.NewGuid().ToString("N"));

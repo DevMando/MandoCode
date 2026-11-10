@@ -95,21 +95,30 @@ public sealed record AcpLaunchPlan(
     AcpAgentConfig Config,
     string Hash)
 {
+    private static string Quote(string value) => "\"" + value + "\"";
+
     /// <summary>The lines of the confirmation: resolved path, every argument on its own line, folder, env names only.</summary>
     public IReadOnlyList<string> Describe()
     {
+        // Values are printed verbatim (never as markup), each on its own indented line and in quotes, so a path
+        // with spaces, dots or '@' is unambiguous and can only be wrapped by the terminal, not rewritten.
         var lines = new List<string>
         {
             $"ACP agent '{AgentName}' will be started as:",
-            "  program: " + Resolved.ExecutablePath,
+            "  program:",
+            "    " + Quote(Resolved.ExecutablePath),
         };
 
         if (Resolved.Args.Count == 0)
             lines.Add("  arguments: (none)");
         for (var i = 0; i < Resolved.Args.Count; i++)
-            lines.Add($"  argument {i + 1}: {Resolved.Args[i]}");
+        {
+            lines.Add($"  argument {i + 1}:");
+            lines.Add("    " + Quote(Resolved.Args[i]));
+        }
 
-        lines.Add("  working directory: " + Spec.WorkingDirectory);
+        lines.Add("  working directory:");
+        lines.Add("    " + Quote(Spec.WorkingDirectory));
         lines.Add(Config.Env.Count == 0
             ? "  extra environment variables: (none)"
             : "  extra environment variables: " + string.Join(", ", Config.Env.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase)) + " (values not shown)");
