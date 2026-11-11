@@ -747,6 +747,107 @@ public class AcpPaneWorkspaceTests
     }
 
     [Fact]
+    public async Task APane_GoesNativeToAcpToNative_AndKeepsItsOwnModelUnderneath()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add();
+        var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
+        var nativeModel = pane.Model;
+        var nativeName = pane.Name;
+
+        AcpPaneMode.Enter(pane, "claude");
+        var runtime = new FakeRuntime();
+        holder.Runtime = runtime;
+
+        Assert.Equal(AgentRuntime.Acp, pane.Runtime);
+        Assert.Equal("claude", pane.AcpAgentName);
+        Assert.Equal("ACP · claude", pane.Model);
+        Assert.True(holder.IsAcpPane);
+        Assert.Single(workspace.Panes);
+
+        await AcpPaneMode.LeaveAsync(pane);
+
+        Assert.True(runtime.Disposed);
+        Assert.Null(holder.Runtime);
+        Assert.False(holder.IsAcpPane);
+        Assert.Equal(AgentRuntime.Native, pane.Runtime);
+        Assert.Null(pane.AcpAgentName);
+        Assert.Equal(nativeModel, pane.Model);
+        Assert.Equal(nativeName, pane.Name);
+    }
+
+    [Fact]
+    public async Task SwitchingToAnotherAcpAgent_ClosesTheCurrentOne_InTheSamePane()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add();
+        var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
+        AcpPaneMode.Enter(pane, "claude");
+        var first = new FakeRuntime();
+        holder.Runtime = first;
+
+        await AcpPaneMode.CloseSessionAsync(pane);
+        AcpPaneMode.Enter(pane, "other");
+
+        Assert.True(first.Disposed);
+        Assert.Equal("other", pane.AcpAgentName);
+        Assert.Equal("ACP · other", pane.Model);
+        Assert.True(holder.IsAcpPane);
+        Assert.Single(workspace.Panes);
+    }
+
+    [Fact]
+    public async Task ThePaneLimit_StillAppliesToNewPanels_ButNotToASwitch()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        for (var i = 0; i < 4; i++) workspace.Add();
+        Assert.Equal(4, workspace.Panes.Count);
+
+        var extra = workspace.Add(acpAgent: "claude");   // a fifth pane is refused, nothing is added
+        Assert.Equal(4, workspace.Panes.Count);
+        Assert.NotEqual("claude", extra.AcpAgentName);
+
+        AcpPaneMode.Enter(workspace.Panes[0], "claude");  // switching needs no free slot
+        Assert.Equal(4, workspace.Panes.Count);
+        Assert.Equal(AgentRuntime.Acp, workspace.Panes[0].Runtime);
+    }
+
+    [Fact]
+    public async Task ClosingASwitchedPane_AlsoEndsTheAgent()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        workspace.Add();
+        var pane = workspace.Add();
+        AcpPaneMode.Enter(pane, "claude");
+        var runtime = new FakeRuntime();
+        pane.Services.GetRequiredService<AcpRuntimeHolder>().Runtime = runtime;
+
+        await pane.DisposeAsync();
+
+        Assert.True(runtime.Disposed);
+    }
+
+    [Fact]
+    public async Task TheCommandFilter_FollowsTheCurrentMode()
+    {
+        await using var services = Services();
+        var pane = services.GetRequiredService<AgentWorkspace>().Add();
+        var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
+        static bool Hidden(AcpRuntimeHolder h, string command) => h.IsAcpPane && SlashCommands.IsNativeOnly(command);
+
+        Assert.False(Hidden(holder, "model"));
+        AcpPaneMode.Enter(pane, "claude");
+        Assert.True(Hidden(holder, "model"));
+        Assert.False(Hidden(holder, "agent-acp"));
+        await AcpPaneMode.LeaveAsync(pane);
+        Assert.False(Hidden(holder, "model"));
+    }
+
+    [Fact]
     public async Task ClosingAnAcpPane_DisposesItsRuntime_SoTheProcessEnds()
     {
         await using var services = Services();

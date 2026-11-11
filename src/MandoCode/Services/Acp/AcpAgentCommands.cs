@@ -22,6 +22,15 @@ public interface IAcpPaneHost
     /// <summary>Opens a new pane running the agent. Null on success, otherwise what to tell the user.</summary>
     Task<string?> OpenPaneAsync(string agentName);
 
+    /// <summary>
+    /// Switches the current pane to the agent (closing the ACP agent it already runs, if any). The native session stays
+    /// alive underneath. Null on success, otherwise what to tell the user (for example when the pane is busy).
+    /// </summary>
+    Task<string?> SwitchAsync(string agentName);
+
+    /// <summary>Closes the current pane's ACP session and returns it to the native agent. Null on success, otherwise what to tell the user.</summary>
+    Task<string?> StopAsync();
+
     /// <summary>Restarts the agent of the current pane. Null on success, otherwise what to tell the user.</summary>
     Task<string?> RestartAsync();
 }
@@ -33,11 +42,11 @@ public interface IAcpPaneHost
 public sealed class AcpAgentCommands
 {
     public const string Usage =
-        "Usage: /agent-acp [list] | <name> | restart | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+        "Usage: /agent-acp [list] | <name> [--new-panel] | restart | stop | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
 
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {
-        "list", "status", "add", "test", "remove", "enable", "disable", "restart",
+        "list", "status", "add", "test", "remove", "enable", "disable", "restart", "stop",
     };
 
     private readonly IAcpAgentCatalog _catalog;
@@ -65,6 +74,13 @@ public sealed class AcpAgentCommands
         CancellationToken cancellationToken = default)
     {
         var tokens = Tokenize(arguments);
+        if (tokens.Count > 0 && tokens[0].StartsWith("--", StringComparison.Ordinal))
+        {
+            // Flags may come first: /agent-acp --new-panel claude
+            await OpenAsync(tokens, error, output);
+            return;
+        }
+
         if (tokens.Count == 0 || tokens[0].Equals("list", StringComparison.OrdinalIgnoreCase))
         {
             List(output);
@@ -77,6 +93,12 @@ public sealed class AcpAgentCommands
         {
             case "status":
                 Status(rest, output, error);
+                break;
+            case "stop":
+                if (_host is null)
+                    error.WriteLine("Stop works inside an ACP agent pane.");
+                else if (await _host.StopAsync() is { } stopError)
+                    error.WriteLine(stopError);
                 break;
             case "add":
                 Add(rest, output, error);
@@ -103,25 +125,57 @@ public sealed class AcpAgentCommands
                     await AcpConnectionProbe.RunAsync(rest[0], _catalog.Agents, workingDirectory, _launcher, confirm, output, error, cancellationToken, _logDirectory);
                 break;
             default:
-                if (_catalog.Agents.TryGetValue(tokens[0], out var agent))
-                {
-                    if (agent.Disabled)
-                        error.WriteLine($"ACP agent '{tokens[0]}' is disabled. Enable it with /agent-acp enable {tokens[0]}.");
-                    else if (_host is null)
-                        error.WriteLine("Opening an agent pane is not available here.");
-                    else if (await _host.OpenPaneAsync(tokens[0]) is { } openError)
-                        error.WriteLine(openError);
-                    else
-                        output.WriteLine($"Opened ACP agent '{tokens[0]}' in a new pane.");
-                }
-                else
-                {
-                    error.WriteLine($"Unknown /agent-acp command '{tokens[0]}'.");
-                    error.WriteLine(Usage);
-                }
-
+                await OpenAsync(tokens, error, output);
                 break;
         }
+    }
+
+    /// <summary><c>&lt;name&gt; [--new-panel]</c> (the flag may also come first): switch this pane, or open a new one.</summary>
+    private async Task OpenAsync(List<string> tokens, TextWriter error, TextWriter output)
+    {
+        var newPanel = false;
+        var names = new List<string>();
+        foreach (var token in tokens)
+        {
+            if (!token.StartsWith("--", StringComparison.Ordinal))
+                names.Add(token);
+            else if (token.Equals("--new-panel", StringComparison.Ordinal))
+                newPanel = true;
+            else
+            {
+                error.WriteLine($"Unknown option '{token}'.");
+                error.WriteLine(Usage);
+                return;
+            }
+        }
+
+        if (names.Count != 1)
+        {
+            error.WriteLine(Usage);
+            return;
+        }
+
+        var name = names[0];
+        if (!_catalog.Agents.TryGetValue(name, out var agent))
+        {
+            error.WriteLine($"Unknown /agent-acp command '{name}'.");
+            error.WriteLine(Usage);
+            return;
+        }
+
+        if (agent.Disabled)
+            error.WriteLine($"ACP agent '{name}' is disabled. Enable it with /agent-acp enable {name}.");
+        else if (_host is null)
+            error.WriteLine("Opening an agent pane is not available here.");
+        else if (newPanel)
+        {
+            if (await _host.OpenPaneAsync(name) is { } openError)
+                error.WriteLine(openError);
+            else
+                output.WriteLine($"Opened ACP agent '{name}' in a new pane.");
+        }
+        else if (await _host.SwitchAsync(name) is { } switchError)
+            error.WriteLine(switchError);
     }
 
     private void List(TextWriter output)
@@ -326,7 +380,8 @@ public sealed class AcpAgentCommands
     };
 
     private static bool IsValidName(string name) =>
-        name.Length is >= 1 and <= 40 && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+        name.Length is >= 1 and <= 40 && char.IsAsciiLetterOrDigit(name[0])
+        && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
     private static string Quote(string argument) =>
         argument.Length == 0 || argument.Any(char.IsWhiteSpace) ? "\"" + argument + "\"" : argument;

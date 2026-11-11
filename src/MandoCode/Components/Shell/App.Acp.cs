@@ -12,6 +12,11 @@ namespace MandoCode.Components;
 public partial class App
 {
     private IAcpAgentRuntime? _acp;
+
+    // The ACP conversation is kept apart from the native one (_messages): it is never saved to the agent history,
+    // and the native conversation underneath is untouched while this pane runs an external agent.
+    private readonly List<ChatMsg> _acpMessages = [];
+    private bool _nativeInitialized;
     private AcpTranscriptAdapter? _acpTranscript;
     private CancellationTokenSource? _acpStartCts;
 
@@ -176,6 +181,82 @@ public partial class App
 
     private static void Print(IRenderable renderable) => TuiConsole.Write(renderable);
 
+    /// <summary>Something of this pane is running or waiting for the user; a mode switch must not cut it off.</summary>
+    private bool HasActiveWork =>
+        _requestCts is not null || _runningPeerRequest is not null || _planSelectActive || ApprovalMenu.IsActive;
+
+    private const string BusyMessage = "This agent is busy. Wait for it to finish (Escape cancels it), or use --new-panel to open the agent in another pane.";
+
+    /// <summary>Kills the current ACP agent (its whole process tree) and forgets it; the pane stays in ACP mode.</summary>
+    private async Task TearDownAcpAsync()
+    {
+        try { _acpStartCts?.Cancel(); } catch (ObjectDisposedException) { }
+        var old = _acp;
+        _acp = null;
+        _acpStart = null;
+        if (old is not null)
+            old.Changed -= OnAcpChanged;
+        if (Pane is not null)
+            await AcpPaneMode.CloseSessionAsync(Pane);   // the holder owns the runtime and disposes it
+        else if (old is not null)
+            await old.DisposeAsync();
+    }
+
+    /// <summary>
+    /// <c>/agent-acp &lt;name&gt;</c>: this pane runs the external agent from now on. The native session stays alive
+    /// underneath, and nothing is carried over in either direction (a fresh start).
+    /// </summary>
+    private async Task<string?> SwitchToAcpAsync(string agentName)
+    {
+        if (Pane is null) return "Agent panes are not available here.";
+        if (HasActiveWork) return BusyMessage;
+        if (IsAcpPane)
+        {
+            if (string.Equals(Pane.AcpAgentName, agentName, StringComparison.OrdinalIgnoreCase)
+                && _acp is { Status: AcpRuntimeStatus.Ready or AcpRuntimeStatus.Starting })
+                return $"This pane already runs '{agentName}'. Use /agent-acp restart to start it again.";
+            await TearDownAcpAsync();
+        }
+
+        AcpPaneMode.Enter(Pane, agentName);
+        _acpMessages.Clear();
+        Print(new Text(
+            $"── This pane now runs the ACP agent '{agentName}' (fresh start: the native conversation is kept but not shared). /agent-acp stop returns to it. ──",
+            new Style(Color.Grey)));
+
+        var session = Pane.Session;
+        _acpStart = Task.Run(async () =>
+        {
+            using var output = TuiConsole.Enter(session);
+            return await StartAcpRuntimeAsync();
+        });
+        await InvokeAsync(StateHasChanged);
+        return null;
+    }
+
+    /// <summary><c>/agent-acp stop</c>: closes the ACP session and gives the pane back to the native agent.</summary>
+    private async Task<string?> StopAcpAsync()
+    {
+        if (Pane is null) return "Agent panes are not available here.";
+        if (!IsAcpPane) return "This pane already runs the native agent. /agent-acp stop works in a pane that runs an ACP agent.";
+        if (HasActiveWork) return BusyMessage;
+
+        await TearDownAcpAsync();
+        await AcpPaneMode.LeaveAsync(Pane);
+        _acpMessages.Clear();
+        Print(new Text("── Back to the native agent (the ACP conversation is not shared with it). ──", new Style(Color.Grey)));
+
+        // A pane that was opened as an ACP pane never started its native side; do it now.
+        if (!_nativeInitialized)
+        {
+            _nativeInitialized = true;
+            await InitializeConnectionAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+        return null;
+    }
+
     private async Task RestartAcpAsync()
     {
         try { _acpStartCts?.Cancel(); } catch (ObjectDisposedException) { }
@@ -198,7 +279,7 @@ public partial class App
     {
         _lastRequestError = null;
         _lastCompletedReply = null;
-        _messages.Add(new ChatMsg { Role = "user", Text = input });
+        _acpMessages.Add(new ChatMsg { Role = "user", Text = input });
         (Pane?.Session ?? TuiConsole.Current)?.BeginToolTurn();
         TuiConsole.WriteLine();
 
@@ -235,7 +316,7 @@ public partial class App
             if (outcome.ReplyText.Length > 0)
             {
                 _lastCompletedReply = outcome.ReplyText;
-                _messages.Add(new ChatMsg { Role = "assistant", Text = outcome.ReplyText });
+                _acpMessages.Add(new ChatMsg { Role = "assistant", Text = outcome.ReplyText });
             }
         }
         catch (Exception ex)
@@ -292,6 +373,10 @@ public partial class App
             });
             return result;
         }
+
+        public Task<string?> SwitchAsync(string agentName) => app.SwitchToAcpAsync(agentName);
+
+        public Task<string?> StopAsync() => app.StopAcpAsync();
 
         public async Task<string?> RestartAsync()
         {

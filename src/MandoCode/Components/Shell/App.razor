@@ -392,6 +392,12 @@
         {
             await InvokeAsync(() =>
             {
+                if (IsAcpPane)
+                {
+                    request.Accepted.TrySetResult(false);
+                    request.Completion.TrySetResult(new(false, "This agent is currently running an external ACP agent and cannot take requests from other agents."));
+                    return;
+                }
                 if (_paneStopped || Pane?.IsBusy?.Invoke() != false || Pane.IsAwaitingInput?.Invoke() == true ||
                     _inputTcs is null || _inputTcs.Task.IsCompleted || request.Cancellation.IsCancellationRequested)
                 {
@@ -1654,8 +1660,9 @@
     private DateTimeOffset? _archiveClosedAt;
     private bool SaveAgentHistory(bool closed)
     {
-        // An ACP pane is an external agent, not a MandoCode conversation: /history must never restore it as one.
-        if (Pane is null || IsAcpPane || !Config.AllowPersistence || _messages.Count == 0) return true;
+        // Only the native conversation is archived: ACP turns live in _acpMessages, so /history can never restore an
+        // external agent as a native one, while the native conversation of a switched pane is still saved.
+        if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
         var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
         try
         {

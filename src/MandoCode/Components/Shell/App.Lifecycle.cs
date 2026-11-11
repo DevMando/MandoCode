@@ -164,10 +164,9 @@ public partial class App
             () => Pane.SubmitCommand, value => Pane.SubmitCommand = value, HandleVdomSubmit);
 
         // Other agents read a snapshot of the transcript on the renderer dispatcher.
-        // An ACP pane cannot be asked by other agents (peer requests are a native-agent feature).
-        if (!IsAcpPane)
-            _paneCallbacks.Bind<Func<CliPeerRequest, Task<CliPeerAnswer>>>(
-                () => Pane.AskPeer, value => Pane.AskPeer = value, AskPeerAsync);
+        // While a pane runs an ACP agent, AskPeerAsync refuses: peer requests are a native-agent feature.
+        _paneCallbacks.Bind<Func<CliPeerRequest, Task<CliPeerAnswer>>>(
+            () => Pane.AskPeer, value => Pane.AskPeer = value, AskPeerAsync);
         _paneCallbacks.Bind<Func<Task<IReadOnlyList<ChatMsg>>>>(
             () => Pane.ReadConversation, value => Pane.ReadConversation = value, ReadPaneConversationAsync);
         AI.SetHostTools(new CliAgentTools(Pane, Delegations).Functions);
@@ -194,7 +193,7 @@ public partial class App
     private async Task<IReadOnlyList<ChatMsg>> ReadPaneConversationAsync()
     {
         IReadOnlyList<ChatMsg> conversation = [];
-        await InvokeAsync(() => conversation = _messages
+        await InvokeAsync(() => conversation = (IsAcpPane ? _acpMessages : _messages)
             .Select(message => new ChatMsg { Role = message.Role, Text = message.Text })
             .ToArray());
         return conversation;
@@ -226,6 +225,7 @@ public partial class App
             }
             else
             {
+                _nativeInitialized = true;
                 await InitializeConnectionAsync();
                 _startupComplete = true;
             }

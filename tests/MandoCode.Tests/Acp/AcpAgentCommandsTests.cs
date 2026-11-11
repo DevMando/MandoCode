@@ -384,9 +384,14 @@ public class AcpAgentCommandsTests : IDisposable
     private sealed class FakeHost : IAcpPaneHost
     {
         public List<string> Opened { get; } = [];
+        public List<string> Switched { get; } = [];
         public int Restarts;
+        public int Stops;
         public string? OpenError { get; set; }
+        public string? SwitchError { get; set; }
         public Task<string?> OpenPaneAsync(string agentName) { Opened.Add(agentName); return Task.FromResult(OpenError); }
+        public Task<string?> SwitchAsync(string agentName) { Switched.Add(agentName); return Task.FromResult(SwitchError); }
+        public Task<string?> StopAsync() { Stops++; return Task.FromResult<string?>(null); }
         public Task<string?> RestartAsync() { Restarts++; return Task.FromResult<string?>(null); }
     }
 
@@ -395,25 +400,95 @@ public class AcpAgentCommandsTests : IDisposable
             .ExecuteAsync(arguments, _work, _ => Task.FromResult(true), _out, _err);
 
     [Fact]
-    public async Task AgentName_OpensANewPane()
+    public async Task AgentName_SwitchesTheCurrentPane_ByDefault()
     {
         _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
         var host = new FakeHost();
 
         await RunWith("CLAUDE", host);
 
-        Assert.Equal(["CLAUDE"], host.Opened);
+        Assert.Equal(["CLAUDE"], host.Switched);
+        Assert.Empty(host.Opened);
+    }
+
+    [Theory]
+    [InlineData("claude --new-panel")]
+    [InlineData("--new-panel claude")]
+    public async Task NewPanelFlag_OpensANewPane_InEitherPosition(string arguments)
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+        var host = new FakeHost();
+
+        await RunWith(arguments, host);
+
+        Assert.Equal(["claude"], host.Opened);
+        Assert.Empty(host.Switched);
         Assert.Contains("Opened ACP agent", _out.ToString());
     }
 
     [Fact]
-    public async Task AgentName_ReportsWhyAPaneCouldNotBeOpened()
+    public async Task NewPanel_ReportsThePaneLimit()
     {
         _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
 
-        await RunWith("claude", new FakeHost { OpenError = "Four agent panes are already open. Close one first." });
+        await RunWith("claude --new-panel", new FakeHost { OpenError = "Four agent panes are already open. Close one first." });
 
         Assert.Contains("Four agent panes", _err.ToString());
+        Assert.DoesNotContain("Opened ACP agent", _out.ToString());
+    }
+
+    [Fact]
+    public async Task ABusyPane_ExplainsWhyItWasNotSwitched()
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+
+        await RunWith("claude", new FakeHost { SwitchError = "This agent is busy. Wait for it to finish, or use --new-panel." });
+
+        Assert.Contains("busy", _err.ToString());
+    }
+
+    [Theory]
+    [InlineData("claude --bogus", "Unknown option '--bogus'")]
+    [InlineData("--new-panel", "Usage")]
+    [InlineData("claude other", "Usage")]
+    public async Task BadFlagsOrNames_AreRejected_WithoutTouchingAPane(string arguments, string expected)
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+        _catalog.Stored["other"] = new AcpAgentConfig { Command = _host };
+        var host = new FakeHost();
+
+        await RunWith(arguments, host);
+
+        Assert.Contains(expected, _err.ToString());
+        Assert.Empty(host.Opened);
+        Assert.Empty(host.Switched);
+    }
+
+    [Fact]
+    public async Task AnAgentCannotBeNamedLikeAFlag()
+    {
+        await Run($"add --new-panel {Quoted(_host)}");
+        await Run($"add -x {Quoted(_host)}");
+
+        Assert.Empty(_catalog.Stored);
+    }
+
+    [Fact]
+    public async Task Stop_GoesToThePaneHost()
+    {
+        var host = new FakeHost();
+
+        await RunWith("stop", host);
+
+        Assert.Equal(1, host.Stops);
+    }
+
+    [Fact]
+    public async Task Stop_WithoutAHost_SaysWhere()
+    {
+        await RunWith("stop", host: null);
+
+        Assert.Contains("inside an ACP agent pane", _err.ToString());
     }
 
     [Fact]
@@ -448,6 +523,7 @@ public class AcpAgentCommandsTests : IDisposable
 
     [Theory]
     [InlineData("restart")]
+    [InlineData("stop")]
     [InlineData("List")]
     [InlineData("add")]
     public async Task CommandWords_CannotBeAgentNames(string name)
