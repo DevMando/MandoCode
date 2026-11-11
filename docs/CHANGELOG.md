@@ -4,11 +4,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [0.16.2] - 2026-11-11
 
-**The startup screen no longer fills with repeated prompt borders.** On some launches the first agent drew its prompt as rows of bottom borders and could not take input; the workaround was to open a second agent and close the first. The 0.16.1 startup change did not address this. RazorConsole remains at 0.6.0.
-
-![The startup screen before this fix: every row below the agent header shows a prompt border](images/startup-repeated-borders-before-0.16.2.png)
-
-*Before 0.16.2: what the first agent could look like on launch.*
+**The startup screen no longer fills with repeated prompt borders.** On some launches the first agent drew its prompt as rows of bottom borders and could not take input; the workaround was to open a second agent and close the first. The 0.16.1 startup change did not address this. RazorConsole remains at 0.6.0. A screenshot of the failure is in [#138](https://github.com/DevMando/MandoCode/pull/138).
 
 **Highlights**
 
