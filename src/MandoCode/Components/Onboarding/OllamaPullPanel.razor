@@ -117,7 +117,7 @@
  protected override void OnInitialized() { _ = Animate(); _ = Load(); }
  private Task Load() => Run(async ct => { _newestModels = await Library.Models(ct, newest: true); if (_newestModels.Count == 0) throw new IOException("The library could not be read. Type a model name and press Ctrl+P to pull it."); _status = ""; });
  protected override void OnParametersSet() { if (ExplorerFocus is not null) { ExplorerFocus.NavigateTab = Cycle; ExplorerFocus.FocusExplorer = FocusPanel; } }
- protected override async Task OnAfterRenderAsync(bool firstRender) { if ((Pane is null || Pane.Active) && !Focus.IsFocused(_searchFocused ? _searchKey : _focusKey)) { if (_searchFocused) await FocusSearch(); else await FocusPanel(); } }
+ protected override async Task OnAfterRenderAsync(bool firstRender) { if ((Pane is null || Pane.Active) && !Focus.IsFocused(_searchFocused ? _searchKey : _focusKey)) { await DeferredFocus.AfterRenderBatch(); if (_searchFocused) await FocusSearch(); else await FocusPanel(); } }
  private async Task FocusPanel() { if (Pane is not null && !Pane.Active) return; if (Pane is not null) Pane.FocusKey = _focusKey; ExplorerFocus?.SetPromptFocused(false); await Focus.FocusAsync(_focusKey); }
  private async Task Cycle(bool reverse) {
   if (_busy) return;

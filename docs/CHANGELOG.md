@@ -2,11 +2,30 @@
 
 All notable changes to MandoCode will be documented in this file.
 
-## [Unreleased]
+## [0.16.2] - 2026-11-11
+
+**The startup screen no longer fills with repeated prompt borders.** On some launches the first agent drew its prompt as rows of bottom borders and could not take input; the workaround was to open a second agent and close the first. The 0.16.1 startup change did not address this. RazorConsole remains at 0.6.0.
+
+![The startup screen before this fix: every row below the agent header shows a prompt border](images/startup-repeated-borders-before-0.16.2.png)
+
+*Before 0.16.2: what the first agent could look like on launch.*
+
+**Highlights**
+
+- Fix the corrupted startup prompt that left the first agent unusable.
+- Focus requests raised while a component finishes rendering now run after the render batch completes.
+
+### Fixed
+
+- Stop the prompt, and any panel that takes focus as it opens, from being inserted into the interface twice. A focus request made from `OnAfterRenderAsync` dispatched its focus events inside the render batch still in progress, and RazorConsole 0.6.0 then applied that batch a second time. Whether this happened depended on thread timing, so it appeared on some launches and not others. These requests now go through `DeferredFocus`, which waits for the batch to finish. Focus changes from key and click handlers are unchanged. RazorConsole 0.7.0 corrects the dispatch itself; this release does not upgrade to it.
 
 ### Changed
 
 - Group CLI components into feature folders for shell, workspaces, conversations, input, project browsing, sessions, settings, onboarding, and activity. Keep component namespaces and behavior unchanged, and document where new components belong.
+
+### Test coverage
+
+- The full suite passes on net10.0 and net8.0 (1,247 tests each). No automated regression covers this failure: it was reproduced, and the fix confirmed, by launching the built CLI in a pseudo-terminal with the timing forced.
 
 ## [0.16.1] - 2026-10-21
 

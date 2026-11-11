@@ -78,7 +78,7 @@
         if (Pane is not null) Pane.FocusKey = _focusKey;
         if ((Pane is null || Pane.Active) && (firstRender || _requestFocus || !Focus.IsFocused(_focusKey)))
         {
-            await Focus.FocusAsync(_focusKey);
+            await Focus.FocusDeferredAsync(_focusKey);
             // A newly mounted selector may not yet be in the framework's focus
             // snapshot. Keep retrying until its registered target owns focus.
             _requestFocus = !Focus.IsFocused(_focusKey);

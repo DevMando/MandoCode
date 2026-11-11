@@ -45,7 +45,7 @@
  protected override async Task OnAfterRenderAsync(bool firstRender) {
   if (firstRender && (Pane is null || Pane.Active)) {
    if (Pane is not null) Pane.FocusKey = _focusKey;
-   await Focus.FocusAsync(_focusKey);
+   await Focus.FocusDeferredAsync(_focusKey);
   }
  }
  private async Task Key(KeyboardEventArgs key) {

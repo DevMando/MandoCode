@@ -131,7 +131,7 @@ else
         if (_browsing || Pane is not null && !Pane.Active) return;
         var key = _urlInput ? _urlKey : _key;
         if (Pane is not null) Pane.FocusKey = key;
-        if (!Focus.IsFocused(key)) await Focus.FocusAsync(key);
+        if (!Focus.IsFocused(key)) await Focus.FocusDeferredAsync(key);
     }
     private async Task Animate() { try { while (!_stop.IsCancellationRequested) { await Task.Delay(120, _stop.Token); if (_choices.Length == 0 && !_browsing && !_urlInput) { _frame++; if (!_disposed) await InvokeAsync(StateHasChanged); } } } catch (OperationCanceledException) { } }
     public void Dispose() { _disposed = true; _stop.Cancel(); _operations.Dispose(); if (ExplorerFocus?.NavigateTab == Cycle) ExplorerFocus.NavigateTab = null; }
