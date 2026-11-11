@@ -100,9 +100,46 @@ pane ends its whole process tree. `/agent-acp restart` (inside the pane) starts 
 - Commands that drive MandoCode's own model loop (`/model`, `/plan*`, `/compact`, `/context-snap-*`, `/force-skill`,
   `/setup`, `/retry`, `/config`, `/agent-settings`, `/ollama-*`) are hidden there and answer with an explanation.
 - ACP panes are never saved to the agent history, so `/history` cannot bring one back as a native agent.
-- Not in this change (they come next): showing tool calls, plans and diffs, answering permission requests, and the
-  `fs/*` handlers. Until then every permission request is answered "cancelled", so an agent in a mode that asks before
-  acting cannot edit files or run commands; `terminal/*` is never offered.
+- Connecting happens in the background: the pane prints "Connecting to <name>...", shows `connecting…` in the header and
+  takes input at once. A message typed meanwhile waits until the agent is ready (Escape cancels the wait). If the
+  start fails, whatever the reason, the pane shows the message and stays usable: `/agent-acp restart` tries again.
+- `terminal/*` is never offered.
+
+### Tool calls, plans and diffs
+
+- `tool_call` / `tool_call_update`: one line per call (`<icon by kind> <title> · <path>:<line>`) and one line for the
+  final status (`completed`, or `failed` with the first line of the agent's message). State is kept by `toolCallId`, so
+  an update that carries only a status works. `terminal` content is shown as "terminal output not supported".
+- `plan`: the whole checklist is replaced on every update; the current one is printed when the turn ends, and the
+  activity line shows `Plan done/total` meanwhile.
+- Diffs (`diff` content of a tool call, and files written through `fs/write_text_file`) go through the same renderer as
+  MandoCode's own edits: new files as a write with a preview, existing files as an inline diff. The same change is
+  shown once even if the agent reports it both ways.
+- Unknown update kinds and content types are ignored.
+
+### Permissions
+
+`session/request_permission` opens a menu with the agent's options exactly as it sent them (allow options green, reject
+options red; equal names get a number). The text above it names the tool call, its locations and the agent's current
+mode, and says that **the agent applies the permission itself**: MandoCode only passes the answer on. The answer
+is the chosen `optionId`. Escape, closing the menu or cancelling the turn answers `cancelled`. A proposed diff is shown
+as a scrollable preview (PgUp/PgDn). MandoCode's own approval settings (`EnableDiffApprovals`, write bypass) do not
+apply to external agents.
+
+### File access (`fs/*`)
+
+The ACP pane advertises `fs.readTextFile` and `fs.writeTextFile` and answers them itself, confined to the project folder:
+
+- the path must be absolute; it is checked with `FileSystemPlugin.ResolvePath` and refused when outside the folder;
+- the path is then canonicalised: a symlink or junction on the final target **or on any parent directory** that leads
+  outside the folder is refused (a link that stays inside is fine);
+- reads accept `line` (1-based) and `limit`; a whole file over 5 MB is refused, a range is capped at 5 MB of text;
+- writes are atomic (temp file + replace), directories are created only inside the folder, and the change is shown as a diff.
+
+The check and the use are separate steps, so a link swapped in between by another process is not covered.
+Whether the real Claude Code adapter calls `fs/*` at all, or edits files itself, is **pending**: it has not been
+observed (the validation above ran without a handler). If it does not, its edits arrive only as tool calls with `diff`
+content, which are rendered the same way.
 
 ### Session mode
 

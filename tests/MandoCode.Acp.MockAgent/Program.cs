@@ -298,6 +298,60 @@ internal sealed class MockAgent
                 return;
             }
 
+            case "tools-plan-diff":
+            {
+                Chunk("Looking at the file.");
+                Update(new JsonObject
+                {
+                    ["sessionUpdate"] = "tool_call",
+                    ["toolCallId"] = "t1",
+                    ["title"] = "Read config",
+                    ["kind"] = "read",
+                    ["status"] = "pending",
+                    ["locations"] = new JsonArray(new JsonObject { ["path"] = "/work/config.json", ["line"] = 3 }),
+                });
+                Update(new JsonObject { ["sessionUpdate"] = "tool_call_update", ["toolCallId"] = "t1", ["status"] = "in_progress" });
+                Update(new JsonObject { ["sessionUpdate"] = "tool_call_update", ["toolCallId"] = "t1", ["status"] = "completed" });
+                Update(new JsonObject
+                {
+                    ["sessionUpdate"] = "plan",
+                    ["entries"] = new JsonArray(
+                        new JsonObject { ["content"] = "Read config", ["priority"] = "high", ["status"] = "completed" },
+                        new JsonObject { ["content"] = "Edit config", ["priority"] = "medium", ["status"] = "in_progress" }),
+                });
+                Update(new JsonObject
+                {
+                    ["sessionUpdate"] = "plan",
+                    ["entries"] = new JsonArray(
+                        new JsonObject { ["content"] = "Edit config", ["priority"] = "medium", ["status"] = "completed" }),
+                });
+                Update(new JsonObject
+                {
+                    ["sessionUpdate"] = "tool_call",
+                    ["toolCallId"] = "t2",
+                    ["title"] = "Edit config",
+                    ["kind"] = "edit",
+                    ["content"] = new JsonArray(
+                        new JsonObject { ["type"] = "diff", ["path"] = "/work/config.json", ["oldText"] = "a\nb\n", ["newText"] = "a\nc\n" },
+                        new JsonObject { ["type"] = "hologram", ["depth"] = 3 },
+                        new JsonObject { ["type"] = "terminal", ["terminalId"] = "term-1" }),
+                });
+                Update(new JsonObject
+                {
+                    ["sessionUpdate"] = "tool_call_update",
+                    ["toolCallId"] = "t2",
+                    ["status"] = "failed",
+                    ["content"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "content",
+                        ["content"] = new JsonObject { ["type"] = "text", ["text"] = "disk full\nsecond line" },
+                    }),
+                });
+                Chunk("Done.");
+                Reply(id, new JsonObject { ["stopReason"] = "end_turn" });
+                return;
+            }
+
             default:
                 Chunk(text == "/mode" ? "mode: " + _mode : "echo: " + text);
                 Reply(id, new JsonObject { ["stopReason"] = "end_turn" });

@@ -5,6 +5,7 @@ using MandoCode.Acp.Client;
 using MandoCode.Acp.Protocol;
 using MandoCode.Models;
 using MandoCode.Plugins;
+using Spectre.Console.Rendering;
 
 namespace MandoCode.Services.Acp;
 
@@ -19,6 +20,9 @@ public interface IAcpTurnSink
 
     /// <summary>A finished block of the reply, to be rendered as markdown.</summary>
     void Reply(string markdown);
+
+    /// <summary>A rendered block for the transcript: a tool call line, a diff, the plan.</summary>
+    void Block(IRenderable block);
 
     void Notice(string text);
 
@@ -45,11 +49,14 @@ public sealed class AcpTurnDriver
 
     private readonly IAcpTurnSink _sink;
     private readonly AcpAgentConfig? _config;
+    private readonly AcpTranscriptAdapter? _transcript;
 
-    public AcpTurnDriver(IAcpTurnSink sink, AcpAgentConfig? config = null)
+    /// <param name="transcript">Renders tool calls, plans and diffs; without it they only show up as an activity line.</param>
+    public AcpTurnDriver(IAcpTurnSink sink, AcpAgentConfig? config = null, AcpTranscriptAdapter? transcript = null)
     {
         _sink = sink;
         _config = config;
+        _transcript = transcript;
     }
 
     public async Task<AcpTurnOutcome> RunAsync(IAcpAgentRuntime runtime, IReadOnlyList<ContentBlock> prompt, CancellationToken cancellation)
@@ -72,6 +79,7 @@ public sealed class AcpTurnDriver
             return new AcpTurnOutcome(null, ex.Message, "", RuntimeClosed: false);
         }
 
+        _transcript?.BeginTurn();
         var reply = new StringBuilder();
         var pending = new StringBuilder();
         string? activity = null;
@@ -82,6 +90,12 @@ public sealed class AcpTurnDriver
                 return;
             activity = label;
             _sink.Activity(label);
+        }
+
+        void FlushPlan()
+        {
+            if (_transcript?.TakePlan() is { } plan)
+                _sink.Block(plan);
         }
 
         void Settle()
@@ -114,14 +128,28 @@ public sealed class AcpTurnDriver
                         break;
 
                     case ToolCallBase call:
-                        // Tool calls are rendered by a later change; for now they only end the text block before them
-                        // and say what the agent is doing.
+                        // A tool call ends the text block before it.
                         if (call is ToolCall)
                         {
                             Settle();
                             SetActivity(string.IsNullOrWhiteSpace(call.Title) ? "Working…" : call.Title!);
                         }
 
+                        if (_transcript is not null)
+                        {
+                            var blocks = _transcript.Apply(call);
+                            if (blocks.Count > 0 && call is not ToolCall)
+                                Settle();
+                            foreach (var block in blocks)
+                                _sink.Block(block);
+                        }
+
+                        break;
+
+                    case Plan plan when _transcript is not null:
+                        _transcript.SetPlan(plan);
+                        if (_transcript.PlanSummary() is { } summary)
+                            SetActivity(summary);
                         break;
 
                     // Plans, mode and command announcements, user echoes and anything newer: not shown here.
@@ -167,10 +195,12 @@ public sealed class AcpTurnDriver
             await consume.ConfigureAwait(false);
             stopReason = await turn.Completion.ConfigureAwait(false);
             Settle();
+            FlushPlan();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Settle();
+            FlushPlan();
             error = AcpErrorMessages.ForTurn(ex, _config);
             runtimeClosed = ex is AcpConnectionClosedException or AcpProtocolViolationException;
             _sink.Error(error);

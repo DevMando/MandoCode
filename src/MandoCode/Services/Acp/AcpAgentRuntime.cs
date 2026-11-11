@@ -66,6 +66,7 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
     private readonly AcpAgentLauncher _launcher;
     private readonly Func<AcpLaunchPlan, Task<bool>> _confirm;
     private readonly string? _logDirectory;
+    private readonly IAcpClientHandler _handler;
     private readonly List<string> _warnings = [];
     private readonly object _gate = new();
 
@@ -80,8 +81,10 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         string workingDirectory,
         AcpAgentLauncher launcher,
         Func<AcpLaunchPlan, Task<bool>> confirm,
-        string? logDirectory = null)
+        string? logDirectory = null,
+        IAcpClientHandler? handler = null)
     {
+        _handler = handler ?? new DenyAllClientHandler();
         AgentName = agentName;
         _config = config;
         _workingDirectory = workingDirectory;
@@ -151,7 +154,7 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         try
         {
             var transport = AcpProcessTransport.Start(plan.Spec, plan.Resolved, stderr);
-            client = new AcpClient(transport, new DenyAllClientHandler(), new AcpClientOptions
+            client = new AcpClient(transport, _handler, new AcpClientOptions
             {
                 ClientName = "MandoCode",
                 ClientVersion = typeof(AcpAgentRuntime).Assembly.GetName().Version?.ToString(3) ?? "0",

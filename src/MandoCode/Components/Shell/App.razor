@@ -141,6 +141,7 @@
     }
     <ApprovalSelect Options="@_approvalMenuOptions"
                     OnSubmit="HandleApprovalMenuSubmit"
+                    OnCancel="HandleApprovalMenuCancel"
                     OnScroll="HandleApprovalPreviewScroll" />
 }
 
@@ -1547,6 +1548,12 @@
     private void HandleApprovalMenuSubmit(string value)
     {
         ApprovalMenu.Submit(value ?? string.Empty);
+    }
+
+    /// <summary>Escape in an approval menu: only menus that opted in (ACP permission requests) are dismissed.</summary>
+    private void HandleApprovalMenuCancel()
+    {
+        if (ApprovalMenu.CancelOnEscape) ApprovalMenu.Cancel();
     }
 
     /// <summary>

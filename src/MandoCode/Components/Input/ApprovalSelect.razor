@@ -43,6 +43,9 @@
     [Parameter] public IReadOnlyList<Option> Options { get; set; } = Array.Empty<Option>();
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
 
+    /// <summary>Escape. Only menus whose owner handles it get it; others ignore the key.</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
     /// <summary>Scroll keys for a preview shown above the menu. The menu keeps focus so the arrows
     /// still choose; PageUp/PageDown/Home/End arrive here as a <see cref="ScrollKey"/> instead.</summary>
     [Parameter] public EventCallback<ScrollKey> OnScroll { get; set; }
@@ -115,6 +118,12 @@
         if (AsScrollKey(e.Key) is { } scroll)
         {
             await OnScroll.InvokeAsync(scroll);
+            return;
+        }
+
+        if (e.Key.Equals("Escape", StringComparison.OrdinalIgnoreCase))
+        {
+            if (OnCancel.HasDelegate) await OnCancel.InvokeAsync();
             return;
         }
 

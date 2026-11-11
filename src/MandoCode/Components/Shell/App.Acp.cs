@@ -12,6 +12,7 @@ namespace MandoCode.Components;
 public partial class App
 {
     private IAcpAgentRuntime? _acp;
+    private AcpTranscriptAdapter? _acpTranscript;
     private CancellationTokenSource? _acpStartCts;
 
     private bool IsAcpPane => Pane?.Runtime == AgentRuntime.Acp;
@@ -81,7 +82,8 @@ public partial class App
                 Spinner.Stop();
                 try { return await ConfirmAcpLaunchAsync(plan); }
                 finally { Spinner.Start($"Starting {name}..."); }
-            });
+            },
+            handler: CreateAcpClientHandler());
         _acp = runtime;
         Pane.Services.GetRequiredService<AcpRuntimeHolder>().Runtime = runtime;
         runtime.Changed += OnAcpChanged;
@@ -98,6 +100,47 @@ public partial class App
             Spinner.Stop();
             TuiConsole.WriteLine();
             UpdateAcpHeader();
+        }
+    }
+
+    /// <summary>
+    /// What the agent can call back into. These run on connection threads, so each one enters this pane's transcript
+    /// first; the capabilities (fs, permissions) are advertised because the handlers exist.
+    /// </summary>
+    private AcpClientHandler CreateAcpClientHandler()
+    {
+        var session = Pane!.Session;
+        var root = ProjectRoot.ProjectRoot;
+        var renderer = (Pane.Services).GetRequiredService<OperationDisplayRenderer>();
+        var transcript = _acpTranscript = new AcpTranscriptAdapter(renderer.BuildRenderable, root);
+
+        var files = new AcpFileSystemHandler(root, change =>
+        {
+            using var output = TuiConsole.Enter(session);
+            if (transcript.FileChanged(change) is { } diff)
+                Print(diff);
+        });
+
+        var prompter = new AcpPermissionPrompter(
+            PromptGate, ApprovalMenu, () => KeyCoordinator.Suppress(),
+            line => { using var output = TuiConsole.Enter(session); TuiConsole.WriteLine(line); },
+            () => _acp?.CurrentMode,
+            pauseActivity: () =>
+            {
+                Spinner.Stop();
+                return new ResumeSpinner(this);
+            });
+
+        return new AcpClientHandler(prompter, files);
+    }
+
+    /// <summary>Brings the spinner back after a question, unless the request ended meanwhile.</summary>
+    private sealed class ResumeSpinner(App app) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (app._requestCts is { IsCancellationRequested: false })
+                app.Spinner.Start("Working...");
         }
     }
 
@@ -173,7 +216,7 @@ public partial class App
             }
 
             Spinner.Start("Thinking...");
-            var driver = new AcpTurnDriver(new PaneSink(this), AcpEntry);
+            var driver = new AcpTurnDriver(new PaneSink(this), AcpEntry, _acpTranscript);
             var outcome = await driver.RunAsync(_acp, AcpPromptBuilder.Build(input, ProjectRoot.ProjectRoot), token);
 
             _lastRequestError = outcome.Error;
@@ -212,6 +255,8 @@ public partial class App
             app.PrintReplyHeading();
             app.RenderMarkdownGuarded(markdown);
         }
+
+        public void Block(IRenderable block) => Print(block);
 
         public void Notice(string text) => Print(new Text(text, new Style(Color.Yellow)));
 

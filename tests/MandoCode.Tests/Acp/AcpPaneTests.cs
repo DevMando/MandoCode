@@ -101,6 +101,8 @@ public sealed class RecordingSink : IAcpTurnSink
     public void Preview(string? tail) => Add("preview:" + tail);
     public void Activity(string label) => Add("activity:" + label);
     public void Reply(string markdown) { lock (_gate) Replies.Add(markdown); Add("reply:" + markdown); }
+    public List<Spectre.Console.Rendering.IRenderable> Blocks { get; } = [];
+    public void Block(Spectre.Console.Rendering.IRenderable block) { lock (_gate) Blocks.Add(block); Add("block"); }
     public void Notice(string text) => Add("notice:" + text);
     public void Error(string text) => Add("error:" + text);
     public IEnumerable<string> Of(string kind) { lock (_gate) return Events.Where(e => e.StartsWith(kind + ":")).Select(e => e[(kind.Length + 1)..]).ToArray(); }
