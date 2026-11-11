@@ -4,6 +4,14 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- External agents over the Agent Client Protocol (ACP v1, stdio), phases 1–2 of the ACP client. `/agent-acp <name>` opens an agent (for example Claude Code through an ACP adapter) in its own pane; `/agent-acp list|status|restart|add|test|remove|enable|disable` manage the `acpAgents` entries of `~/.mandocode/config.json`, and `mandocode --acp-probe <name>` checks a connection. The protocol layer is the new `MandoCode.Acp` library (own thin implementation, no third-party ACP package).
+- Agents are started without a shell from a real executable (`.exe`/ELF; `.cmd`, `npx` and shells are refused), after confirming the full command; the confirmation is remembered per command hash and asked again when the entry changes. `acpAgents` is read only from the user config, and `ANTHROPIC_API_KEY` is not passed to the agent by default.
+- The ACP pane streams the reply, shows tool calls, plans and diffs, and relays the agent's permission questions as a menu (Escape cancels). It serves `fs/read_text_file` and `fs/write_text_file` inside the project folder, refusing symlinks and junctions that lead outside it, with atomic writes. Escape cancels a turn; an agent that ignores the cancel is shut down with its whole process tree.
+- Optional message trace for debugging an agent (`"trace": true` on the entry or `MANDOCODE_ACP_TRACE=1`): direction, method, id and size per message, never content.
+- `ApprovalSelectCoordinator.Cancel()` and an opt-in Escape for approval menus (native menus are unchanged).
+
 ### Changed
 
 - Group CLI components into feature folders for shell, workspaces, conversations, input, project browsing, sessions, settings, onboarding, and activity. Keep component namespaces and behavior unchanged, and document where new components belong.

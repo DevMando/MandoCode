@@ -7,6 +7,17 @@ Authentication is the agent's own business; MandoCode never handles agent tokens
 The protocol layer lives in `src/MandoCode.Acp` (no UI dependencies, no third-party ACP libraries).
 Schema: pinned to tag `v1.16.0`, vendored in `tests/MandoCode.Tests/Acp/schema/schema.v1.json`.
 
+## Quick start
+
+1. Install an ACP adapter yourself, at a pinned version, for example for Claude Code the adapter validated below. No `npx`.
+2. Add it (your own paths): `/agent-acp add claude node "C:\path\to\adapter\dist\index.js"`, or edit `acpAgents` in
+   `~/.mandocode/config.json`.
+3. Check it: `/agent-acp test claude` (or `mandocode --acp-probe claude`). You are asked to confirm the command first.
+4. Use it: `/agent-acp claude` opens a pane. Sign in to the agent with its own tooling beforehand (`claude auth login`).
+
+Status of this first version: phases 1–2 only. Not included: `terminal/*`, images, resuming sessions, handoff between
+panes, asking an ACP agent with `@`, a settings tab for agents. Open questions are marked **pending** below.
+
 ## Launch rules
 
 An agent command is code that runs with your permissions, so launching is deliberately strict:

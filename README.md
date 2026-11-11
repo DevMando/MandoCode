@@ -171,6 +171,7 @@ With **`/skills` (Alt+K)**, install skills from Git, ZIP files, or local folders
 | **Workspace** | Independent agents | Up to four agents per workspace, with separate models, conversations, settings, and approvals |
 | **Workspace** | Named workspaces | Organize projects and switch workspaces while background agents keep working |
 | **AI** | Agent collaboration | Tag agents with `@` to ask questions, request reviews, and hand off independent tasks |
+| **Agents** | External ACP agents | Run an Agent Client Protocol agent (for example Claude Code through an ACP adapter) in its own pane, with tool calls, diffs and permission prompts in the transcript. Opt-in; see [docs/acp.md](docs/acp.md) |
 | **Memory** | Context snapshots | Save a conversation summary and import it into another agent |
 | **Memory** | Agent history | Search, preview, and restore closed agents with their conversation context |
 | **Tools** | File Explorer and Git review | Browse files, attach references, change directories, and inspect project diffs |
@@ -254,6 +255,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/agent-new` | Open an independent agent pane (Alt+N) |
 | `/agent-focus` | Switch agents; optional left/right (Alt+Left/Right) |
 | `/agent-close` | Close the current idle agent |
+| `/agent-acp <name>` | Open an external ACP agent (such as Claude Code through an adapter) in a new pane; also `list`, `status`, `restart`, `add`, `test`, `remove`, `enable`, `disable` ([details](docs/acp.md)) |
 | `/agent-rename <name>` | Rename this agent |
 | `/agent-settings` | Edit this agent's model, behavior, and integrations (Alt+S) |
 | `/agent-file-explorer` | Browse this agent's files and folders (Alt+E) |
@@ -374,6 +376,7 @@ Skills use the same enable/disable convention as Desktop (`SKILL.md` / `SKILL.md
 ```bash
 mandocode --continue        # resume this folder's most recent conversation (alias: -c)
 mandocode --doctor          # preflight check: .NET runtime, Ollama status, models, sign-in
+mandocode --acp-probe <name>   # start a configured ACP agent, run initialize + session/new, report, exit
 mandocode --config show     # print current config
 mandocode --config init     # create a default config file
 mandocode --config set <key> <value>   # set a single value (e.g. set model qwen3:8b)
@@ -486,6 +489,26 @@ MandoCode validates model compatibility on startup. Run `/learn` for a detailed 
 
 <details>
 <summary><h2>Configuration Reference</h2></summary>
+
+### External agents (ACP)
+
+An optional `acpAgents` section in `~/.mandocode/config.json` (read only from that file, never from a project) lets
+`/agent-acp <name>` start an external agent over the [Agent Client Protocol](https://agentclientprotocol.com):
+
+```json
+"acpAgents": {
+  "claude": {
+    "command": "node",
+    "args": ["C:\\tools\\claude-agent-acp\\dist\\index.js"]
+  }
+}
+```
+
+The agent runs without a shell, from a real executable (`.exe`/ELF, never `.cmd`, `npx` or a shell), and MandoCode
+asks you to confirm the full command before the first start and again whenever it changes. Install the adapter yourself,
+at a pinned version; MandoCode never downloads anything. The agent signs in with its own tooling, and
+`ANTHROPIC_API_KEY` is not passed to it unless you opt in. See [docs/acp.md](docs/acp.md) for setup, trust, permissions,
+file access, the debug trace and what is not supported yet.
 
 ### Config File
 
