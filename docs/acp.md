@@ -5,7 +5,9 @@ MandoCode can run an external coding agent as a child process and talk to it ove
 Authentication is the agent's own business; MandoCode never handles agent tokens.
 
 The protocol layer lives in `src/MandoCode.Acp` (no UI dependencies, no third-party ACP libraries).
-Schema: pinned to tag `v1.16.0`, vendored in `tests/MandoCode.Tests/Acp/schema/schema.v1.json`.
+Schema: pinned to the release tag `v1.16.0` of `agentclientprotocol/agent-client-protocol` (checked to exist), vendored in
+`tests/MandoCode.Tests/Acp/schema/schema.v1.json`. The tag is the schema release; the protocol version is still 1
+(`protocolVersion: 1` in `initialize`).
 
 ## Quick start
 
@@ -13,10 +15,19 @@ Schema: pinned to tag `v1.16.0`, vendored in `tests/MandoCode.Tests/Acp/schema/s
 2. Add it (your own paths): `/agent-acp add claude node "C:\path\to\adapter\dist\index.js"`, or edit `acpAgents` in
    `~/.mandocode/config.json`.
 3. Check it: `/agent-acp test claude` (or `mandocode --acp-probe claude`). You are asked to confirm the command first.
-4. Use it: `/agent-acp claude` opens a pane. Sign in to the agent with its own tooling beforehand (`claude auth login`).
+4. Use it: `/agent-acp claude` switches the current pane to the agent (`--new-panel` opens it in a new pane instead).
+   Sign in to the agent with its own tooling beforehand (`claude auth login`). `/agent-acp stop` returns the pane to
+   MandoCode's own agent.
 
-Status of this first version: phases 1–2 only. Not included: `terminal/*`, images, resuming sessions, handoff between
-panes, asking an ACP agent with `@`, a settings tab for agents. Open questions are marked **pending** below.
+Status of this first version: phases 1–2, plus switching a pane in place (originally planned for a later phase, and
+without passing context: see "Deviations"). Not included: `terminal/*`, images, resuming sessions, handing a
+conversation between the native agent and an ACP agent, asking an ACP agent with `@`, a settings tab for agents.
+Open questions are marked **pending** below.
+
+**Security model in one paragraph.** MandoCode does not sandbox the agent. It decides what program runs (no shell,
+real executables only, confirmed by hash, configured only in the user's own config) and what environment it gets
+(no `ANTHROPIC_API_KEY` by default), and it relays the agent's permission questions; the agent applies the answers
+itself. Treat an ACP agent as a program with your user's rights.
 
 ## Launch rules
 
@@ -96,10 +107,25 @@ failure it prints the exit code and the stderr tail. Exit codes: `0` ok, `1` fai
 
 ## The ACP pane
 
-`/agent-acp <name>` opens a new pane (the other panes are unchanged; at most four panes exist). The pane does not
-touch Ollama, models or MCP: it runs the trust question, starts the agent, runs `initialize` and `session/new`, and
-then every message you type goes to the agent as a prompt. The agent lives in the pane's service scope, so closing the
-pane ends its whole process tree. `/agent-acp restart` (inside the pane) starts it again.
+`/agent-acp <name>` switches the current pane to the agent; `/agent-acp <name> --new-panel` opens it in a new pane
+instead (the other panes are unchanged; at most four panes exist, and a fifth is refused with a message). A pane that
+runs an ACP agent does not touch Ollama, models or MCP: it runs the trust question, starts the agent, runs `initialize`
+and `session/new`, and then every message you type goes to the agent as a prompt. The agent lives in the pane's service
+scope, so closing the pane ends its whole process tree. `/agent-acp restart` (inside the pane) starts it again.
+
+### Switching a pane
+
+- The switch happens only when the pane is idle (no request running, no plan or approval menu open); otherwise it is
+  refused with an explanation (Escape cancels a running request, or use `--new-panel`).
+- It is a fresh start. The pane's native session (conversation, model, MCP servers) stays alive underneath and is not
+  touched, and nothing is passed to the agent or back. A marker line in the transcript shows each switch.
+- `/agent-acp stop` ends the ACP session (the agent's process tree is killed) and gives the pane back to the native
+  agent; in a native pane it just says so. `/agent-acp <other>` inside an ACP pane closes the current agent first.
+- ACP turns are never saved to the agent history, so `/history` cannot restore one as a native agent; the native
+  conversation of a switched pane is still archived as usual. The header, the command list (native-only commands are
+  hidden) and the input loop follow the pane's current mode.
+- A pane opened with `--new-panel` has never started its native side; `/agent-acp stop` starts it then (connection
+  check, model validation, MCP), exactly as a new pane would.
 
 - Header: `ACP · <adapter name and version> · mode: <current mode> · <project folder>` (the pane name is added when
   there is more than one pane).
@@ -155,9 +181,13 @@ The ACP pane advertises `fs.readTextFile` and `fs.writeTextFile` and answers the
 - writes are atomic (temp file + replace), directories are created only inside the folder, and the change is shown as a diff.
 
 The check and the use are separate steps, so a link swapped in between by another process is not covered.
-Whether the real Claude Code adapter calls `fs/*` at all, or edits files itself, is **pending**: it has not been
-observed (the validation above ran without a handler). Turn the trace on (below) to find out. If it does not, its edits arrive only as tool calls with `diff`
-content, which are rendered the same way.
+
+**Observed with `@agentclientprotocol/claude-agent-acp` 0.103.0** (message trace, 2026-11-11; scenarios: create a
+file, read the README, mode `default`): the adapter does **not** call `fs/read_text_file`, `fs/write_text_file` or
+`terminal/*`. It changes files itself, so this guard does not apply to the agent's own writes: what protects the
+project is the `default` mode and the permission questions, not the project-folder boundary. The handlers stay for
+agents that do call `fs/*`; `initialize` advertises them (218 bytes with them, 220 without, as in the trace). Other
+scenarios (for example other modes) were not checked.
 
 ### Session mode
 
@@ -253,9 +283,15 @@ Decisions
 - Agents are started without a shell (no cmd/npx), with a resolved
   absolute path; the launch is confirmed through the trust dialog.
 
+Observed in later manual runs (adapter 0.103.0, 2026-11-11)
+- Methods seen in the trace: initialize, session/new, session/set_mode, session/prompt, session/update,
+  session/request_permission, and the extension notification `_auth/status_update`. No fs/*, no terminal/*.
+- `_auth/status_update` is a vendor extension (method starts with `_`). It is ignored. Its content is only an
+  observation, with no commitment to its format: `MANDOCODE_ACP_DEBUG_EXT=1` shows it in the terminal for a look (it may
+  carry account details, so it is never written to a log or to the trace).
+- Permission questions, diffs, refusal, cancel, closing the pane and the repeat-stability script were checked by hand.
+
 Pending / unverified
-- Whether the adapter uses the client's fs/read_text_file and
-  fs/write_text_file or accesses files itself (needs a real prompt).
 - The exact error returned when Claude Code is not signed in.
 - stopReason values observed on cancel.
 - Whether usage through the adapter counts against the Claude
@@ -269,3 +305,11 @@ Deviations from the plan
   resolver and trust check as /agent-acp test.
 - session/set_mode is called after session/new (see "Session mode").
 - enable/disable are implemented although the first plan deferred them.
+- Switching the current pane to an ACP agent was planned for a later phase (with handoff of context); it is here,
+  as a "start fresh" switch without passing any context in either direction.
+- `/agent-acp status`, the message trace and the extension dump are extras for debugging an agent.
+
+Known limitations
+- Markdown links in an agent's reply are shown as raw text (the transcript renderer does not turn them into links).
+- Images are not sent; `terminal/*` is not offered; sessions are not resumed (`loadSession` is not used).
+- Agent-initiated file changes are not confined to the project folder (see "File access").

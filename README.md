@@ -255,7 +255,7 @@ Type `/` to see the autocomplete dropdown, or `!` to run a shell command.
 | `/agent-new` | Open an independent agent pane (Alt+N) |
 | `/agent-focus` | Switch agents; optional left/right (Alt+Left/Right) |
 | `/agent-close` | Close the current idle agent |
-| `/agent-acp <name>` | Open an external ACP agent (such as Claude Code through an adapter) in a new pane; also `list`, `status`, `restart`, `add`, `test`, `remove`, `enable`, `disable` ([details](docs/acp.md)) |
+| `/agent-acp <name>` | Switch this pane to an external ACP agent (such as Claude Code through an adapter); `--new-panel` opens it in a new pane. Also `stop`, `list`, `status`, `restart`, `add`, `test`, `remove`, `enable`, `disable` ([details](docs/acp.md)) |
 | `/agent-rename <name>` | Rename this agent |
 | `/agent-settings` | Edit this agent's model, behavior, and integrations (Alt+S) |
 | `/agent-file-explorer` | Browse this agent's files and folders (Alt+E) |
@@ -493,7 +493,7 @@ MandoCode validates model compatibility on startup. Run `/learn` for a detailed 
 ### External agents (ACP)
 
 An optional `acpAgents` section in `~/.mandocode/config.json` (read only from that file, never from a project) lets
-`/agent-acp <name>` start an external agent over the [Agent Client Protocol](https://agentclientprotocol.com):
+`/agent-acp <name>` run an external agent over the [Agent Client Protocol](https://agentclientprotocol.com):
 
 ```json
 "acpAgents": {
@@ -508,7 +508,8 @@ The agent runs without a shell, from a real executable (`.exe`/ELF, never `.cmd`
 asks you to confirm the full command before the first start and again whenever it changes. Install the adapter yourself,
 at a pinned version; MandoCode never downloads anything. The agent signs in with its own tooling, and
 `ANTHROPIC_API_KEY` is not passed to it unless you opt in. See [docs/acp.md](docs/acp.md) for setup, trust, permissions,
-file access, the debug trace and what is not supported yet.
+file access, the debug trace and what is not supported yet. MandoCode does not sandbox the agent: permission
+questions are relayed, and the agent applies the answers itself.
 
 ### Config File
 
