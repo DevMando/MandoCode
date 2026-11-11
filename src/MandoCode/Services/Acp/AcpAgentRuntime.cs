@@ -67,10 +67,13 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
     private readonly Func<AcpLaunchPlan, Task<bool>> _confirm;
     private readonly string? _logDirectory;
     private readonly IAcpClientHandler _handler;
+    private readonly Action<string, string>? _extensionDump;
     private readonly List<string> _warnings = [];
     private readonly object _gate = new();
 
     private AcpClient? _client;
+    private StderrLog? _stderrLog;
+    private StderrLog? _traceLog;
     private AcpSession? _session;
     private AcpRuntimeStatus _status;
     private string? _title;
@@ -82,8 +85,10 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         AcpAgentLauncher launcher,
         Func<AcpLaunchPlan, Task<bool>> confirm,
         string? logDirectory = null,
-        IAcpClientHandler? handler = null)
+        IAcpClientHandler? handler = null,
+        Action<string, string>? extensionDump = null)
     {
+        _extensionDump = extensionDump;
         _handler = handler ?? new DenyAllClientHandler();
         AgentName = agentName;
         _config = config;
@@ -152,6 +157,8 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         var stderr = new StderrLog(filePath: AcpLogPaths.For(AgentName, _logDirectory));
         // The file is only created by the first traced message, so an agent that sends nothing leaves no empty log.
         var trace = AcpLogPaths.TraceEnabled(_config) ? new StderrLog(filePath: AcpLogPaths.TraceFor(AgentName, _logDirectory)) : null;
+        _stderrLog = stderr;
+        _traceLog = trace;
         AcpClient? client = null;
         try
         {
@@ -162,6 +169,13 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
                 ClientVersion = typeof(AcpAgentRuntime).Assembly.GetName().Version?.ToString(3) ?? "0",
                 StartupTimeout = TimeSpan.FromSeconds(_config.StartupTimeoutSeconds),
                 Trace = trace is null ? null : entry => trace.Append(entry.ToString()),
+                ExtensionNotification = _extensionDump is not null && AcpLogPaths.ExtensionDumpEnabled()
+                    ? (method, parameters) =>
+                    {
+                        var text = parameters?.ToString() ?? "";
+                        _extensionDump(method, text.Length > 4000 ? text[..4000] + "…" : text);
+                    }
+                    : null,
             });
             _ = client.Completion.ContinueWith(_ =>
             {
@@ -294,6 +308,9 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
 
         _session = null;
         await DisposeQuietlyAsync(client).ConfigureAwait(false);
+        // The agent is gone, so nothing writes to its log files any more; release them.
+        _stderrLog?.Close();
+        _traceLog?.Close();
         Changed?.Invoke();
     }
 }

@@ -83,7 +83,13 @@ public partial class App
                 try { return await ConfirmAcpLaunchAsync(plan); }
                 finally { Spinner.Start($"Starting {name}..."); }
             },
-            handler: CreateAcpClientHandler());
+            handler: CreateAcpClientHandler(),
+            extensionDump: (method, content) =>
+            {
+                // Debug only (MANDOCODE_ACP_DEBUG_EXT): on screen, never in a file.
+                using var output = TuiConsole.Enter(Pane!.Session);
+                Print(new Text($"[acp extension] {method}: {content}", new Style(Color.Grey)));
+            });
         _acp = runtime;
         Pane.Services.GetRequiredService<AcpRuntimeHolder>().Runtime = runtime;
         runtime.Changed += OnAcpChanged;

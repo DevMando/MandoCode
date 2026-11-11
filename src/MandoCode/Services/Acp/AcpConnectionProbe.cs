@@ -194,6 +194,17 @@ public static class AcpLogPaths
 {
     public const string TraceEnvironmentVariable = "MANDOCODE_ACP_TRACE";
 
+    /// <summary>
+    /// Shows the content of vendor extension notifications (such as <c>_auth/status_update</c>) in the terminal, to learn
+    /// what an agent sends. They can carry account details, so this is a separate switch, is never written to a log
+    /// or to the trace, and is off unless set.
+    /// </summary>
+    public const string ExtensionDumpEnvironmentVariable = "MANDOCODE_ACP_DEBUG_EXT";
+
+    public static bool ExtensionDumpEnabled() =>
+        Environment.GetEnvironmentVariable(ExtensionDumpEnvironmentVariable) is { Length: > 0 } value
+        && !value.Equals("0", StringComparison.Ordinal) && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+
     public static bool TraceEnabled(AcpAgentConfig config) =>
         config.Trace || Environment.GetEnvironmentVariable(TraceEnvironmentVariable) is { Length: > 0 } value
                         && !value.Equals("0", StringComparison.Ordinal) && !value.Equals("false", StringComparison.OrdinalIgnoreCase);

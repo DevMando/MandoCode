@@ -739,6 +739,75 @@ public class AcpToolsAndPermissionsTests : IDisposable
         Assert.Equal([("c1", true), ("c1", false), ("c1", false)], decisions);
     }
 
+    // ───────── initialize and extension notifications ─────────
+
+    [Fact]
+    public void Initialize_AdvertisesFsExactlyWhenTheFsHandlerIsConnected()
+    {
+        static string Initialize(AcpClientHandler handler) => System.Text.Json.JsonSerializer.Serialize(
+            new InitializeRequest
+            {
+                ProtocolVersion = AcpProtocol.Version,
+                ClientCapabilities = handler.Capabilities,
+                ClientInfo = new Implementation { Name = "MandoCode", Version = "0.16.1" },
+            },
+            AcpJsonContext.Default.InitializeRequest);
+
+        var with = Initialize(new AcpClientHandler(null, new AcpFileSystemHandler(_work)));
+        var without = Initialize(new AcpClientHandler(null, null));
+
+        Assert.Contains("\"fs\":{\"readTextFile\":true,\"writeTextFile\":true}", with);
+        Assert.Contains("\"terminal\":false", with);
+        Assert.Contains("\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}", without);
+        // The same request in a JSON-RPC envelope is the 218 bytes seen in the trace of a real session.
+        var envelope = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":" + with + "}";
+        Assert.Equal(218, System.Text.Encoding.UTF8.GetByteCount(envelope));
+    }
+
+    private async Task<List<(string Method, string Content)>> RunWithExtensionNotification(string? debugFlag, bool trace)
+    {
+        var before = Environment.GetEnvironmentVariable(AcpLogPaths.ExtensionDumpEnvironmentVariable);
+        Environment.SetEnvironmentVariable(AcpLogPaths.ExtensionDumpEnvironmentVariable, debugFlag);
+        try
+        {
+            var dumped = new List<(string, string)>();
+            var config = new AcpAgentConfig { Command = _host, Args = [MockDll, "ext-notification"], StartupTimeoutSeconds = 20, Trace = trace };
+            var runtime = new AcpAgentRuntime("mock", config, _work, new AcpAgentLauncher(new InMemoryTrustStore()),
+                _ => Task.FromResult(true), Path.Combine(_work, "logs"), extensionDump: (m, c) => { lock (dumped) dumped.Add((m, c)); });
+            _cleanup.Add(runtime);
+            await runtime.ConnectAsync(CancellationToken.None).Within(40);
+
+            Assert.Equal("after extension", await ReplyAsync(runtime, "go").Within(20));
+            await runtime.DisposeAsync();
+            lock (dumped) return dumped.ToList();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AcpLogPaths.ExtensionDumpEnvironmentVariable, before);
+        }
+    }
+
+    [Fact]
+    public async Task AnExtensionNotification_IsIgnoredByDefault_AndTheTurnStillWorks()
+    {
+        Assert.Empty(await RunWithExtensionNotification(debugFlag: null, trace: false));
+    }
+
+    [Fact]
+    public async Task WithTheDebugFlag_TheExtensionContentIsHandedToTheTerminalHook_ButNeverToTheTrace()
+    {
+        var dumped = await RunWithExtensionNotification(debugFlag: "1", trace: true);
+
+        var (method, content) = Assert.Single(dumped);
+        Assert.Equal("_auth/status_update", method);
+        Assert.Contains("someone@example.com", content);
+        var trace = string.Join('\n', TraceLines());
+        Assert.Contains("<- notification _auth/status_update", trace);
+        Assert.DoesNotContain("someone@example.com", trace);
+        foreach (var file in Directory.GetFiles(_work, "*", SearchOption.AllDirectories))
+            Assert.DoesNotContain("someone@example.com", File.ReadAllText(file));
+    }
+
     // ───────── trace ─────────
 
     private string[] TraceLines()

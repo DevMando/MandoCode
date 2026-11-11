@@ -298,6 +298,17 @@ internal sealed class MockAgent
                 return;
             }
 
+            case "ext-notification":
+                Write(new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["method"] = "_auth/status_update",
+                    ["params"] = new JsonObject { ["account"] = "someone@example.com", ["state"] = "signed-in" },
+                });
+                Chunk("after extension");
+                Reply(id, new JsonObject { ["stopReason"] = "end_turn" });
+                return;
+
             case "tools-plan-diff":
             {
                 Chunk("Looking at the file.");

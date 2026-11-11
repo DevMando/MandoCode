@@ -21,6 +21,9 @@ public sealed class AcpClientOptions
 
     /// <summary>Optional message trace (direction, method, id, size; never content). Off when null.</summary>
     public Action<AcpTraceEntry>? Trace { get; init; }
+
+    /// <summary>Optional look at vendor extension notifications (method starts with <c>_</c>), which are otherwise ignored.</summary>
+    public Action<string, System.Text.Json.JsonElement?>? ExtensionNotification { get; init; }
 }
 
 /// <summary>
@@ -51,6 +54,9 @@ public sealed class AcpClient : IAsyncDisposable
             DescribeClose = transport.DescribeCloseAsync,
             Diagnostics = _options.Diagnostics,
             Trace = _options.Trace,
+            UnhandledNotification = _options.ExtensionNotification is { } extension
+                ? (method, parameters) => { if (method.StartsWith('_')) extension(method, parameters); }
+                : null,
         });
 
         RegisterHandlers();

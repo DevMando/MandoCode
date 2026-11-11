@@ -29,6 +29,13 @@ public sealed class JsonRpcConnectionOptions
     /// Null (the default) means no tracing and no extra parsing.
     /// </summary>
     public Action<AcpTraceEntry>? Trace { get; init; }
+
+    /// <summary>
+    /// Called for a notification nobody handles (agents send vendor extensions such as <c>_auth/status_update</c>).
+    /// It is still ignored by the protocol layer; this only lets a host look at it while debugging. Runs on the read
+    /// loop, so it must be quick and must not throw.
+    /// </summary>
+    public Action<string, JsonElement?>? UnhandledNotification { get; init; }
 }
 
 /// <summary>What a traced message looked like from the outside; deliberately without any of its content.</summary>
@@ -617,6 +624,8 @@ public sealed class JsonRpcConnection : IAsyncDisposable
         if (!_notificationHandlers.TryGetValue(method, out var handler))
         {
             Diagnose($"Ignored notification '{method}' (no handler).");
+            try { _options.UnhandledNotification?.Invoke(method, parameters); }
+            catch (Exception) { /* a debugging hook never disturbs the connection */ }
             return;
         }
 
