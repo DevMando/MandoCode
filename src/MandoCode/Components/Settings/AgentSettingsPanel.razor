@@ -230,9 +230,9 @@
   if (Pane is not null && !Pane.Active) return;
   if (_custom)
   {
-   if (_focusCustom && _customInput is not null) { _focusCustom = false; await _customInput.FocusPromptAsync(); }
+   if (_focusCustom && _customInput is not null) { _focusCustom = false; await DeferredFocus.AfterRenderBatch(); await _customInput.FocusPromptAsync(); }
   }
-  else if (!Focus.IsFocused(_focusKey)) await FocusPanel();
+  else if (!Focus.IsFocused(_focusKey)) { await DeferredFocus.AfterRenderBatch(); await FocusPanel(); }
  }
  private async Task FocusPanel()
  {

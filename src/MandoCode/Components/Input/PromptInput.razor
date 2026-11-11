@@ -263,7 +263,7 @@
         if ((Pane is null || Pane.Active) && (firstRender || _focusPicker))
         {
             _focusPicker = false;
-            await Focus.FocusAsync(_hook);
+            await Focus.FocusDeferredAsync(_hook);
         }
     }
 

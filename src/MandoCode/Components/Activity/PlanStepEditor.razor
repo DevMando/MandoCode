@@ -50,7 +50,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (Pane is not null) Pane.FocusKey = _hook;
-        if (firstRender && (Pane is null || Pane.Active)) await Focus.FocusAsync(_hook);
+        if (firstRender && (Pane is null || Pane.Active)) await Focus.FocusDeferredAsync(_hook);
     }
 
     private void HandleChanged() => StateHasChanged();
