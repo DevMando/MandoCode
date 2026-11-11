@@ -213,9 +213,22 @@ public partial class App
 
         if (firstRender && !_connectionChecked)
         {
-            if (IsAcpPane) await InitializeAcpAsync();
-            else await InitializeConnectionAsync();
-            _startupComplete = true;
+            // An ACP pane connects in the background, so this returns at once and the prompt mounts at once.
+            // The finally keeps an unexpected startup exception from leaving a pane that never takes input.
+            if (IsAcpPane)
+            {
+                try { await InitializeAcpAsync(); }
+                finally
+                {
+                    _connectionChecked = true;
+                    _startupComplete = true;
+                }
+            }
+            else
+            {
+                await InitializeConnectionAsync();
+                _startupComplete = true;
+            }
         }
 
         // Connection status becomes available before model validation and MCP finish.

@@ -39,7 +39,10 @@ public sealed class FakeRuntime : IAcpAgentRuntime
     /// <summary>When set, cancelling also ends the turn with this stop reason.</summary>
     public string? StopOnCancel { get; set; } = StopReasons.Cancelled;
 
-    public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    /// <summary>What ConnectAsync does; null connects at once.</summary>
+    public Func<CancellationToken, Task>? OnConnect { get; set; }
+
+    public Task ConnectAsync(CancellationToken cancellationToken) => OnConnect?.Invoke(cancellationToken) ?? Task.CompletedTask;
 
     public IAcpTurn Prompt(IReadOnlyList<ContentBlock> prompt)
     {
@@ -617,6 +620,72 @@ public class AcpAgentRuntimeTests : IDisposable
     }
 }
 
+public class AcpPaneStartupTests
+{
+    private sealed class Sink : IAcpStartupSink
+    {
+        public List<string> Events { get; } = [];
+        public void Connecting(string agentName) => Events.Add("connecting:" + agentName);
+        public void Connected(string description, IReadOnlyList<string> warnings) => Events.Add("connected:" + description + (warnings.Count > 0 ? " warnings=" + warnings.Count : ""));
+        public void Failed(string message) => Events.Add("failed:" + message);
+    }
+
+    [Fact]
+    public async Task TheStatusIsAnnounced_BeforeTheConnectionFinishes()
+    {
+        var gate = new TaskCompletionSource();
+        var runtime = new FakeRuntime { OnConnect = _ => gate.Task };
+        var sink = new Sink();
+
+        var run = AcpPaneStartup.RunAsync(runtime, sink, CancellationToken.None);
+
+        Assert.False(run.IsCompleted);
+        Assert.Equal(["connecting:fake"], sink.Events);
+
+        gate.SetResult();
+        Assert.True(await run.Within());
+        Assert.Equal(["connecting:fake", "connected:fake-adapter 1.2.3 (mode: default)"], sink.Events);
+    }
+
+    [Fact]
+    public async Task ARuntimeError_IsShown_AndTheStartupDoesNotThrow()
+    {
+        var runtime = new FakeRuntime { OnConnect = _ => throw new AcpRuntimeException("Cannot start ACP agent 'x'.") };
+        var sink = new Sink();
+
+        Assert.False(await AcpPaneStartup.RunAsync(runtime, sink, CancellationToken.None).Within());
+
+        Assert.Equal(["connecting:fake", "failed:Cannot start ACP agent 'x'."], sink.Events);
+    }
+
+    [Fact]
+    public async Task AnUnexpectedException_AlsoEndsAsAMessage_WithTheRestartHint()
+    {
+        var runtime = new FakeRuntime { OnConnect = _ => throw new IOException("trust file is locked") };
+        var sink = new Sink();
+
+        Assert.False(await AcpPaneStartup.RunAsync(runtime, sink, CancellationToken.None).Within());
+
+        var failure = Assert.Single(sink.Events, e => e.StartsWith("failed:"));
+        Assert.Contains("trust file is locked", failure);
+        Assert.Contains("/agent-acp restart", failure);
+    }
+
+    [Fact]
+    public async Task ClosingThePaneWhileConnecting_EndsQuietly()
+    {
+        using var cts = new CancellationTokenSource();
+        var runtime = new FakeRuntime { OnConnect = token => Task.Delay(Timeout.Infinite, token) };
+        var sink = new Sink();
+
+        var run = AcpPaneStartup.RunAsync(runtime, sink, cts.Token);
+        cts.Cancel();
+
+        Assert.False(await run.Within());
+        Assert.Equal(["connecting:fake"], sink.Events);
+    }
+}
+
 [Collection("TUI console routing")]
 public class AcpPaneWorkspaceTests
 {
@@ -654,6 +723,25 @@ public class AcpPaneWorkspaceTests
         Assert.Equal("claude", first.Name);
         Assert.Equal("claude 2", second.Name);
         Assert.Equal("ACP · claude", first.Model);
+    }
+
+    [Fact]
+    public async Task FocusCanGoBackToTheOtherPane_AfterAnAcpPaneOpens()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var native = workspace.Add();
+        var acp = workspace.Add(acpAgent: "claude");
+
+        Assert.True(acp.Selected);
+        Assert.False(native.Selected);
+
+        workspace.Focus(native);
+        Assert.True(native.Selected);
+        Assert.False(acp.Selected);
+
+        workspace.Move(1);
+        Assert.True(acp.Selected);
     }
 
     [Fact]
