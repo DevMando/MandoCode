@@ -117,6 +117,13 @@ pane ends its whole process tree. `/agent-acp restart` (inside the pane) starts 
   shown once even if the agent reports it both ways.
 - Unknown update kinds and content types are ignored.
 
+### Writes that are not decided yet
+
+A call that changes things (edit, delete, move, execute) shows `Awaiting permission…` while it is `pending` and
+`Writing…` / `Running…` while it is `in_progress`. The proposed diff is shown only when the call completes; a call that
+fails, or that you refuse, never shows a write. A refusal is shown at once as `permission denied`. The detail after
+`failed:` is the first real line of the agent's message (code fences around it are dropped); with none, only `failed`.
+
 ### Permissions
 
 `session/request_permission` opens a menu with the agent's options exactly as it sent them (allow options green, reject
@@ -138,7 +145,7 @@ The ACP pane advertises `fs.readTextFile` and `fs.writeTextFile` and answers the
 
 The check and the use are separate steps, so a link swapped in between by another process is not covered.
 Whether the real Claude Code adapter calls `fs/*` at all, or edits files itself, is **pending**: it has not been
-observed (the validation above ran without a handler). If it does not, its edits arrive only as tool calls with `diff`
+observed (the validation above ran without a handler). Turn the trace on (below) to find out. If it does not, its edits arrive only as tool calls with `diff`
 content, which are rendered the same way.
 
 ### Session mode
@@ -168,6 +175,22 @@ for a missing login has not been observed. JSON-RPC `-32000` is treated as an au
 `session/new` or `session/prompt` whose text reads like authentication (auth, login, sign in, credentials, API key,
 401, ...) is shown with the sign-in hint worded as a possibility ("This looks like a sign-in problem"). Stderr of every
 agent goes to `~/.mandocode/logs/acp/<agent>-<date>.log` (rotated), never to the console.
+
+## Debugging: message trace and status
+
+`/agent-acp status [name]` lists each agent with its stderr log and trace log paths (and whether they exist yet).
+
+To see what a real agent calls (for example whether it uses `fs/read_text_file` / `fs/write_text_file`), set
+`"trace": true` on the agent entry in `~/.mandocode/config.json`, or set `MANDOCODE_ACP_TRACE=1` for all agents, and
+restart the agent. One line per message goes to `~/.mandocode/logs/acp/<agent>-<date>.trace.log`:
+
+```
+2026-11-11T10:00:00.123Z <- request fs/read_text_file id=7 bytes=161
+2026-11-11T10:00:00.130Z -> response fs/read_text_file id=7 bytes=420
+```
+
+Only direction, kind, method, id, time and size are written, never paths, prompts, file contents or any other content.
+The trace is off by default, is not part of the trust hash, and the file is created by the first traced message.
 
 ## API notes
 

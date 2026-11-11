@@ -23,6 +23,22 @@ public sealed class JsonRpcConnectionOptions
 
     /// <summary>Diagnostics sink (ignored frames, handler failures). Never write this to the console.</summary>
     public Action<string>? Diagnostics { get; init; }
+
+    /// <summary>
+    /// Receives one entry per message in either direction: direction, kind, method, id, size. Never the content.
+    /// Null (the default) means no tracing and no extra parsing.
+    /// </summary>
+    public Action<AcpTraceEntry>? Trace { get; init; }
+}
+
+/// <summary>What a traced message looked like from the outside; deliberately without any of its content.</summary>
+/// <param name="Outgoing">True for client → agent.</param>
+/// <param name="Kind"><c>request</c>, <c>notification</c>, <c>response</c> or <c>error</c>.</param>
+/// <param name="Method">The method; for a response, the method of the request it answers (when known).</param>
+public readonly record struct AcpTraceEntry(DateTimeOffset Time, bool Outgoing, string Kind, string? Method, string? Id, int Bytes)
+{
+    public override string ToString() =>
+        $"{Time:yyyy-MM-ddTHH:mm:ss.fffZ} {(Outgoing ? "->" : "<-")} {Kind} {Method ?? "?"} id={Id ?? "-"} bytes={Bytes}";
 }
 
 /// <summary>
@@ -66,6 +82,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     private int _terminated;
     private Exception? _closeReason;
     private int _consecutiveParseErrors;
+    private readonly ConcurrentDictionary<string, string> _traceMethods = new(StringComparer.Ordinal);
 
     private readonly record struct NotificationWork(Func<JsonElement?, ValueTask>? Handler, JsonElement? Parameters, TaskCompletionSource? Marker);
 
@@ -259,6 +276,42 @@ public sealed class JsonRpcConnection : IAsyncDisposable
 
         if (!_outbound.Writer.TryWrite(line))
             throw ClosedException();
+
+        if (_options.Trace is not null)
+            TraceMessage(outgoing: true, line.AsMemory(0, line.Length - 1));
+    }
+
+    /// <summary>Records direction, kind, method, id and size of one message. Reads only those members, never the content.</summary>
+    private void TraceMessage(bool outgoing, ReadOnlyMemory<byte> message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            var root = document.RootElement;
+            string? id = root.TryGetProperty("id", out var idElement) && JsonRpcId.TryRead(idElement, out var parsed) ? parsed.ToString() : null;
+            var method = root.TryGetProperty("method", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+
+            string kind;
+            if (method is not null)
+            {
+                kind = id is null ? "notification" : "request";
+                // A response travels the other way and carries no method, so remember whose request it will answer.
+                if (id is not null)
+                    _traceMethods[(outgoing ? "o" : "i") + id] = method;
+            }
+            else
+            {
+                kind = root.TryGetProperty("error", out _) ? "error" : "response";
+                if (id is not null)
+                    _traceMethods.TryRemove((outgoing ? "i" : "o") + id, out method);
+            }
+
+            _options.Trace!(new AcpTraceEntry(DateTimeOffset.UtcNow, outgoing, kind, method, id, message.Length));
+        }
+        catch (Exception)
+        {
+            // Tracing must never disturb the connection.
+        }
     }
 
     private async Task WriteLoopAsync()
@@ -388,6 +441,8 @@ public sealed class JsonRpcConnection : IAsyncDisposable
             }
 
             _consecutiveParseErrors = 0;
+            if (_options.Trace is not null)
+                TraceMessage(outgoing: false, line);
             Dispatch(root);
         }
     }

@@ -33,11 +33,11 @@ public interface IAcpPaneHost
 public sealed class AcpAgentCommands
 {
     public const string Usage =
-        "Usage: /agent-acp [list] | <name> | restart | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+        "Usage: /agent-acp [list] | <name> | restart | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
 
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {
-        "list", "add", "test", "remove", "enable", "disable", "restart",
+        "list", "status", "add", "test", "remove", "enable", "disable", "restart",
     };
 
     private readonly IAcpAgentCatalog _catalog;
@@ -75,6 +75,9 @@ public sealed class AcpAgentCommands
         var rest = tokens.Skip(1).ToList();
         switch (verb)
         {
+            case "status":
+                Status(rest, output, error);
+                break;
             case "add":
                 Add(rest, output, error);
                 break;
@@ -149,6 +152,54 @@ public sealed class AcpAgentCommands
             output.WriteLine($"{name}  [{state}, {trust}]  {agent.Command} {string.Join(' ', agent.Args.Select(Quote))}".TrimEnd());
         }
     }
+
+    private void Status(List<string> tokens, TextWriter output, TextWriter error)
+    {
+        if (tokens.Count > 1)
+        {
+            error.WriteLine("Usage: /agent-acp status [name]");
+            return;
+        }
+
+        var agents = _catalog.Agents.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase).ToList();
+        if (tokens.Count == 1)
+        {
+            agents = agents.Where(kv => kv.Key.Equals(tokens[0], StringComparison.OrdinalIgnoreCase)).ToList();
+            if (agents.Count == 0)
+            {
+                error.WriteLine($"No ACP agent named '{tokens[0]}'.");
+                return;
+            }
+        }
+
+        if (agents.Count == 0)
+        {
+            output.WriteLine("No ACP agents are configured.");
+            return;
+        }
+
+        foreach (var (name, agent) in agents)
+        {
+            var trust = "not trusted yet";
+            try
+            {
+                trust = _launcher.IsTrusted(_launcher.Prepare(name, agent, Environment.CurrentDirectory)) ? "trusted" : "not trusted yet";
+            }
+            catch (AcpLaunchException)
+            {
+                trust = "command refused";
+            }
+
+            output.WriteLine($"{name}  [{(agent.Disabled ? "disabled" : "enabled")}, {trust}]");
+            output.WriteLine($"  stderr log: {Describe(AcpLogPaths.For(name, _logDirectory))}");
+            output.WriteLine(AcpLogPaths.TraceEnabled(agent)
+                ? $"  trace: on, {Describe(AcpLogPaths.TraceFor(name, _logDirectory))}"
+                : $"  trace: off (set \"trace\": true on the entry, or {AcpLogPaths.TraceEnvironmentVariable}=1; the trace has no message content)");
+        }
+    }
+
+    private static string Describe(string path) =>
+        File.Exists(path) ? $"{path} ({new FileInfo(path).Length} bytes)" : $"{path} (not created yet)";
 
     private void Add(List<string> tokens, TextWriter output, TextWriter error)
     {

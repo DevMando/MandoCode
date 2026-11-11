@@ -192,6 +192,19 @@ public static class AcpConnectionProbe
 /// <summary>Where agent stderr is kept: <c>~/.mandocode/logs/acp/&lt;agent&gt;-&lt;date&gt;.log</c> (rotated by <see cref="StderrLog"/>).</summary>
 public static class AcpLogPaths
 {
+    public const string TraceEnvironmentVariable = "MANDOCODE_ACP_TRACE";
+
+    public static bool TraceEnabled(AcpAgentConfig config) =>
+        config.Trace || Environment.GetEnvironmentVariable(TraceEnvironmentVariable) is { Length: > 0 } value
+                        && !value.Equals("0", StringComparison.Ordinal) && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The trace file; created only when something is traced.</summary>
+    public static string TraceFor(string agentName, string? directory = null)
+    {
+        var stderr = For(agentName, directory);
+        return stderr[..^".log".Length] + ".trace.log";
+    }
+
     public static string DefaultDirectory() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mandocode", "logs", "acp");
 

@@ -129,6 +129,12 @@ public partial class App
             {
                 Spinner.Stop();
                 return new ResumeSpinner(this);
+            },
+            decided: (toolCallId, allowed) =>
+            {
+                using var output = TuiConsole.Enter(session);
+                if (transcript.NotePermission(toolCallId, allowed) is { } note)
+                    Print(note);
             });
 
         return new AcpClientHandler(prompter, files);

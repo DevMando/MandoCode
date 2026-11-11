@@ -922,4 +922,12 @@ public class AcpAgentConfig
     /// <summary>Shown when the agent reports it is not signed in (for example <c>claude auth login</c>).</summary>
     [JsonPropertyName("authHint")]
     public string? AuthHint { get; set; }
+
+    /// <summary>
+    /// Write a message trace (direction, method, id, size, time; never content) to a log file, to see what an agent
+    /// really calls. Off by default; the <c>MANDOCODE_ACP_TRACE</c> environment variable turns it on for all agents.
+    /// Not part of the trust hash.
+    /// </summary>
+    [JsonPropertyName("trace")]
+    public bool Trace { get; set; }
 }

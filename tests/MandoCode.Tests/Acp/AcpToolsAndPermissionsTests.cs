@@ -320,9 +320,10 @@ public class AcpToolsAndPermissionsTests : IDisposable
         public void Dispose() { }
     }
 
-    private AcpAgentRuntime Runtime(string scenario, AcpClientHandler handler)
+    private AcpAgentRuntime Runtime(string scenario, AcpClientHandler handler, Action<AcpAgentConfig>? tweak = null)
     {
         var config = new AcpAgentConfig { Command = _host, Args = [MockDll, scenario], StartupTimeoutSeconds = 20 };
+        tweak?.Invoke(config);
         var runtime = new AcpAgentRuntime("mock", config, _work, new AcpAgentLauncher(new InMemoryTrustStore()),
             _ => Task.FromResult(true), Path.Combine(_work, "logs"), handler);
         _cleanup.Add(runtime);
@@ -607,14 +608,206 @@ public class AcpToolsAndPermissionsTests : IDisposable
             "📄 Read config · /work/config.json:3",
             "  ⎿ completed",
             "✏️ Edit config",
-            "OP Update config.json +1 -1",
+            "  ⎿ Awaiting permission…",
             "  ⎿ terminal output not supported",
             "  ⎿ failed: disk full",
             "Plan\n  [x] Edit config",
         ], blocks);
         Assert.Equal(["Looking at the file.", "Done."], sink.Replies);
-        var diff = Assert.Single(operations);
-        Assert.Equal("Update", diff.OperationType);
+        // The call failed, so the proposed change never happened and is never shown as one.
+        Assert.Empty(operations);
+    }
+
+    private static ToolCall WriteCall(string status = ToolCallStatuses.Pending) => new()
+    {
+        ToolCallId = "w", Title = "Write a.txt", Kind = ToolKinds.Edit, Status = status,
+        Content = [new DiffToolCallContent { Path = Path.GetFullPath("/work/a.txt"), OldText = null, NewText = "one\ntwo\n" }],
+    };
+
+    private static string[] Shown(IEnumerable<IRenderable> blocks) => blocks.Select(Plain.Of).ToArray();
+
+    [Fact]
+    public void AWriteThatIsNotDecidedYet_SaysItIsAwaitingPermission_AndNeverClaimsToHaveWritten()
+    {
+        var operations = new List<OperationDisplayEvent>();
+        var adapter = Adapter(operations);
+
+        var pending = Shown(adapter.Apply(WriteCall()));
+        var running = Shown(adapter.Apply(new ToolCallUpdate { ToolCallId = "w", Status = ToolCallStatuses.InProgress }));
+
+        Assert.Equal(["✏️ Write a.txt", "  ⎿ Awaiting permission…"], pending);
+        Assert.Equal(["  ⎿ Writing…"], running);
+        Assert.Empty(operations);
+    }
+
+    [Fact]
+    public void AWriteThatCompleted_ShowsTheWriteOnlyThen()
+    {
+        var operations = new List<OperationDisplayEvent>();
+        var adapter = Adapter(operations);
+        adapter.Apply(WriteCall());
+
+        var done = Shown(adapter.Apply(new ToolCallUpdate { ToolCallId = "w", Status = ToolCallStatuses.Completed }));
+
+        Assert.Equal(["OP Write a.txt +0 -0", "  ⎿ completed"], done);
+        Assert.Equal("Write", Assert.Single(operations).OperationType);
+    }
+
+    [Fact]
+    public void AWriteThatFailed_ShowsNoWrite_AndNoGuessAtTheReason()
+    {
+        var operations = new List<OperationDisplayEvent>();
+        var adapter = Adapter(operations);
+        adapter.Apply(WriteCall());
+
+        var failed = Shown(adapter.Apply(new ToolCallUpdate { ToolCallId = "w", Status = ToolCallStatuses.Failed }));
+
+        Assert.Equal(["  ⎿ failed"], failed);
+        Assert.Empty(operations);
+    }
+
+    [Fact]
+    public void ARefusedPermission_EndsTheCallAtOnce_AndTheAgentsLaterFailureIsNotRepeated()
+    {
+        var operations = new List<OperationDisplayEvent>();
+        var adapter = Adapter(operations);
+        adapter.Apply(WriteCall());
+
+        Assert.Equal("  ⎿ permission denied", Plain.Of(adapter.NotePermission("w", allowed: false)!));
+        Assert.Empty(adapter.Apply(new ToolCallUpdate { ToolCallId = "w", Status = ToolCallStatuses.Failed }));
+        Assert.Empty(adapter.Apply(new ToolCallUpdate { ToolCallId = "w", Status = ToolCallStatuses.Completed }));
+        Assert.Empty(operations);
+    }
+
+    [Fact]
+    public void AnAllowedPermission_SaysNothingByItself()
+    {
+        var adapter = Adapter();
+        adapter.Apply(WriteCall());
+
+        Assert.Null(adapter.NotePermission("w", allowed: true));
+    }
+
+    private static ToolCallUpdate Failed(string text) => new()
+    {
+        ToolCallId = "f", Title = "Run it", Kind = ToolKinds.Execute, Status = ToolCallStatuses.Failed,
+        Content = [new ContentToolCallContent { Content = new TextContent(text) }],
+    };
+
+    [Theory]
+    [InlineData("```\n```", "  ⎿ failed")]
+    [InlineData("```", "  ⎿ failed")]
+    [InlineData("```text\n```", "  ⎿ failed")]
+    [InlineData("   \n  ", "  ⎿ failed")]
+    [InlineData("```\nUser refused permission to run tool\n```", "  ⎿ failed: User refused permission to run tool")]
+    [InlineData("```console\nexit code 2\nmore\n```", "  ⎿ failed: exit code 2")]
+    [InlineData("disk full\nsecond line", "  ⎿ failed: disk full")]
+    public void TheFailureLine_NeverShowsACodeFenceAsTheMessage(string text, string expected)
+    {
+        var blocks = Shown(Adapter().Apply(Failed(text)));
+
+        Assert.Equal(expected, blocks[^1]);
+        Assert.DoesNotContain("`", blocks[^1]);
+    }
+
+    [Fact]
+    public async Task ThePrompter_ReportsWhetherTheUserAllowedTheCall()
+    {
+        var decisions = new List<(string Id, bool Allowed)>();
+        var prompter = new AcpPermissionPrompter(_gate, _menu, () => new Noop(), _lines.Add, () => null, decided: (id, ok) => decisions.Add((id, ok)));
+        var request = new RequestPermissionRequest
+        {
+            SessionId = "s",
+            ToolCall = new ToolCallUpdate { ToolCallId = "c1" },
+            Options =
+            [
+                new PermissionOption { OptionId = "y", Name = "Allow", Kind = PermissionOptionKinds.AllowOnce },
+                new PermissionOption { OptionId = "n", Name = "Reject", Kind = PermissionOptionKinds.RejectOnce },
+            ],
+        };
+
+        var allowed = prompter.RequestAsync(request, CancellationToken.None).AsTask();
+        await AnswerWhenShown("Allow");
+        await allowed.Within();
+        var rejected = prompter.RequestAsync(request, CancellationToken.None).AsTask();
+        await AnswerWhenShown("Reject");
+        await rejected.Within();
+        var cancelled = prompter.RequestAsync(request, CancellationToken.None).AsTask();
+        await AnswerWhenShown(choice: null);
+        await cancelled.Within();
+
+        Assert.Equal([("c1", true), ("c1", false), ("c1", false)], decisions);
+    }
+
+    // ───────── trace ─────────
+
+    private string[] TraceLines()
+    {
+        var files = Directory.Exists(Path.Combine(_work, "logs"))
+            ? Directory.GetFiles(Path.Combine(_work, "logs"), "*.trace.log")
+            : [];
+        if (files.Length == 0)
+            return [];
+        using var stream = new FileStream(files.Single(), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    [Fact]
+    public async Task TheTrace_ShowsWhichMethodsTheAgentCalled_ButNeverAnyContent()
+    {
+        var runtime = Runtime("fs-roundtrip", new AcpClientHandler(null, new AcpFileSystemHandler(_work)), c => c.Trace = true);
+        await runtime.ConnectAsync(CancellationToken.None).Within(40);
+        var source = Path.Combine(_work, "very-secret-name.txt");
+        File.WriteAllText(source, "the secret file body");
+
+        await ReplyAsync(runtime, source).Within(20);
+        await runtime.DisposeAsync();
+
+        var trace = TraceLines();
+        Assert.Contains(trace, l => l.Contains("<- request fs/read_text_file") && l.Contains("id="));
+        Assert.Contains(trace, l => l.Contains("<- request fs/write_text_file"));
+        Assert.Contains(trace, l => l.Contains("-> response fs/read_text_file"));
+        Assert.Contains(trace, l => l.Contains("-> request session/prompt"));
+        Assert.Contains(trace, l => l.Contains("<- notification session/update"));
+        Assert.All(trace, l => Assert.Matches(@"^\d{4}-\d\d-\d\dT[\d:.]+Z (->|<-) \w+ \S+ id=\S+ bytes=\d+$", l));
+        var all = string.Join('\n', trace);
+        Assert.DoesNotContain("very-secret-name", all);
+        Assert.DoesNotContain("the secret file body", all);
+        Assert.DoesNotContain("THE SECRET FILE BODY", all);
+        Assert.DoesNotContain(_work, all);
+    }
+
+    [Fact]
+    public async Task WithoutTheSetting_NoTraceFileIsCreated()
+    {
+        var runtime = Runtime("echo", new AcpClientHandler(null, null));
+        await runtime.ConnectAsync(CancellationToken.None).Within(40);
+        await ReplyAsync(runtime, "hello").Within(20);
+        await runtime.DisposeAsync();
+
+        Assert.Empty(TraceLines());
+        Assert.False(Directory.Exists(Path.Combine(_work, "logs")) && Directory.GetFiles(Path.Combine(_work, "logs"), "*.trace.log").Length > 0);
+    }
+
+    [Fact]
+    public void TheTraceCanAlsoBeTurnedOnByTheEnvironment()
+    {
+        var before = Environment.GetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, null);
+            Assert.False(AcpLogPaths.TraceEnabled(new AcpAgentConfig()));
+            Assert.True(AcpLogPaths.TraceEnabled(new AcpAgentConfig { Trace = true }));
+            Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, "1");
+            Assert.True(AcpLogPaths.TraceEnabled(new AcpAgentConfig()));
+            Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, "0");
+            Assert.False(AcpLogPaths.TraceEnabled(new AcpAgentConfig()));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, before);
+        }
     }
 
     [Fact]
@@ -627,8 +820,8 @@ public class AcpToolsAndPermissionsTests : IDisposable
         var done = adapter.Apply(new ToolCallUpdate { ToolCallId = "t", Status = ToolCallStatuses.Completed });
         var again = adapter.Apply(new ToolCallUpdate { ToolCallId = "t", Status = ToolCallStatuses.Completed });
 
-        Assert.Equal("⚡ Run tests", Plain.Of(Assert.Single(first)));
-        Assert.Empty(progress);
+        Assert.Equal(["⚡ Run tests", "  ⎿ Awaiting permission…"], Shown(first));
+        Assert.Equal(["  ⎿ Running…"], Shown(progress));
         Assert.Equal("  ⎿ completed", Plain.Of(Assert.Single(done)));
         Assert.Empty(again);
     }
@@ -669,22 +862,27 @@ public class AcpToolsAndPermissionsTests : IDisposable
         var adapter = Adapter();
         var path = Path.GetFullPath("/work/a.txt");
 
-        var viaTool = adapter.Apply(new ToolCall
+        adapter.Apply(new ToolCall
         {
             ToolCallId = "t", Title = "Edit", Kind = ToolKinds.Edit,
             Content = [new DiffToolCallContent { Path = path, OldText = "a\n", NewText = "b\n" }],
         });
         var viaFs = adapter.FileChanged(new AcpFileChange(path, "a\n", "b\n"));
+        var completed = Shown(adapter.Apply(new ToolCallUpdate { ToolCallId = "t", Status = ToolCallStatuses.Completed }));
 
-        Assert.Equal(2, viaTool.Count);
-        Assert.Null(viaFs);
+        Assert.NotNull(viaFs);
+        Assert.Equal(["  ⎿ completed"], completed);
 
+        // And the other way round: the completed call shows the diff, the write that follows does not repeat it.
         adapter.BeginTurn();
-        Assert.NotNull(adapter.FileChanged(new AcpFileChange(path, "a\n", "b\n")));
-        Assert.DoesNotContain(adapter.Apply(new ToolCallUpdate
+        adapter.Apply(new ToolCall
         {
-            ToolCallId = "t2", Content = [new DiffToolCallContent { Path = path, OldText = "a\n", NewText = "b\n" }],
-        }), b => Plain.Of(b).StartsWith("OP"));
+            ToolCallId = "t2", Title = "Edit", Kind = ToolKinds.Edit,
+            Content = [new DiffToolCallContent { Path = path, OldText = "a\n", NewText = "b\n" }],
+        });
+        var viaTool = Shown(adapter.Apply(new ToolCallUpdate { ToolCallId = "t2", Status = ToolCallStatuses.Completed }));
+        Assert.Equal(["OP Update a.txt +1 -1", "  ⎿ completed"], viaTool);
+        Assert.Null(adapter.FileChanged(new AcpFileChange(path, "a\n", "b\n")));
     }
 
     [Fact]

@@ -18,6 +18,7 @@ public sealed class AcpPermissionPrompter
     private readonly Action<string> _writeLine;
     private readonly Func<string?> _currentMode;
     private readonly Func<IDisposable>? _pauseActivity;
+    private readonly Action<string, bool>? _decided;
 
     /// <param name="writeLine">Prints one plain-text line (never parsed as markup).</param>
     /// <param name="pauseActivity">Stops the spinner while the question is open; disposing resumes it.</param>
@@ -27,8 +28,10 @@ public sealed class AcpPermissionPrompter
         Func<IDisposable> suppressKeys,
         Action<string> writeLine,
         Func<string?> currentMode,
-        Func<IDisposable>? pauseActivity = null)
+        Func<IDisposable>? pauseActivity = null,
+        Action<string, bool>? decided = null)
     {
+        _decided = decided;
         _gate = gate;
         _menu = menu;
         _suppressKeys = suppressKeys;
@@ -77,10 +80,21 @@ public sealed class AcpPermissionPrompter
             }
 
             var index = labels.ToList().IndexOf(choice);
-            return index < 0 || choice == ApprovalSelectCoordinator.Cancelled
-                ? cancelled
-                : new RequestPermissionResponse { Outcome = new SelectedPermissionOutcome { OptionId = request.Options[index].OptionId } };
+            if (index < 0 || choice == ApprovalSelectCoordinator.Cancelled)
+            {
+                Decided(request, allowed: false);
+                return cancelled;
+            }
+
+            Decided(request, request.Options[index].Kind is PermissionOptionKinds.AllowOnce or PermissionOptionKinds.AllowAlways);
+            return new RequestPermissionResponse { Outcome = new SelectedPermissionOutcome { OptionId = request.Options[index].OptionId } };
         }
+    }
+
+    private void Decided(RequestPermissionRequest request, bool allowed)
+    {
+        try { _decided?.Invoke(request.ToolCall.ToolCallId, allowed); }
+        catch (Exception) { /* reporting the decision must not change the answer */ }
     }
 
     /// <summary>The text shown above the menu: what the agent wants, the current mode and who applies the answer.</summary>

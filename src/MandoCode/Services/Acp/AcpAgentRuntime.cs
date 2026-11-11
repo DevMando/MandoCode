@@ -150,6 +150,8 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         }
 
         var stderr = new StderrLog(filePath: AcpLogPaths.For(AgentName, _logDirectory));
+        // The file is only created by the first traced message, so an agent that sends nothing leaves no empty log.
+        var trace = AcpLogPaths.TraceEnabled(_config) ? new StderrLog(filePath: AcpLogPaths.TraceFor(AgentName, _logDirectory)) : null;
         AcpClient? client = null;
         try
         {
@@ -159,6 +161,7 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
                 ClientName = "MandoCode",
                 ClientVersion = typeof(AcpAgentRuntime).Assembly.GetName().Version?.ToString(3) ?? "0",
                 StartupTimeout = TimeSpan.FromSeconds(_config.StartupTimeoutSeconds),
+                Trace = trace is null ? null : entry => trace.Append(entry.ToString()),
             });
             _ = client.Completion.ContinueWith(_ =>
             {

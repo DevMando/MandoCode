@@ -22,6 +22,8 @@ public sealed class AcpTranscriptAdapter
         public bool Announced;
         public bool FinalShown;
         public bool TerminalNoted;
+        public string? Phase;
+        public List<DiffToolCallContent> PendingDiffs = [];
     }
 
     private readonly Func<OperationDisplayEvent, IRenderable> _renderOperation;
@@ -88,14 +90,25 @@ public sealed class AcpTranscriptAdapter
                 blocks.Add(new Text(Headline(state), new Style(Color.Grey)));
             }
 
+            // A diff is what the agent proposes, not what happened: it is shown once the call has completed
+            // (a write through fs/write_text_file shows its own diff when it really happens).
+            foreach (var diff in (update.Content ?? []).OfType<DiffToolCallContent>())
+            {
+                state.PendingDiffs.RemoveAll(d => string.Equals(d.Path, diff.Path, StringComparison.Ordinal));
+                state.PendingDiffs.Add(diff);
+            }
+
+            if (!state.FinalShown && state.Status is ToolCallStatuses.Pending or ToolCallStatuses.InProgress
+                && PhaseText(state) is { } phase && phase != state.Phase)
+            {
+                state.Phase = phase;
+                blocks.Add(new Text("  ⎿ " + phase, new Style(Color.Grey)));
+            }
+
             foreach (var content in update.Content ?? [])
             {
                 switch (content)
                 {
-                    case DiffToolCallContent diff when ShowDiff(diff.Path, diff.OldText, diff.NewText) is { } rendered:
-                        blocks.Add(rendered);
-                        break;
-
                     case TerminalToolCallContent when !state.TerminalNoted:
                         state.TerminalNoted = true;
                         blocks.Add(new Text("  ⎿ " + TerminalNotSupported, new Style(Color.Grey)));
@@ -108,22 +121,82 @@ public sealed class AcpTranscriptAdapter
             if (!state.FinalShown && state.Status is ToolCallStatuses.Completed or ToolCallStatuses.Failed)
             {
                 state.FinalShown = true;
-                blocks.Add(state.Status == ToolCallStatuses.Failed
-                    ? new Text("  ⎿ failed" + FailureDetail(update), new Style(Color.Red))
-                    : new Text("  ⎿ completed", new Style(Color.Grey)));
+                if (state.Status == ToolCallStatuses.Failed)
+                {
+                    blocks.Add(new Text("  ⎿ failed" + FailureDetail(update), new Style(Color.Red)));
+                }
+                else
+                {
+                    foreach (var diff in state.PendingDiffs)
+                        if (ShowDiff(diff.Path, diff.OldText, diff.NewText) is { } rendered)
+                            blocks.Add(rendered);
+                    blocks.Add(new Text("  ⎿ completed", new Style(Color.Grey)));
+                }
+
+                state.PendingDiffs.Clear();
             }
         }
 
         return blocks;
     }
 
+    /// <summary>What a call that changes things is doing while it is not finished; null for calls that just read.</summary>
+    private static string? PhaseText(ToolState state)
+    {
+        var changes = state.Kind is ToolKinds.Edit or ToolKinds.Delete or ToolKinds.Move or ToolKinds.Execute || state.PendingDiffs.Count > 0;
+        if (!changes)
+            return null;
+        if (state.Status == ToolCallStatuses.Pending)
+            return "Awaiting permission…";
+        return state.Kind == ToolKinds.Execute ? "Running…" : "Writing…";
+    }
+
+    /// <summary>
+    /// The user's answer to the permission question for this call. A refusal ends the call at once ("permission denied"),
+    /// without waiting for, or contradicting, whatever the agent reports afterwards.
+    /// </summary>
+    public IRenderable? NotePermission(string toolCallId, bool allowed)
+    {
+        lock (_gate)
+        {
+            if (!_tools.TryGetValue(toolCallId, out var state))
+                _tools[toolCallId] = state = new ToolState();
+            if (allowed || state.FinalShown)
+                return null;
+
+            state.FinalShown = true;
+            state.PendingDiffs.Clear();
+            return new Text("  ⎿ permission denied", new Style(Color.Yellow));
+        }
+    }
+
     private static string FailureDetail(ToolCallBase update)
     {
-        var text = (update.Content ?? []).OfType<ContentToolCallContent>().Select(c => (c.Content as TextContent)?.Text).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
-        if (text is null)
-            return "";
-        var first = text.Split('\n', 2)[0].Trim();
-        return first.Length == 0 ? "" : ": " + (first.Length > 160 ? first[..160] + "…" : first);
+        foreach (var content in (update.Content ?? []).OfType<ContentToolCallContent>())
+        {
+            if (content.Content is not TextContent { Text: { } text })
+                continue;
+            if (FirstMeaningfulLine(text) is { } line)
+                return ": " + (line.Length > 160 ? line[..160] + "…" : line);
+        }
+
+        return "";
+    }
+
+    /// <summary>The first line that says something: agents wrap messages in code fences, and an empty fence is not a message.</summary>
+    internal static string? FirstMeaningfulLine(string text)
+    {
+        foreach (var raw in text.Replace("\r\n", "\n").Split('\n'))
+        {
+            var isFence = raw.TrimStart().StartsWith("```", StringComparison.Ordinal);
+            var line = raw.Trim().Trim('`').Trim();
+            // A fence line holds at most a language tag ("text", "console"), which is not a message.
+            if (line.Length == 0 || (isFence && !line.Contains(' ')))
+                continue;
+            return line;
+        }
+
+        return null;
     }
 
     private static string Headline(ToolState state)

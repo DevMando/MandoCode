@@ -18,6 +18,9 @@ public sealed class AcpClientOptions
 
     /// <summary>Diagnostics sink (ignored frames, unknown sessions). Never write this to the console.</summary>
     public Action<string>? Diagnostics { get; init; }
+
+    /// <summary>Optional message trace (direction, method, id, size; never content). Off when null.</summary>
+    public Action<AcpTraceEntry>? Trace { get; init; }
 }
 
 /// <summary>
@@ -47,6 +50,7 @@ public sealed class AcpClient : IAsyncDisposable
         {
             DescribeClose = transport.DescribeCloseAsync,
             Diagnostics = _options.Diagnostics,
+            Trace = _options.Trace,
         });
 
         RegisterHandlers();

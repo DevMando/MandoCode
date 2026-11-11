@@ -48,6 +48,40 @@ public class AcpAgentCommandsTests : IDisposable
     private static string Quoted(string path) => "\"" + path + "\"";
 
     [Fact]
+    public async Task Status_ShowsTheLogPaths_AndWhetherTheTraceIsOn()
+    {
+        _catalog.Stored["quiet"] = new AcpAgentConfig { Command = _host, Args = [MockDll, "echo"] };
+        _catalog.Stored["loud"] = new AcpAgentConfig { Command = _host, Args = [MockDll, "echo"], Trace = true };
+        var before = Environment.GetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable);
+        Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, null);
+        try
+        {
+            await Run("status");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AcpLogPaths.TraceEnvironmentVariable, before);
+        }
+
+        var text = _out.ToString();
+        var loud = text[text.IndexOf("loud", StringComparison.Ordinal)..text.IndexOf("quiet", StringComparison.Ordinal)];
+        var quiet = text[text.IndexOf("quiet", StringComparison.Ordinal)..];
+        Assert.Contains("trace: on", loud);
+        Assert.Contains(".trace.log (not created yet)", loud);
+        Assert.Contains("stderr log:", loud);
+        Assert.Contains("trace: off", quiet);
+        Assert.DoesNotContain(".trace.log", quiet);
+    }
+
+    [Fact]
+    public async Task Status_OfAnUnknownAgent_IsAnError()
+    {
+        await Run("status nope");
+
+        Assert.Contains("No ACP agent named 'nope'", _err.ToString());
+    }
+
+    [Fact]
     public async Task List_WhenEmpty_ExplainsHowToAdd()
     {
         await Run("");
