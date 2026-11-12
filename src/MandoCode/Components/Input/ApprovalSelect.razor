@@ -43,6 +43,9 @@
     [Parameter] public IReadOnlyList<Option> Options { get; set; } = Array.Empty<Option>();
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
 
+    /// <summary>The entry the cursor starts on for a new set of options (0 = the first).</summary>
+    [Parameter] public int InitialIndex { get; set; }
+
     /// <summary>Escape. Only menus whose owner handles it get it; others ignore the key.</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
 
@@ -64,7 +67,7 @@
         {
             _previousOptions = Options;
             _focusedIndex = Pane?.PresentationState.GetValueOrDefault("approval-selection") is SelectionDraft saved && ReferenceEquals(saved.Options, Options)
-                ? Math.Clamp(saved.Index, 0, Math.Max(0, Options.Count - 1)) : 0;
+                ? Math.Clamp(saved.Index, 0, Math.Max(0, Options.Count - 1)) : Math.Clamp(InitialIndex, 0, Math.Max(0, Options.Count - 1));
             _requestFocus = true;
         }
     }

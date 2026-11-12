@@ -52,12 +52,17 @@ public sealed class ApprovalSelectCoordinator
     /// </summary>
     public bool CancelOnEscape { get; private set; }
 
+    /// <summary>The entry the cursor starts on (a menu that shows a current value starts on it).</summary>
+    public int InitialIndex { get; private set; }
+
     /// <param name="cancelOnEscape">When true, Escape closes the menu and the awaiter gets <see cref="Cancelled"/>.</param>
+    /// <param name="initialIndex">The entry the cursor starts on; out-of-range values fall back to the first entry.</param>
     public Task<string> RequestAsync(
         IReadOnlyList<Option> options,
         IReadOnlyList<PreviewLine>? preview = null,
         string? previewTitle = null,
-        bool cancelOnEscape = false)
+        bool cancelOnEscape = false,
+        int initialIndex = 0)
     {
         TaskCompletionSource<string> tcs;
         lock (_gate)
@@ -73,6 +78,7 @@ public sealed class ApprovalSelectCoordinator
             Preview = preview ?? Array.Empty<PreviewLine>();
             PreviewTitle = previewTitle;
             CancelOnEscape = cancelOnEscape;
+            InitialIndex = initialIndex >= 0 && initialIndex < options.Count ? initialIndex : 0;
             IsActive = true;
         }
 
@@ -92,6 +98,7 @@ public sealed class ApprovalSelectCoordinator
             Preview = Array.Empty<PreviewLine>();
             PreviewTitle = null;
             CancelOnEscape = false;
+            InitialIndex = 0;
         }
 
         StateChanged?.Invoke();

@@ -187,6 +187,22 @@ public class AcpPaneAppTests
     }
 
     [Fact]
+    public async Task Model_MenuStartsOnTheCurrentModel()
+    {
+        await using var h = Harness.Create();
+        h.Runtime.ConfigOptions = [ModelOption(current: "model-b")];
+
+        var run = h.Run("/model");
+        for (var i = 0; i < 400 && !h.Menu.IsActive; i++)
+            await Task.Delay(10);
+        var start = h.Menu.InitialIndex;
+        h.Menu.Submit(AcpPaneCommands.CancelLabel);
+        await run;
+
+        Assert.Equal(1, start);
+    }
+
+    [Fact]
     public async Task Model_CancelledInTheMenu_ChangesNothing()
     {
         await using var h = Harness.Create();

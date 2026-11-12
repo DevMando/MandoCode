@@ -140,6 +140,7 @@
                        PageSize="@ApprovalPreviewPageSize" />
     }
     <ApprovalSelect Options="@_approvalMenuOptions"
+                    InitialIndex="@ApprovalMenu.InitialIndex"
                     OnSubmit="HandleApprovalMenuSubmit"
                     OnCancel="HandleApprovalMenuCancel"
                     OnScroll="HandleApprovalPreviewScroll" />
