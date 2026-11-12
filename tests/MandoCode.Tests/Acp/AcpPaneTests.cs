@@ -459,7 +459,7 @@ public class AcpPromptBuilderTests : IDisposable
         Assert.Equal(["b.md"], blocks.OfType<ResourceLink>().Select(l => l.Name));
     }
 
-    [Fact]
+    [SymlinkFact]
     public void ALinkThatLeadsOutOfTheFolder_IsNotLinked()
     {
         var outsideDir = Path.Combine(Path.GetTempPath(), "mandocode-acp-outdir-" + Guid.NewGuid().ToString("N"));
@@ -467,21 +467,36 @@ public class AcpPromptBuilderTests : IDisposable
         File.WriteAllText(Path.Combine(outsideDir, "secret.txt"), "secret");
         try
         {
-            try
-            {
-                Directory.CreateSymbolicLink(Path.Combine(_root, "linked"), outsideDir);
-                File.CreateSymbolicLink(Path.Combine(_root, "secret-link.txt"), Path.Combine(outsideDir, "secret.txt"));
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
-            {
-                return;   // this machine does not allow symbolic links (Windows without developer mode)
-            }
+            Directory.CreateSymbolicLink(Path.Combine(_root, "linked"), outsideDir);
+            File.CreateSymbolicLink(Path.Combine(_root, "secret-link.txt"), Path.Combine(outsideDir, "secret.txt"));
 
             var blocks = AcpPromptBuilder.Build("@linked/secret.txt @secret-link.txt", _root);
 
             Assert.Empty(blocks.OfType<ResourceLink>());
         }
         finally { Directory.Delete(outsideDir, recursive: true); }
+    }
+
+    [JunctionFact]
+    public void AJunctionThatLeadsOutOfTheFolder_IsNotLinked()
+    {
+        var outsideDir = Path.Combine(Path.GetTempPath(), "mandocode-acp-outjunc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outsideDir);
+        File.WriteAllText(Path.Combine(outsideDir, "secret.txt"), "secret");
+        var junction = Path.Combine(_root, "junction");
+        try
+        {
+            Assert.True(LinkProbe.CreateJunction(junction, outsideDir));
+
+            var blocks = AcpPromptBuilder.Build("@junction/secret.txt", _root);
+
+            Assert.Empty(blocks.OfType<ResourceLink>());
+        }
+        finally
+        {
+            try { Directory.Delete(junction); } catch (Exception) { }   // removes the junction, not its target
+            Directory.Delete(outsideDir, recursive: true);
+        }
     }
 }
 
