@@ -202,6 +202,8 @@ public class MarkdownHtmlRendererTests
             ColorSystem = ColorSystemSupport.TrueColor,
             Out = new AnsiConsoleOutput(writer),
         });
+        // Exercise hyperlink rendering regardless of the host terminal or CI detection.
+        console.Profile.Capabilities.Links = true;
         console.Write(renderable);
         return writer.ToString();
     }

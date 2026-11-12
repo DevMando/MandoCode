@@ -24,6 +24,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Test coverage
 
+- Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
 - Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
 - All 1,248 tests pass on net10.0 and net8.0. Verify startup, typing, and resizing in a real pseudo-terminal on both builds, with no reported rendering errors. Confirm the CLI tool package builds successfully.
 
