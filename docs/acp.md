@@ -134,13 +134,68 @@ scope, so closing the pane ends its whole process tree. `/agent-acp restart` (in
 - Escape cancels the turn (`session/cancel`). If the agent has not ended the turn 10 seconds later it is shut down
   (process tree killed) and the pane tells you to `/agent-acp restart`.
 - `@path` in a message adds a `resource_link` for an existing file inside the project (images are not sent yet).
-- Commands that drive MandoCode's own model loop (`/model`, `/plan*`, `/compact`, `/context-snap-*`, `/force-skill`,
-  `/setup`, `/retry`, `/config`, `/agent-settings`, `/ollama-*`) are hidden there and answer with an explanation.
-- ACP panes are never saved to the agent history, so `/history` cannot bring one back as a native agent.
+  Mentions are read with the same parser as the native pane, so `@"src/My Component.cs"` works. A mention is only
+  linked when the file is inside the project folder: `..` escapes, absolute paths outside it, and links or junctions
+  that lead out stay plain text.
+- The `@` picker lists files only. MandoCode's own agents are not reachable from an external agent (that needs a
+  bridge, which is a separate phase together with passing context). A hand-typed `@Runner` is not blocked, it is just text.
 - Connecting happens in the background: the pane prints "Connecting to <name>...", shows `connecting…` in the header and
   takes input at once. A message typed meanwhile waits until the agent is ready (Escape cancels the wait). If the
   start fails, whatever the reason, the pane shows the message and stays usable: `/agent-acp restart` tries again.
 - `terminal/*` is never offered.
+
+### What an ACP pane does not offer
+
+One set in the code (`AcpPaneRestrictions`) feeds autocomplete, the command dispatcher, the Alt shortcuts and the
+`@` picker, so a restriction cannot be hidden in one place and reachable in another.
+
+| Unavailable | Why |
+|---|---|
+| `/setup`, `/retry`, `/config`, `/agent-settings` (Alt+S), `/force-skill`, `/plan`, `/plan-resume`, `/plan-discard`, `/context-snap-create`, `/context-snap-import` (Alt+C), `/ollama-*` | The external agent runs the conversation; MandoCode's own model loop, plans and context snapshots do not apply. |
+| `/skills` (Alt+K), `/mcp` (Alt+M), `/mcp tools`, `/mcp-reload` | The agent does not use MandoCode's skills or MCP servers (`mcpServers` is empty). |
+| `/history` (Alt+H) | Saved history restores native agents, and ACP panes are not saved to it. |
+| Alt+V (paste image) | Images are not sent to ACP agents yet. |
+| Agents group of the `@` picker | See above. |
+
+Typing a blocked command, or pressing its shortcut, prints `/<command> is not available in an ACP agent pane: <why>`.
+Everything else (`/help`, `/copy`, `/copy-code`, `/transcript-save`, workspace and agent-pane commands, the file
+explorer, Git changes, `/command` and `!cmd`) works as in a native pane.
+
+### `/clear`
+
+A new ACP conversation in the same pane, agent process and folder: if the agent offers `session/close` the current
+session is closed, then `session/new` runs in the same process. The pane's ACP messages and their transcript are
+cleared, the agent's start mode applies again, and the permissions the agent kept for the old session are gone with
+it. The message says it is the ACP conversation that was cleared; **the native conversation and its history are not
+touched**. While a request is running `/clear` is refused (press Escape first). The agent's own commands are not forwarded.
+
+### `/model` and `/compact`
+
+- `/model` reads the agent's `configOptions` (category `model`) from `session/new` and lets you pick a value, or
+  `/model <value or name>` sets it directly (`session/set_config_option`). An agent that offers no model option gets a
+  plain message. Nothing is adapter specific.
+- `/compact` sends `/compact` to the agent as a prompt when it announced a `compact` command
+  (`available_commands_update`), otherwise it says the agent does not support it. No other agent command is forwarded.
+
+### Changing the folder
+
+The folder belongs to the pane (each pane has its own `ProjectRootAccessor`), not to the application. The agent was
+started in the old folder, so `/change-directory`, Alt+D, the Change Directory button and `!cd` / `! cd` ask first:
+"the ACP agent restarts there and the ACP conversation is lost", then restart the agent (new process, new session,
+file access rooted in the new folder). The trust hash does not contain the folder, so there is no new trust question.
+`chdir`, `pushd`, `Set-Location` and `sl` only run in a child process and never changed the folder.
+
+### Sessions
+
+When the agent advertises the capabilities, MandoCode remembers the last session of each agent for each folder in
+`~/.mandocode/acp-sessions.json` (ids, folder and a timestamp only, never conversation content; only when persistence is on).
+
+- `/agent-acp <name> --resume` (also with `--new-panel`) continues that session: `session/resume` when the agent
+  offers it (nothing is replayed, the agent keeps its context), otherwise `session/load`, whose replayed history is
+  shown and kept in the pane's messages. If nothing is remembered, the session is unknown to the agent, or its folder
+  differs, a new session starts and the pane says so.
+- `/agent-acp sessions` lists the agent's sessions for this folder (`session/list`; sessions of other folders are never shown).
+- `/clear` replaces the remembered id with the new session's id. `/history` and Alt+H stay blocked.
 
 ### Tool calls, plans and diffs
 
@@ -311,5 +366,8 @@ Deviations from the plan
 
 Known limitations
 - Markdown links in an agent's reply are shown as raw text (the transcript renderer does not turn them into links).
-- Images are not sent; `terminal/*` is not offered; sessions are not resumed (`loadSession` is not used).
+- Images are not sent; `terminal/*` is not offered.
+- Agents that cannot resume or load sessions always start fresh, and `/model` needs the agent to expose a model option.
+- Switching the folder (or `--resume`) affects one pane; restarting all ACP panes at once is a separate change.
+- MandoCode's agents are not reachable from an ACP agent, and no context is handed over between the two (a later phase).
 - Agent-initiated file changes are not confined to the project folder (see "File access").
