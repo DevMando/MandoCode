@@ -217,45 +217,64 @@ public sealed class AcpTurnDriver
     }
 }
 
-/// <summary>Builds the prompt blocks for a user message: the text itself plus a <c>resource_link</c> for every <c>@file</c> inside the project.</summary>
+/// <summary>
+/// Builds the prompt blocks for a user message: the text itself plus a <c>resource_link</c> for every <c>@file</c> inside
+/// the project. Mentions are read with the same parser as the native pane (<see cref="FileReferenceToken"/>, so
+/// <c>@"src/My Component.cs"</c> works) and judged by the same guard as the agent's own file requests: relative paths
+/// only inside the project folder, no <c>..</c> escapes, no link or junction that leads out.
+/// </summary>
 public static class AcpPromptBuilder
 {
-    private static readonly Regex Mention = new(@"(?<!\S)@(?<path>[^\s]+)", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
-
     public static IReadOnlyList<ContentBlock> Build(string input, string projectRoot)
     {
         var blocks = new List<ContentBlock> { new TextContent(input) };
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var guard = new AcpFileSystemHandler(projectRoot);
 
-        try
+        foreach (var mention in FileReferenceToken.Paths(input))
         {
-            foreach (Match match in Mention.Matches(input))
+            foreach (var candidate in Candidates(mention))
             {
-                var relative = match.Groups["path"].Value.TrimEnd('.', ',', ';', ':', ')', ']', '"', '\'');
-                if (relative.Length == 0)
+                if (TryResolve(guard, projectRoot, candidate) is not { } link || !seen.Add(link.Canonical))
                     continue;
 
-                string full;
-                try
-                {
-                    full = FileSystemPlugin.ResolvePath(projectRoot, relative);
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or NotSupportedException)
-                {
-                    continue; // outside the project, or not a path at all
-                }
-
-                if (!File.Exists(full) || !seen.Add(full))
-                    continue;
-
-                blocks.Add(new ResourceLink { Name = Path.GetFileName(full), Uri = new Uri(full).AbsoluteUri });
+                blocks.Add(new ResourceLink { Name = Path.GetFileName(link.Full), Uri = new Uri(link.Full).AbsoluteUri });
+                break;
             }
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            // Send the text on its own rather than fail the request.
         }
 
         return blocks;
+    }
+
+    /// <summary>The mention as written, then without trailing dots ("see @a.cs." ends a sentence, not the name).</summary>
+    private static IEnumerable<string> Candidates(string mention)
+    {
+        yield return mention;
+        var trimmed = mention.TrimEnd('.');
+        if (trimmed.Length > 0 && trimmed != mention)
+            yield return trimmed;
+    }
+
+    private static (string Full, string Canonical)? TryResolve(AcpFileSystemHandler guard, string projectRoot, string mention)
+    {
+        string full;
+        try
+        {
+            full = Path.GetFullPath(mention, projectRoot);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;   // not a path at all
+        }
+
+        try
+        {
+            var canonical = guard.Guard(full);   // throws for outside the project, a link that leads out, a directory root
+            return File.Exists(canonical) ? (full, canonical) : null;
+        }
+        catch (JsonRpcException)
+        {
+            return null;
+        }
     }
 }

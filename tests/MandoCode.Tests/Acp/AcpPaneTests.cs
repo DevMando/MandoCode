@@ -380,6 +380,76 @@ public class AcpPromptBuilderTests : IDisposable
     {
         Assert.Equal(2, AcpPromptBuilder.Build("@b.md @b.md", _root).Count);
     }
+
+    [Fact]
+    public void AQuotedPathWithSpaces_IsLinked()
+    {
+        File.WriteAllText(Path.Combine(_root, "src", "My Component.cs"), "z");
+
+        var blocks = AcpPromptBuilder.Build("open @\"src/My Component.cs\" now", _root);
+
+        var link = Assert.Single(blocks.OfType<ResourceLink>());
+        Assert.Equal("My Component.cs", link.Name);
+        Assert.Contains("My%20Component.cs", link.Uri);
+    }
+
+    [Fact]
+    public void ATrailingSentenceDot_DoesNotHideTheFile()
+    {
+        var blocks = AcpPromptBuilder.Build("look at @b.md.", _root);
+
+        Assert.Equal(["b.md"], blocks.OfType<ResourceLink>().Select(l => l.Name));
+    }
+
+    [Fact]
+    public void ParentTraversal_AndAbsolutePathsOutsideTheFolder_AreNotLinked()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "mandocode-acp-outside-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(outside, "secret");
+        try
+        {
+            var sibling = "../" + Path.GetFileName(outside);
+            var blocks = AcpPromptBuilder.Build($"@{sibling} @\"{outside.Replace("\\", "\\\\")}\" @src/../../{Path.GetFileName(outside)}", _root);
+
+            Assert.Empty(blocks.OfType<ResourceLink>());
+        }
+        finally { File.Delete(outside); }
+    }
+
+    [Fact]
+    public void AnAbsolutePathInsideTheFolder_IsLinked()
+    {
+        var inside = Path.Combine(_root, "b.md");
+
+        var blocks = AcpPromptBuilder.Build($"@\"{inside.Replace("\\", "\\\\")}\"", _root);
+
+        Assert.Equal(["b.md"], blocks.OfType<ResourceLink>().Select(l => l.Name));
+    }
+
+    [Fact]
+    public void ALinkThatLeadsOutOfTheFolder_IsNotLinked()
+    {
+        var outsideDir = Path.Combine(Path.GetTempPath(), "mandocode-acp-outdir-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outsideDir);
+        File.WriteAllText(Path.Combine(outsideDir, "secret.txt"), "secret");
+        try
+        {
+            try
+            {
+                Directory.CreateSymbolicLink(Path.Combine(_root, "linked"), outsideDir);
+                File.CreateSymbolicLink(Path.Combine(_root, "secret-link.txt"), Path.Combine(outsideDir, "secret.txt"));
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                return;   // this machine does not allow symbolic links (Windows without developer mode)
+            }
+
+            var blocks = AcpPromptBuilder.Build("@linked/secret.txt @secret-link.txt", _root);
+
+            Assert.Empty(blocks.OfType<ResourceLink>());
+        }
+        finally { Directory.Delete(outsideDir, recursive: true); }
+    }
 }
 
 [Collection("AcpProcesses")]
