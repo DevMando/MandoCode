@@ -2,6 +2,32 @@
 
 All notable changes to MandoCode will be documented in this file.
 
+## [Unreleased]
+
+**Updated terminal rendering with RazorConsole 0.7.0.** The CLI now includes RazorConsole's upstream fix for focus events raised while the interface is being drawn. MandoCode keeps the deferred focus safeguard introduced in v0.16.2, which prevents the repeated prompt borders seen on some launches.
+
+**Highlights**
+
+- Upgrade the terminal UI framework while preserving the startup rendering fix.
+- Keep transcript formatting, hyperlinks, and emoji shortcuts compatible with the updated rendering dependencies.
+- Clear the clipboard attachment message reliably after sending a prompt.
+
+### Changed
+
+- Upgrade RazorConsole.Core from 0.6.0 to 0.7.0. Retain `DeferredFocus` for startup and panels so focus requests made from `OnAfterRenderAsync` continue to wait until their render batch completes.
+- Adapt transcript rendering, saved-agent history, HTML exports, and emoji expansion to the updated Spectre.Console APIs. Hyperlinks now use the separate link API, and styles use the new value type.
+- Update Markdig to 1.5.1 and Microsoft.Extensions.FileSystemGlobbing to 10.0.14 to satisfy the new dependency requirements on both supported .NET targets.
+
+### Fixed
+
+- Refresh the prompt after submission so the clipboard attachment message clears reliably.
+
+### Test coverage
+
+- Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
+- Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
+- All 1,248 tests pass on net10.0 and net8.0. Verify startup, typing, and resizing in a real pseudo-terminal on both builds, with no reported rendering errors. Confirm the CLI tool package builds successfully.
+
 ## [0.16.2] - 2026-11-11
 
 **The startup screen no longer fills with repeated prompt borders.** On some launches the first agent drew its prompt as rows of bottom borders and could not take input; the workaround was to open a second agent and close the first. The 0.16.1 startup change did not address this. RazorConsole remains at 0.6.0. A screenshot of the failure is in [#138](https://github.com/DevMando/MandoCode/pull/138).

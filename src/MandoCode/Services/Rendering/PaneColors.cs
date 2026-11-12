@@ -32,12 +32,12 @@ public static class PaneColors
                     yield return segment;
                     continue;
                 }
-                var foreground = segment.Style?.Foreground ?? Color.Default;
+                var foreground = segment.Style.Foreground;
                 // Error and warning colors remain noticeable in background transcripts.
                 if (foreground == Color.Red || foreground == Color.Red1 || foreground == Color.Yellow)
                     yield return segment;
                 else
-                    yield return new Segment(segment.Text, new Style(Color.Grey62, Color.Default, segment.Style?.Decoration ?? Decoration.None));
+                    yield return new Segment(segment.Text, new Style(Color.Grey62, Color.Default, segment.Style.Decoration));
             }
         }
     }

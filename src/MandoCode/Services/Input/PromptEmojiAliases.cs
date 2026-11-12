@@ -89,7 +89,7 @@ public static class PromptEmojiAliases
             "cool" => "😎",
             "brain" => "🧠",
             "llama" => "🦙",
-            _ => Emoji.Replace(alias.AsSpan())
+            _ => Emoji.Replace(alias)
         };
         if (emoji == alias) return false;
         buffer.SetText(text[..start] + emoji + text[cursor..]);

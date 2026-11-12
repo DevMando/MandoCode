@@ -7,7 +7,7 @@ namespace MandoCode.Services;
 /// Keeps focus requests made from OnAfterRender out of the render batch that raised them.
 /// </summary>
 /// <remarks>
-/// FocusManager.FocusAsync dispatches focusin/focusout as soon as the key is a known focus
+/// In RazorConsole 0.6, FocusManager.FocusAsync dispatched focusin/focusout as soon as the key was a known focus
 /// target. OnAfterRender runs while the renderer is still inside its batch, so that dispatch
 /// starts the event's own render pass before the batch has been cleared. The renderer then hands
 /// the same edits to the display a second time and every component the batch created is inserted
@@ -15,6 +15,8 @@ namespace MandoCode.Services;
 /// bottom borders and could not take input. Whether the key was already a known target depended
 /// on a thread-pool observer, which made the failure intermittent.
 /// Event handlers are not affected: they run outside a batch and may call FocusAsync directly.
+/// RazorConsole 0.7 also defers reentrant dispatch upstream. Keep this lifecycle safeguard
+/// so MandoCode's after-render focus requests explicitly run after their batch completes.
 /// </remarks>
 public static class DeferredFocus
 {
