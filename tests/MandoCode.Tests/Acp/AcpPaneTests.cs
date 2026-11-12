@@ -1064,6 +1064,13 @@ public class AcpPaneWorkspaceTests
 
 public sealed class AcpPaneRestrictionsTests
 {
+    [Fact]
+    public void ResumingAPane_DoesNotClaimAFreshStart()
+    {
+        Assert.Contains("fresh start", AcpPaneMode.EnterMessage("claude", resume: false));
+        Assert.DoesNotContain("fresh start", AcpPaneMode.EnterMessage("claude", resume: true));
+    }
+
     [Theory]
     [InlineData("s", "/agent-settings")]
     [InlineData("S", "/agent-settings")]

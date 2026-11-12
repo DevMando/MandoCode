@@ -228,9 +228,7 @@ public partial class App
 
         AcpPaneMode.Enter(Pane, agentName, resume);
         _acpMessages.Clear();
-        Print(new Text(
-            $"── This pane now runs the ACP agent '{agentName}' (fresh start: the native conversation is kept but not shared). /agent-acp stop returns to it. ──",
-            new Style(Color.Grey)));
+        Print(new Text(AcpPaneMode.EnterMessage(agentName, resume), new Style(Color.Grey)));
 
         var session = Pane.Session;
         _acpStart = Task.Run(async () =>
