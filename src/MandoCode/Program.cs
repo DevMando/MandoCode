@@ -268,7 +268,9 @@ class Program
             var config = provider.GetRequiredService<MandoCodeConfig>();
             var acp = provider.GetRequiredService<Services.Acp.AcpRuntimeHolder>();
             return new InputStateMachine(commands, fileProvider,
-                command => SlashCommands.IsAvailable(command, config) && !(acp.IsAcpPane && MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command)));
+                command => SlashCommands.IsAvailable(command, config)
+                           && !(acp.IsAcpPane && (MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command)
+                                                  || !MandoCode.Services.Acp.AcpPaneRestrictions.IsListed(command, acp.Runtime))));
         });
 
         // Retain rich markdown/tool renderables inside the widget conversation.

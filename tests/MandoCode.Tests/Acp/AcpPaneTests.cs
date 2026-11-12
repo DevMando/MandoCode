@@ -1064,6 +1064,39 @@ public class AcpPaneWorkspaceTests
 
 public sealed class AcpPaneRestrictionsTests
 {
+    private static AvailableCommand AgentCommand(string name) => new() { Name = name, Description = "x" };
+
+    [Fact]
+    public void ModelAndCompact_AreListedOnlyWhenTheAgentOffersThem()
+    {
+        var runtime = new FakeRuntime();
+        Assert.False(AcpPaneRestrictions.IsListed("/model", runtime));
+        Assert.False(AcpPaneRestrictions.IsListed("/compact", runtime));
+        Assert.False(AcpPaneRestrictions.IsListed("/model", null));
+
+        runtime.AvailableCommands = [AgentCommand("compact")];
+        runtime.ConfigOptions = [JsonSerializer.Deserialize(
+            """{"id":"model","name":"Model","category":"model","type":"select","currentValue":"a","options":[{"value":"a","name":"A"}]}""",
+            AcpJsonContext.Default.SessionConfigOption)!];
+
+        Assert.True(AcpPaneRestrictions.IsListed("/model", runtime));
+        Assert.True(AcpPaneRestrictions.IsListed("/compact", runtime));
+        Assert.True(AcpPaneRestrictions.IsListed("/clear", null));   // everything else is always offered
+    }
+
+    [Fact]
+    public void ClearModelAndCompact_AreDescribedForTheAcpPane_WithoutTouchingTheNativeText()
+    {
+        var native = MandoCode.Models.SlashCommands.All;
+
+        var described = AcpPaneRestrictions.DescribeCommands(native);
+
+        Assert.Contains("ACP conversation", described["/clear"]);
+        Assert.NotEqual(native["/clear"], described["/clear"]);
+        Assert.Equal(native["/help"], described["/help"]);
+        Assert.Contains("Wipe all conversation context", native["/clear"]);
+    }
+
     [Fact]
     public void ResumingAPane_DoesNotClaimAFreshStart()
     {

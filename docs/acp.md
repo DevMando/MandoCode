@@ -126,6 +126,9 @@ scope, so closing the pane ends its whole process tree. `/agent-acp restart` (in
   hidden) and the input loop follow the pane's current mode.
 - A pane opened with `--new-panel` has never started its native side; `/agent-acp stop` starts it then (connection
   check, model validation, MCP), exactly as a new pane would.
+- A new pane starts in the folder MandoCode was launched in, not in the folder the current pane was moved to. This is
+  the same for `/agent-new` (native) and `--new-panel`; a pane's folder is changed per pane afterwards (see
+  "Changing the folder").
 
 - Header: `ACP · <adapter name and version> · mode: <current mode> · <project folder>` (the pane name is added when
   there is more than one pane).
@@ -158,6 +161,16 @@ One set in the code (`AcpPaneRestrictions`) feeds autocomplete, the command disp
 | Agents group of the `@` picker | See above. |
 
 Typing a blocked command, or pressing its shortcut, prints `/<command> is not available in an ACP agent pane: <why>`.
+
+The `/` popup lists MandoCode's own commands only (minus the blocked ones). The agent's own commands (the
+`available_commands_update` list, for example `/init` or `/review`) are **not** listed and are **not forwarded** to
+the agent as prompts: typing one answers `Unknown command`. The only agent command MandoCode uses is `compact`, behind
+`/compact`. So `/model` and `/compact` appear in the popup only when the agent offers a model option or a `compact`
+command, and `/clear`, `/model` and `/compact` are described for the ACP pane ("Start a new ACP conversation in this
+agent…"), not with the native text. Forwarding the agent's other commands would be a separate change.
+
+In the popup, the first Enter on a `/command` accepts the highlighted suggestion and a second Enter sends it. This is
+how the input works in every pane, native or ACP.
 Everything else (`/help`, `/copy`, `/copy-code`, `/transcript-save`, workspace and agent-pane commands, the file
 explorer, Git changes, `/command` and `!cmd`) works as in a native pane.
 

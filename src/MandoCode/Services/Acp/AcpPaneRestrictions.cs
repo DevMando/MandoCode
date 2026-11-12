@@ -58,6 +58,28 @@ public static class AcpPaneRestrictions
         return name.StartsWith("ollama-", StringComparison.Ordinal) ? ModelLoop : null;
     }
 
+    /// <summary>
+    /// Whether the <c>/</c> popup of an ACP pane lists <paramref name="command"/>. <c>/model</c> and <c>/compact</c> only
+    /// work when the agent reports a model option or a compact command, so they are listed only then; everything else
+    /// the popup offers is always available. Typing a command that is not listed still answers with an explanation.
+    /// </summary>
+    public static bool IsListed(string command, IAcpAgentRuntime? runtime) => NameOf(command) switch
+    {
+        "model" => runtime is not null && AcpPaneCommands.ModelOption(runtime) is not null,
+        "compact" => runtime is not null && AcpPaneCommands.AgentOffersCompact(runtime),
+        _ => true,
+    };
+
+    /// <summary>Popup descriptions that say what these commands do in an ACP pane (they are not the native ones).</summary>
+    public static IReadOnlyDictionary<string, string> DescribeCommands(IReadOnlyDictionary<string, string> native)
+    {
+        var described = native.ToDictionary(kv => kv.Key, kv => kv.Value);
+        described["/clear"] = "Start a new ACP conversation in this agent (the native conversation is untouched)";
+        described["/model"] = "Pick the agent's model";
+        described["/compact"] = "Ask the agent to compact its conversation";
+        return described;
+    }
+
     /// <summary>The explanation printed when a blocked command is typed or reached through a shortcut.</summary>
     public static string Message(string command) =>
         $"/{NameOf(command)} is not available in an ACP agent pane: {ReasonFor(command) ?? "it belongs to the native agent"}.";

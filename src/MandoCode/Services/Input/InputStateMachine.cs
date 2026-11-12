@@ -36,6 +36,10 @@ public class InputStateMachine
     public void CancelFileLoading() => _fileProvider?.CancelPending();
     public bool FilesLoading => _fileProvider?.IsIndexing == true;
 
+    /// <summary>Replaces the descriptions the popup shows (an ACP pane describes some commands differently).</summary>
+    public void UseCommandDescriptions(IReadOnlyDictionary<string, string> descriptions) =>
+        State.CommandDescriptions = descriptions;
+
     public InputStateMachine(
         Dictionary<string, string> commands,
         FileAutocompleteProvider? fileProvider,

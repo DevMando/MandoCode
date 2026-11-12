@@ -16,6 +16,8 @@ public static class AcpPaneMode
         pane.AcpResume = resume;
         pane.AcpHeader = null;
         pane.Services.GetRequiredService<AcpRuntimeHolder>().IsAcpPane = true;
+        pane.Services.GetRequiredService<InputStateMachine>()
+            .UseCommandDescriptions(AcpPaneRestrictions.DescribeCommands(Models.SlashCommands.All));
         pane.Workspace.Refresh();
     }
 
@@ -33,6 +35,7 @@ public static class AcpPaneMode
         var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
         await holder.DisposeAsync();
         holder.IsAcpPane = false;
+        pane.Services.GetRequiredService<InputStateMachine>().UseCommandDescriptions(Models.SlashCommands.All);
         pane.Runtime = AgentRuntime.Native;
         pane.AcpAgentName = null;
         pane.AcpHeader = null;
