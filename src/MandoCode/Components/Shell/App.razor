@@ -1987,9 +1987,14 @@
         }
     }
 
+    /// <summary>The last assistant reply of this pane's own conversation: the ACP conversation in an ACP pane, the native one otherwise.</summary>
+    private string? LastAssistantReply =>
+        IsAcpPane ? _acpMessages.LastOrDefault(m => m.Role == "assistant")?.Text : _lastAiResponse;
+
     private void HandleCopyCommand()
     {
-        if (string.IsNullOrEmpty(_lastAiResponse))
+        var reply = LastAssistantReply;
+        if (string.IsNullOrEmpty(reply))
         {
             AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
             AnsiConsole.WriteLine();
@@ -1997,16 +2002,17 @@
         }
 
         // OSC 52: copy to system clipboard via terminal escape code
-        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(reply));
         TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
-        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
+        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({reply.Length} chars)[/]");
         AnsiConsole.WriteLine();
     }
 
     private void HandleCopyCodeCommand()
     {
-        if (string.IsNullOrEmpty(_lastAiResponse))
+        var reply = LastAssistantReply;
+        if (string.IsNullOrEmpty(reply))
         {
             AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
             AnsiConsole.WriteLine();
@@ -2015,7 +2021,7 @@
 
         // Extract fenced code blocks
         var codeBlockPattern = @"```(?:\w*)\r?\n([\s\S]*?)```";
-        var matches = Regex.Matches(_lastAiResponse, codeBlockPattern);
+        var matches = Regex.Matches(reply, codeBlockPattern);
 
         if (matches.Count == 0)
         {
