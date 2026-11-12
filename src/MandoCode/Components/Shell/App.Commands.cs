@@ -139,7 +139,8 @@ public partial class App
         {
             var args = parsed.Arguments;
             await CliReferenceCommands.SaveTranscriptAsync(Pane?.Session ?? TuiConsole.Current,
-                Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot, Config.GetEffectiveModelName(), args);
+                Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot,
+                IsAcpPane ? $"ACP · {_acp?.AgentTitle ?? Pane!.AcpAgentName}" : Config.GetEffectiveModelName(), args);
             return CliCommandResult.Continue;
         }
         if (command is "context-snap-create" or "context-snap-import") { await CaptureSnapshot(); await ShowSnapshots(command == "context-snap-create"); return CliCommandResult.Continue; }

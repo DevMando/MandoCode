@@ -83,6 +83,24 @@ public class AcpPaneAppTests
              "options":[{"value":"model-a","name":"Model A"},{"value":"model-b","name":"Model B"}]}
             """, AcpJsonContext.Default.SessionConfigOption)!;
 
+    // ─────────── /transcript-save ───────────
+
+    [Fact]
+    public async Task TranscriptSave_NamesTheAcpAgent_NotTheOllamaModel()
+    {
+        await using var h = Harness.Create();
+        var ollamaModel = h.Pane.Services.GetRequiredService<MandoCodeConfig>().GetEffectiveModelName();
+        var file = Path.Combine(h.Folder, "t.html");
+        h.Pane.Session.AppendUserPrompt("hello from the ACP pane");
+
+        await h.Run($"/transcript-save \"{file}\"");
+
+        Assert.True(File.Exists(file), h.Output);
+        var html = await File.ReadAllTextAsync(file);
+        Assert.Contains("ACP · fake-adapter 1.2.3", html.Replace("&#183;", "·").Replace("&middot;", "·"));
+        Assert.DoesNotContain(ollamaModel, html);
+    }
+
     // ─────────── /clear ───────────
 
     [Fact]
