@@ -343,10 +343,43 @@ public class AcpProtocolTests
         Assert.Equal("plan", mode.CurrentModeId);
     }
 
+    [Fact]
+    public void ConfigOptionUpdate_CarriesTheFullOptionList_WithFlatAndGroupedChoices()
+    {
+        var n = Update("""
+            "sessionUpdate":"config_option_update","configOptions":[
+              {"id":"model","name":"Model","category":"model","type":"select","currentValue":"b",
+               "options":[{"value":"a","name":"A"},{"value":"b","name":"B","description":"second"}]},
+              {"id":"effort","name":"Effort","type":"select","currentValue":"low",
+               "options":[{"group":"g","name":"Group","options":[{"value":"low","name":"Low"}]}]},
+              {"id":"fast","name":"Fast","type":"boolean","currentValue":true}]
+            """);
+
+        var update = Assert.IsType<ConfigOptionUpdate>(n.Update);
+        Assert.Equal(3, update.ConfigOptions.Count);
+        Assert.Equal("b", update.ConfigOptions[0].CurrentSelection);
+        Assert.Equal(["a", "b"], update.ConfigOptions[0].Choices().Select(c => c.Value));
+        Assert.Equal("Group", Assert.Single(update.ConfigOptions[1].Choices()).Group);
+        Assert.Null(update.ConfigOptions[2].CurrentSelection);   // a boolean is not a select
+        Assert.Empty(update.ConfigOptions[2].Choices());
+    }
+
+    [Fact]
+    public void SessionCapabilities_AreNeverNull_AndMeanPresenceOfAnObject()
+    {
+        var none = JsonSerializer.Deserialize("""{"sessionCapabilities":null}""", AcpJsonContext.Default.AgentCapabilities)!;
+        Assert.False(none.SessionCapabilities.CanList());
+
+        var some = JsonSerializer.Deserialize(
+            """{"sessionCapabilities":{"list":{},"close":null,"resume":{"_meta":{}}}}""", AcpJsonContext.Default.AgentCapabilities)!;
+        Assert.True(some.SessionCapabilities.CanList());
+        Assert.True(some.SessionCapabilities.CanResume());
+        Assert.False(some.SessionCapabilities.CanClose());
+    }
+
     [Theory]
     [InlineData("usage_update")]
     [InlineData("session_info_update")]
-    [InlineData("config_option_update")]
     [InlineData("something_invented_next_year")]
     public void UnknownSessionUpdate_IsPreservedNotThrown(string kind)
     {

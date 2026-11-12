@@ -22,13 +22,21 @@ using System.Text.Json.Nodes;
 //   auto-mode          session/new reports current mode "auto" (modes: default, auto); session/set_mode works
 //   set-mode-fails     like auto-mode, but session/set_mode answers with an error
 //   only-auto-mode     the only offered mode is "auto" (there is no "default")
+//   config-options     session/new offers configOptions (mode, model, grouped effort) and an available_commands_update
+//                      with compact; session/set_config_option works (unknown ids/values are refused)
+//   sessions           config-options plus loadSession and sessionCapabilities list/resume/close. Sessions are numbered
+//                      mock-session-N and kept in the file named by MOCK_SESSION_STORE (shared across processes) when set
+//   load-only          like sessions, but without sessionCapabilities (only session/load)
 //   sleep              does nothing (used as the child of hang-on-shutdown)
+//
+// In config-options / sessions / load-only a prompt "__state" answers with the sessions this process saw closed, and
+// a prompt "/compact" answers "compacted" (so tests can see what was sent).
 var scenario = args.Length > 0 ? args[0] : "echo";
 return await new MockAgent(scenario, args).RunAsync();
 
 internal sealed class MockAgent
 {
-    private const string SessionId = "mock-session-1";
+    private string _sessionId = "mock-session-1";
 
     private readonly string _scenario;
     private readonly string[] _args;
@@ -38,6 +46,91 @@ internal sealed class MockAgent
     private readonly TaskCompletionSource _cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _nextCallId;
     private string _mode = "default";
+
+    // config-options / sessions / load-only
+    private bool Config => _scenario is "config-options" or "sessions" or "load-only";
+    private bool Sessions => _scenario is "sessions" or "load-only";
+    private readonly Dictionary<string, string> _values = new() { ["mode"] = "default", ["model"] = "model-a", ["effort"] = "medium" };
+    private readonly List<string> _closed = [];
+    private readonly object _storeGate = new();
+    private static readonly string? StorePath = Environment.GetEnvironmentVariable("MOCK_SESSION_STORE");
+    private readonly Dictionary<string, MockSession> _local = new();
+
+    private sealed class MockSession
+    {
+        public string Cwd { get; set; } = "";
+        public string Title { get; set; } = "";
+        public List<string[]> History { get; set; } = [];
+    }
+
+    private Dictionary<string, MockSession> LoadStore()
+    {
+        lock (_storeGate)
+        {
+            if (StorePath is null || !File.Exists(StorePath))
+                return new Dictionary<string, MockSession>(_local);
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, MockSession>>(File.ReadAllText(StorePath)) ?? new();
+        }
+    }
+
+    private void SaveStore(Dictionary<string, MockSession> store)
+    {
+        lock (_storeGate)
+        {
+            _local.Clear();
+            foreach (var pair in store)
+                _local[pair.Key] = pair.Value;
+            if (StorePath is not null)
+                File.WriteAllText(StorePath, System.Text.Json.JsonSerializer.Serialize(store));
+        }
+    }
+
+    private JsonArray ConfigOptions() => new(
+        new JsonObject
+        {
+            ["id"] = "mode", ["name"] = "Mode", ["category"] = "mode", ["type"] = "select",
+            ["currentValue"] = _values["mode"],
+            ["options"] = new JsonArray(
+                new JsonObject { ["value"] = "default", ["name"] = "Default" },
+                new JsonObject { ["value"] = "plan", ["name"] = "Plan" }),
+        },
+        new JsonObject
+        {
+            ["id"] = "model", ["name"] = "Model", ["category"] = "model", ["type"] = "select",
+            ["currentValue"] = _values["model"],
+            ["options"] = new JsonArray(
+                new JsonObject { ["value"] = "model-a", ["name"] = "Model A", ["description"] = "The first one" },
+                new JsonObject { ["value"] = "model-b", ["name"] = "Model B" }),
+        },
+        new JsonObject
+        {
+            ["id"] = "effort", ["name"] = "Effort", ["category"] = "thought_level", ["type"] = "select",
+            ["currentValue"] = _values["effort"],
+            ["options"] = new JsonArray(
+                new JsonObject
+                {
+                    ["group"] = "levels", ["name"] = "Levels",
+                    ["options"] = new JsonArray(
+                        new JsonObject { ["value"] = "low", ["name"] = "Low" },
+                        new JsonObject { ["value"] = "medium", ["name"] = "Medium" }),
+                }),
+        });
+
+    private void ResetValues()
+    {
+        _values["mode"] = "default";
+        _values["model"] = "model-a";
+        _values["effort"] = "medium";
+    }
+
+    private void SendCommands() =>
+        Update(new JsonObject
+        {
+            ["sessionUpdate"] = "available_commands_update",
+            ["availableCommands"] = new JsonArray(
+                new JsonObject { ["name"] = "compact", ["description"] = "Summarize the conversation" },
+                new JsonObject { ["name"] = "review", ["description"] = "Review the changes" }),
+        });
 
     public MockAgent(string scenario, string[] args)
     {
@@ -132,8 +225,11 @@ internal sealed class MockAgent
                     ["agentInfo"] = new JsonObject { ["name"] = "mock-" + _scenario, ["version"] = "0.0.1" },
                     ["agentCapabilities"] = new JsonObject
                     {
-                        ["loadSession"] = false,
+                        ["loadSession"] = Sessions,
                         ["promptCapabilities"] = new JsonObject { ["image"] = false, ["audio"] = false, ["embeddedContext"] = true },
+                        ["sessionCapabilities"] = _scenario == "sessions"
+                            ? new JsonObject { ["list"] = new JsonObject(), ["resume"] = new JsonObject(), ["close"] = new JsonObject() }
+                            : null,
                     },
                     ["authMethods"] = _scenario == "auth-required"
                         ? new JsonArray(new JsonObject { ["id"] = "mock-login", ["name"] = "Mock login", ["description"] = "run mock login" })
@@ -169,13 +265,87 @@ internal sealed class MockAgent
                         offered.Add(new JsonObject { ["id"] = "default", ["name"] = "Default" });
                     if (startsInAuto)
                         offered.Add(new JsonObject { ["id"] = "auto", ["name"] = "Auto" });
-                    Reply(id, new JsonObject
+                    if (Sessions)
                     {
-                        ["sessionId"] = SessionId,
+                        var store = LoadStore();
+                        _sessionId = "mock-session-" + (store.Count + 1);
+                        store[_sessionId] = new MockSession { Cwd = message["params"]?["cwd"]?.GetValue<string>() ?? "", Title = "Session " + (store.Count + 1) };
+                        SaveStore(store);
+                    }
+
+                    if (Config)
+                        ResetValues();
+                    var created = new JsonObject
+                    {
+                        ["sessionId"] = _sessionId,
                         ["modes"] = new JsonObject { ["currentModeId"] = _mode, ["availableModes"] = offered },
-                    });
+                    };
+                    if (Config)
+                        created["configOptions"] = ConfigOptions();
+                    Reply(id, created);
+                    if (Config)
+                        SendCommands();
                 }
 
+                break;
+
+            case "session/set_config_option" when Config:
+            {
+                var configId = message["params"]?["configId"]?.GetValue<string>() ?? "";
+                var value = message["params"]?["value"]?.GetValue<string>() ?? "";
+                var allowed = ConfigOptions().Cast<JsonObject>().FirstOrDefault(o => o["id"]!.GetValue<string>() == configId);
+                var known = allowed?["options"]!.AsArray().SelectMany(o => o!["options"] is JsonArray inner ? inner.Select(x => x!["value"]!.GetValue<string>()) : [o["value"]!.GetValue<string>()]) ?? [];
+                if (allowed is null || !known.Contains(value))
+                    Error(id, -32602, $"Unknown option or value: {configId}={value}");
+                else
+                {
+                    _values[configId] = value;
+                    Reply(id, new JsonObject { ["configOptions"] = ConfigOptions() });
+                }
+
+                break;
+            }
+
+            case "session/list" when _scenario == "sessions":
+            {
+                var cwd = message["params"]?["cwd"]?.GetValue<string>();
+                var sessions = new JsonArray();
+                foreach (var (key, value) in LoadStore().Where(p => cwd is null || p.Value.Cwd == cwd))
+                    sessions.Add(new JsonObject { ["sessionId"] = key, ["cwd"] = value.Cwd, ["title"] = value.Title, ["updatedAt"] = "2026-11-12T10:00:00Z" });
+                Reply(id, new JsonObject { ["sessions"] = sessions });
+                break;
+            }
+
+            case "session/resume" when _scenario == "sessions":
+            case "session/load" when Sessions:
+            {
+                var wanted = message["params"]?["sessionId"]?.GetValue<string>() ?? "";
+                var cwd = message["params"]?["cwd"]?.GetValue<string>() ?? "";
+                var store = LoadStore();
+                if (!store.TryGetValue(wanted, out var known) || known.Cwd != cwd)
+                {
+                    Error(id, -32002, "Session not found: " + wanted);
+                    break;
+                }
+
+                _sessionId = wanted;
+                if (method == "session/load")
+                {
+                    foreach (var turn in known.History)
+                        Update(new JsonObject
+                        {
+                            ["sessionUpdate"] = turn[0] == "user" ? "user_message_chunk" : "agent_message_chunk",
+                            ["content"] = new JsonObject { ["type"] = "text", ["text"] = turn[1] },
+                        });
+                }
+
+                Reply(id, new JsonObject { ["configOptions"] = ConfigOptions() });
+                break;
+            }
+
+            case "session/close" when _scenario == "sessions":
+                _closed.Add(message["params"]?["sessionId"]?.GetValue<string>() ?? "");
+                Reply(id, new JsonObject());
                 break;
 
             case "session/set_mode":
@@ -193,6 +363,30 @@ internal sealed class MockAgent
 
             case "session/prompt":
                 var text = message["params"]?["prompt"]?[0]?["text"]?.GetValue<string>() ?? "";
+                if (Config && text is "__state" or "/compact")
+                {
+                    var answer = text == "/compact"
+                        ? "compacted"
+                        : $"closed=[{string.Join(",", _closed)}] session={_sessionId} model={_values["model"]} mode={_values["mode"]}";
+                    _ = Task.Run(() =>
+                    {
+                        Chunk(answer);
+                        Reply(id, new JsonObject { ["stopReason"] = "end_turn" });
+                    });
+                    break;
+                }
+
+                if (Sessions)
+                {
+                    var store = LoadStore();
+                    if (store.TryGetValue(_sessionId, out var current))
+                    {
+                        current.History.Add(["user", text]);
+                        current.History.Add(["assistant", "echo: " + text]);
+                        SaveStore(store);
+                    }
+                }
+
                 _ = Task.Run(() => RunPromptAsync(id, text));
                 break;
 
@@ -215,7 +409,7 @@ internal sealed class MockAgent
             {
                 var response = await CallClientAsync("session/request_permission", new JsonObject
                 {
-                    ["sessionId"] = SessionId,
+                    ["sessionId"] = _sessionId,
                     ["toolCall"] = new JsonObject { ["toolCallId"] = "call-1", ["title"] = "Edit file", ["kind"] = "edit" },
                     ["options"] = new JsonArray(
                         new JsonObject { ["optionId"] = "allow", ["name"] = "Allow", ["kind"] = "allow_once" },
@@ -278,7 +472,7 @@ internal sealed class MockAgent
 
             case "fs-roundtrip":
             {
-                var read = await CallClientAsync("fs/read_text_file", new JsonObject { ["sessionId"] = SessionId, ["path"] = text });
+                var read = await CallClientAsync("fs/read_text_file", new JsonObject { ["sessionId"] = _sessionId, ["path"] = text });
                 if (read["error"] is JsonNode readError)
                 {
                     Chunk("read failed: " + readError["message"]?.GetValue<string>());
@@ -289,7 +483,7 @@ internal sealed class MockAgent
                 var content = read["result"]?["content"]?.GetValue<string>() ?? "";
                 var write = await CallClientAsync("fs/write_text_file", new JsonObject
                 {
-                    ["sessionId"] = SessionId,
+                    ["sessionId"] = _sessionId,
                     ["path"] = text + ".out",
                     ["content"] = content.ToUpperInvariant(),
                 });
@@ -391,7 +585,7 @@ internal sealed class MockAgent
         {
             ["jsonrpc"] = "2.0",
             ["method"] = "session/update",
-            ["params"] = new JsonObject { ["sessionId"] = SessionId, ["update"] = update },
+            ["params"] = new JsonObject { ["sessionId"] = _sessionId, ["update"] = update },
         });
 
     private static void StartChild()

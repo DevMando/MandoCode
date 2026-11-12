@@ -46,8 +46,39 @@ public interface IAcpAgentRuntime : IAsyncDisposable
     /// <summary>What the agent accepts in a prompt; decide what to send from this.</summary>
     PromptCapabilities PromptCapabilities { get; }
 
+    /// <summary>The current session's id, once connected.</summary>
+    string? SessionId { get; }
+
+    /// <summary>The settings (model, mode, ...) the agent exposes for the current session.</summary>
+    IReadOnlyList<SessionConfigOption> ConfigOptions { get; }
+
+    /// <summary>The slash commands the agent announced for the current session.</summary>
+    IReadOnlyList<AvailableCommand> AvailableCommands { get; }
+
+    /// <summary>Which session features the connected agent offers.</summary>
+    AcpSessionSupport Support { get; }
+
+    /// <summary>How the current session was obtained (new, resumed, loaded).</summary>
+    AcpSessionOrigin SessionOrigin { get; }
+
+    /// <summary>Raised with the id of every session this runtime starts, including after <see cref="NewConversationAsync"/>.</summary>
+    event Action<string>? SessionStarted;
+
     /// <summary>Raised when the status, mode or title changes (on any thread).</summary>
     event Action? Changed;
+
+    /// <summary>
+    /// A new conversation in the same process and folder: closes the current session when the agent supports it, then
+    /// <c>session/new</c> and the start mode. Throws <see cref="InvalidOperationException"/> while a turn is running.
+    /// </summary>
+    /// <returns>True when the old session was closed on the agent; false when the agent cannot close sessions.</returns>
+    Task<bool> NewConversationAsync(CancellationToken cancellationToken);
+
+    /// <summary>Sets a select option; throws <see cref="JsonRpcException"/> when the agent refuses it.</summary>
+    Task SetConfigOptionAsync(string configId, string value, CancellationToken cancellationToken);
+
+    /// <summary>The agent's sessions for this pane's folder (needs <see cref="AcpSessionSupport.CanList"/>).</summary>
+    Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(CancellationToken cancellationToken);
 
     /// <summary>Trust check, launch, <c>initialize</c>, <c>session/new</c> and the start mode. Throws <see cref="AcpRuntimeException"/>.</summary>
     Task ConnectAsync(CancellationToken cancellationToken);
@@ -68,6 +99,8 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
     private readonly string? _logDirectory;
     private readonly IAcpClientHandler _handler;
     private readonly Action<string, string>? _extensionDump;
+    private readonly AcpResumeRequest? _resume;
+    private readonly Action<SessionUpdate>? _history;
     private readonly List<string> _warnings = [];
     private readonly object _gate = new();
 
@@ -86,9 +119,13 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         Func<AcpLaunchPlan, Task<bool>> confirm,
         string? logDirectory = null,
         IAcpClientHandler? handler = null,
-        Action<string, string>? extensionDump = null)
+        Action<string, string>? extensionDump = null,
+        AcpResumeRequest? resume = null,
+        Action<SessionUpdate>? history = null)
     {
         _extensionDump = extensionDump;
+        _resume = resume;
+        _history = history;
         _handler = handler ?? new DenyAllClientHandler();
         AgentName = agentName;
         _config = config;
@@ -103,7 +140,25 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
     public string? CurrentMode => _session?.CurrentModeId;
     public IReadOnlyList<string> StartupWarnings { get { lock (_gate) return _warnings.ToArray(); } }
     public PromptCapabilities PromptCapabilities => _session?.AgentCapabilities.PromptCapabilities ?? new PromptCapabilities();
+    public string? SessionId => _session?.SessionId;
+    public IReadOnlyList<SessionConfigOption> ConfigOptions => _session?.ConfigOptions ?? [];
+    public IReadOnlyList<AvailableCommand> AvailableCommands => _session?.AvailableCommands ?? [];
+    public AcpSessionOrigin SessionOrigin { get; private set; }
+    public event Action<string>? SessionStarted;
     public event Action? Changed;
+
+    public AcpSessionSupport Support
+    {
+        get
+        {
+            var capabilities = _client?.Initialized?.AgentCapabilities ?? _session?.AgentCapabilities;
+            return capabilities is null
+                ? AcpSessionSupport.None
+                : new AcpSessionSupport(
+                    capabilities.SessionCapabilities.CanList(), capabilities.SessionCapabilities.CanResume(),
+                    capabilities.LoadSession, capabilities.SessionCapabilities.CanClose());
+        }
+    }
 
     public AcpRuntimeStatus Status
     {
@@ -186,10 +241,13 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
             var initialized = await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _title, DescribeAgent(initialized));
 
-            var session = await client.NewSessionAsync(_workingDirectory, cancellationToken).ConfigureAwait(false);
+            var (session, origin) = await OpenInitialSessionAsync(client, cancellationToken).ConfigureAwait(false);
             session.StateChanged += () => Changed?.Invoke();
             _session = session;
-            await ApplyStartModeAsync(session, cancellationToken).ConfigureAwait(false);
+            SessionOrigin = origin;
+            // A continued session keeps the mode it was left in.
+            if (origin == AcpSessionOrigin.New)
+                await ApplyStartModeAsync(session, cancellationToken).ConfigureAwait(false);
 
             lock (_gate)
                 _client = client;
@@ -211,6 +269,84 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         }
 
         SetStatus(AcpRuntimeStatus.Ready);
+        SessionStarted?.Invoke(_session!.SessionId);
+    }
+
+    /// <summary>The earlier session when one was asked for and the agent can continue it; otherwise a new one (with a warning).</summary>
+    private async Task<(AcpSession Session, AcpSessionOrigin Origin)> OpenInitialSessionAsync(AcpClient client, CancellationToken cancellationToken)
+    {
+        if (_resume is { } resume)
+        {
+            var capabilities = client.Initialized!.AgentCapabilities;
+            try
+            {
+                if (capabilities.SessionCapabilities.CanResume())
+                    return (await client.ResumeSessionAsync(resume.SessionId, _workingDirectory, cancellationToken).ConfigureAwait(false), AcpSessionOrigin.Resumed);
+
+                if (capabilities.LoadSession)
+                    return (await client.LoadSessionAsync(resume.SessionId, _workingDirectory, _history ?? (_ => { }), cancellationToken).ConfigureAwait(false), AcpSessionOrigin.Loaded);
+
+                AddWarning("The agent can neither resume nor load sessions, so a new session was started.");
+            }
+            catch (Exception ex) when (ex is JsonRpcException or AcpTimeoutException)
+            {
+                AddWarning($"Could not continue the previous session ({ex.Message}); a new session was started.");
+            }
+        }
+
+        return (await client.NewSessionAsync(_workingDirectory, cancellationToken).ConfigureAwait(false), AcpSessionOrigin.New);
+    }
+
+    public async Task<bool> NewConversationAsync(CancellationToken cancellationToken)
+    {
+        var client = _client;
+        var old = _session;
+        if (Status != AcpRuntimeStatus.Ready || client is null || old is null)
+            throw new InvalidOperationException("The agent is not running.");
+        if (old.IsBusy)
+            throw new InvalidOperationException("A request is still running.");
+
+        var closed = false;
+        if (Support.CanClose)
+        {
+            try
+            {
+                await client.CloseSessionAsync(old, cancellationToken).ConfigureAwait(false);
+                closed = true;
+            }
+            catch (Exception ex) when (ex is JsonRpcException or AcpTimeoutException)
+            {
+                AddWarning($"The agent did not close the previous session ({ex.Message}).");
+            }
+        }
+
+        var session = await client.NewSessionAsync(_workingDirectory, cancellationToken).ConfigureAwait(false);
+        session.StateChanged += () => Changed?.Invoke();
+        _session = session;
+        SessionOrigin = AcpSessionOrigin.New;
+        await ApplyStartModeAsync(session, cancellationToken).ConfigureAwait(false);
+        Changed?.Invoke();
+        SessionStarted?.Invoke(session.SessionId);
+        return closed;
+    }
+
+    public async Task SetConfigOptionAsync(string configId, string value, CancellationToken cancellationToken)
+    {
+        var session = _session;
+        if (Status != AcpRuntimeStatus.Ready || session is null)
+            throw new InvalidOperationException("The agent is not running.");
+        await session.SetConfigOptionAsync(configId, value, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(CancellationToken cancellationToken)
+    {
+        var client = _client;
+        if (Status != AcpRuntimeStatus.Ready || client is null)
+            throw new InvalidOperationException("The agent is not running.");
+
+        var sessions = await client.ListSessionsAsync(_workingDirectory, cancellationToken: cancellationToken).ConfigureAwait(false);
+        // The folder filter is the agent's to apply; do not trust it for what this pane may show or resume.
+        return sessions.Where(info => AcpPaths.SameFolder(info.Cwd, _workingDirectory)).ToArray();
     }
 
     private static string? DescribeAgent(InitializeResponse initialized) =>

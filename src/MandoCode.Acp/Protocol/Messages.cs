@@ -65,6 +65,9 @@ public sealed record AgentCapabilities : AcpObject
     [JsonPropertyName("loadSession")] public bool LoadSession { get; set; }
     [JsonPropertyName("promptCapabilities")] public PromptCapabilities PromptCapabilities { get; set; } = new();
     [JsonPropertyName("mcpCapabilities")] public McpCapabilities McpCapabilities { get; set; } = new();
+    private SessionCapabilities? _sessionCapabilities;
+    /// <summary>Never null: an agent may send <c>null</c> (or nothing) for it, which means no extra session features.</summary>
+    [JsonPropertyName("sessionCapabilities")] public SessionCapabilities SessionCapabilities { get => _sessionCapabilities ??= new(); set => _sessionCapabilities = value; }
 }
 
 /// <summary>
@@ -162,6 +165,7 @@ public sealed record NewSessionResponse : AcpObject
 {
     [JsonPropertyName("sessionId")] public string SessionId { get; set; } = "";
     [JsonPropertyName("modes")] public SessionModeState? Modes { get; set; }
+    [JsonPropertyName("configOptions")] public IReadOnlyList<SessionConfigOption>? ConfigOptions { get; set; }
 }
 
 public sealed record LoadSessionRequest : AcpObject
@@ -174,6 +178,7 @@ public sealed record LoadSessionRequest : AcpObject
 public sealed record LoadSessionResponse : AcpObject
 {
     [JsonPropertyName("modes")] public SessionModeState? Modes { get; set; }
+    [JsonPropertyName("configOptions")] public IReadOnlyList<SessionConfigOption>? ConfigOptions { get; set; }
 }
 
 public sealed record SetSessionModeRequest : AcpObject

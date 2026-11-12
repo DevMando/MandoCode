@@ -83,6 +83,18 @@ public class AcpSchemaDriftTests
         (typeof(AvailableCommand), "AvailableCommand"),
         (typeof(AvailableCommandsUpdate), "AvailableCommandsUpdate"),
         (typeof(CurrentModeUpdate), "CurrentModeUpdate"),
+        (typeof(ConfigOptionUpdate), "ConfigOptionUpdate"),
+        (typeof(SessionCapabilities), "SessionCapabilities"),
+        (typeof(SessionConfigSelectOption), "SessionConfigSelectOption"),
+        (typeof(SessionConfigSelectGroup), "SessionConfigSelectGroup"),
+        (typeof(SetSessionConfigOptionResponse), "SetSessionConfigOptionResponse"),
+        (typeof(ResumeSessionRequest), "ResumeSessionRequest"),
+        (typeof(ResumeSessionResponse), "ResumeSessionResponse"),
+        (typeof(CloseSessionRequest), "CloseSessionRequest"),
+        (typeof(CloseSessionResponse), "CloseSessionResponse"),
+        (typeof(ListSessionsRequest), "ListSessionsRequest"),
+        (typeof(ListSessionsResponse), "ListSessionsResponse"),
+        (typeof(SessionInfo), "SessionInfo"),
     ];
 
     // Union discriminators live on the wrapping oneOf, not in the variant's own definition.

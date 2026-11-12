@@ -21,10 +21,12 @@ public sealed class AcpSession
         JsonRpcConnection connection,
         string sessionId,
         SessionModeState? modes,
+        IReadOnlyList<SessionConfigOption>? configOptions,
         AgentCapabilities agentCapabilities,
         IReadOnlyList<AuthMethod> authMethods,
         TimeSpan cancelGrace)
     {
+        ConfigOptions = configOptions ?? [];
         _connection = connection;
         _authMethods = authMethods;
         _cancelGrace = cancelGrace;
@@ -40,10 +42,33 @@ public sealed class AcpSession
     public AgentCapabilities AgentCapabilities { get; }
 
     /// <summary>The modes the agent offered in <c>session/new</c>, if any (shown, never switched, in this client).</summary>
-    public SessionModeState? Modes { get; }
+    public SessionModeState? Modes { get; private set; }
 
     /// <summary>The mode id last announced by the agent.</summary>
     public string? CurrentModeId { get; private set; }
+
+    /// <summary>The settings the agent exposes for this session (model, mode, ...), as last announced.</summary>
+    public IReadOnlyList<SessionConfigOption> ConfigOptions { get; private set; }
+
+    /// <summary>Where history replayed by <c>session/load</c> goes; null outside a load, when such updates are dropped.</summary>
+    internal Action<SessionUpdate>? HistorySink { get; set; }
+
+    /// <summary>
+    /// Sets a select option (<c>session/set_config_option</c>) and adopts the full option list the agent answers with.
+    /// Throws <see cref="JsonRpcException"/> when the agent refuses.
+    /// </summary>
+    public async Task SetConfigOptionAsync(string configId, string value, CancellationToken cancellationToken = default)
+    {
+        var response = await _connection.SendRequestAsync(
+            AcpMethods.SessionSetConfigOption,
+            new SetSessionConfigOptionRequest { SessionId = SessionId, ConfigId = configId, Value = value },
+            AcpJsonContext.Default.SetSessionConfigOptionRequest,
+            AcpJsonContext.Default.SetSessionConfigOptionResponse,
+            cancellationToken).ConfigureAwait(false);
+
+        ConfigOptions = response.ConfigOptions;
+        StateChanged?.Invoke();
+    }
 
     /// <summary>The slash commands the agent last announced.</summary>
     public IReadOnlyList<AvailableCommand> AvailableCommands { get; private set; } = [];
@@ -215,6 +240,16 @@ public sealed class AcpSession
                 CurrentModeId = mode.CurrentModeId;
                 StateChanged?.Invoke();
                 break;
+            case ConfigOptionUpdate options:
+                ConfigOptions = options.ConfigOptions;
+                StateChanged?.Invoke();
+                break;
+        }
+
+        if (HistorySink is { } history)
+        {
+            history(update);
+            return;
         }
 
         AcpTurn? turn;
@@ -222,6 +257,20 @@ public sealed class AcpSession
             turn = _activeTurn;
 
         turn?.Push(update);
+    }
+
+    /// <summary>Takes the modes and options a <c>session/load</c> answered with.</summary>
+    internal void Adopt(SessionModeState? modes, IReadOnlyList<SessionConfigOption>? configOptions)
+    {
+        if (modes is not null)
+        {
+            Modes = modes;
+            CurrentModeId = modes.CurrentModeId;
+        }
+
+        if (configOptions is not null)
+            ConfigOptions = configOptions;
+        StateChanged?.Invoke();
     }
 
     /// <summary>The token a permission prompt must observe, or null when a cancel is already under way.</summary>

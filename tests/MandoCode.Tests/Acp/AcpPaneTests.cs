@@ -28,6 +28,39 @@ public sealed class FakeRuntime : IAcpAgentRuntime
     public IReadOnlyList<string> StartupWarnings { get; } = [];
     public PromptCapabilities PromptCapabilities { get; } = new();
     public event Action? Changed { add { } remove { } }
+    public event Action<string>? SessionStarted;
+
+    public string? SessionId { get; set; } = "session-1";
+    public IReadOnlyList<SessionConfigOption> ConfigOptions { get; set; } = [];
+    public IReadOnlyList<AvailableCommand> AvailableCommands { get; set; } = [];
+    public AcpSessionSupport Support { get; set; } = AcpSessionSupport.None;
+    public AcpSessionOrigin SessionOrigin { get; set; } = AcpSessionOrigin.New;
+
+    public int NewConversations;
+    public Exception? NewConversationFails { get; set; }
+    public List<(string Id, string Value)> ConfigChanges { get; } = [];
+    public Exception? ConfigChangeFails { get; set; }
+    public IReadOnlyList<SessionInfo> Sessions { get; set; } = [];
+
+    public Task<bool> NewConversationAsync(CancellationToken cancellationToken)
+    {
+        if (NewConversationFails is { } failure)
+            throw failure;
+        NewConversations++;
+        SessionId = "session-" + (NewConversations + 1);
+        SessionStarted?.Invoke(SessionId);
+        return Task.FromResult(Support.CanClose);
+    }
+
+    public Task SetConfigOptionAsync(string configId, string value, CancellationToken cancellationToken)
+    {
+        if (ConfigChangeFails is { } failure)
+            throw failure;
+        ConfigChanges.Add((configId, value));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(CancellationToken cancellationToken) => Task.FromResult(Sessions);
 
     public List<IReadOnlyList<ContentBlock>> Prompts { get; } = [];
     public int CancelCalls;

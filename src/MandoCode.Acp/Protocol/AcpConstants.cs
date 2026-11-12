@@ -21,6 +21,10 @@ public static class AcpMethods
     public const string SessionPrompt = "session/prompt";
     public const string SessionCancel = "session/cancel";
     public const string SessionSetMode = "session/set_mode";
+    public const string SessionSetConfigOption = "session/set_config_option";
+    public const string SessionList = "session/list";
+    public const string SessionResume = "session/resume";
+    public const string SessionClose = "session/close";
 
     // Agent -> client
     public const string SessionUpdate = "session/update";

@@ -121,10 +121,121 @@ public sealed class AcpClient : IAsyncDisposable
         if (string.IsNullOrEmpty(response.SessionId))
             throw new JsonRpcException(AcpErrorCodes.InternalError, "The agent returned a session without an id.");
 
-        var session = new AcpSession(_connection, response.SessionId, response.Modes,
+        var session = new AcpSession(_connection, response.SessionId, response.Modes, response.ConfigOptions,
             initialized.AgentCapabilities, initialized.AuthMethods, _options.CancelGrace);
         _sessions[session.SessionId] = session;
         return session;
+    }
+
+    /// <summary>
+    /// Continues <paramref name="sessionId"/> without replaying its messages (<c>session/resume</c>). Throws
+    /// <see cref="NotSupportedException"/> when the agent does not offer it; the session must belong to <paramref name="workingDirectory"/>.
+    /// </summary>
+    public async Task<AcpSession> ResumeSessionAsync(string sessionId, string workingDirectory, CancellationToken cancellationToken = default)
+    {
+        var initialized = Initialized ?? throw new InvalidOperationException("Call ConnectAsync first.");
+        if (!initialized.AgentCapabilities.SessionCapabilities.CanResume())
+            throw new NotSupportedException("The agent does not support resuming sessions.");
+
+        var response = await WithTimeoutAsync("session/resume", cancellationToken, token =>
+            _connection.SendRequestAsync(AcpMethods.SessionResume,
+                new ResumeSessionRequest { SessionId = sessionId, Cwd = workingDirectory, McpServers = [] },
+                AcpJsonContext.Default.ResumeSessionRequest, AcpJsonContext.Default.ResumeSessionResponse, token))
+            .ConfigureAwait(false);
+
+        var session = new AcpSession(_connection, sessionId, response.Modes, response.ConfigOptions,
+            initialized.AgentCapabilities, initialized.AuthMethods, _options.CancelGrace);
+        _sessions[sessionId] = session;
+        return session;
+    }
+
+    /// <summary>
+    /// Loads <paramref name="sessionId"/> (<c>session/load</c>): the agent replays the conversation as updates, which are
+    /// passed to <paramref name="history"/> in order before this returns. Throws <see cref="NotSupportedException"/>
+    /// when the agent does not offer it.
+    /// </summary>
+    public async Task<AcpSession> LoadSessionAsync(
+        string sessionId, string workingDirectory, Action<SessionUpdate> history, CancellationToken cancellationToken = default)
+    {
+        var initialized = Initialized ?? throw new InvalidOperationException("Call ConnectAsync first.");
+        if (!initialized.AgentCapabilities.LoadSession)
+            throw new NotSupportedException("The agent does not support loading sessions.");
+
+        // The replay arrives before the response, addressed to this id: the session must be known by then.
+        var session = new AcpSession(_connection, sessionId, null, null,
+            initialized.AgentCapabilities, initialized.AuthMethods, _options.CancelGrace) { HistorySink = history };
+        _sessions[sessionId] = session;
+
+        try
+        {
+            var response = await WithTimeoutAsync("session/load", cancellationToken, token =>
+                _connection.SendRequestAsync(AcpMethods.SessionLoad,
+                    new LoadSessionRequest { SessionId = sessionId, Cwd = workingDirectory, McpServers = [] },
+                    AcpJsonContext.Default.LoadSessionRequest, AcpJsonContext.Default.LoadSessionResponse, token))
+                .ConfigureAwait(false);
+
+            // The response can be read before the last replayed updates have been delivered.
+            await _connection.DrainNotificationsAsync().ConfigureAwait(false);
+            session.HistorySink = null;
+            session.Adopt(response.Modes, response.ConfigOptions);
+            return session;
+        }
+        catch
+        {
+            _sessions.TryRemove(sessionId, out _);
+            throw;
+        }
+    }
+
+    /// <summary>Lists the agent's sessions for <paramref name="workingDirectory"/> (<c>session/list</c>), following pages up to a limit.</summary>
+    public async Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(
+        string? workingDirectory = null, int maxPages = 10, CancellationToken cancellationToken = default)
+    {
+        var initialized = Initialized ?? throw new InvalidOperationException("Call ConnectAsync first.");
+        if (!initialized.AgentCapabilities.SessionCapabilities.CanList())
+            throw new NotSupportedException("The agent does not support listing sessions.");
+
+        var result = new List<SessionInfo>();
+        string? cursor = null;
+        for (var page = 0; page < maxPages; page++)
+        {
+            var response = await WithTimeoutAsync("session/list", cancellationToken, token =>
+                _connection.SendRequestAsync(AcpMethods.SessionList,
+                    new ListSessionsRequest { Cwd = workingDirectory, Cursor = cursor },
+                    AcpJsonContext.Default.ListSessionsRequest, AcpJsonContext.Default.ListSessionsResponse, token))
+                .ConfigureAwait(false);
+
+            result.AddRange(response.Sessions);
+            cursor = response.NextCursor;
+            if (string.IsNullOrEmpty(cursor))
+                break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Closes <paramref name="session"/> on the agent (<c>session/close</c>) and forgets it. Throws
+    /// <see cref="NotSupportedException"/> when the agent does not offer it; the caller then keeps or kills the process.
+    /// </summary>
+    public async Task CloseSessionAsync(AcpSession session, CancellationToken cancellationToken = default)
+    {
+        var initialized = Initialized ?? throw new InvalidOperationException("Call ConnectAsync first.");
+        if (!initialized.AgentCapabilities.SessionCapabilities.CanClose())
+            throw new NotSupportedException("The agent does not support closing sessions.");
+
+        try
+        {
+            await WithTimeoutAsync("session/close", cancellationToken, token =>
+                _connection.SendRequestAsync(AcpMethods.SessionClose,
+                    new CloseSessionRequest { SessionId = session.SessionId },
+                    AcpJsonContext.Default.CloseSessionRequest, AcpJsonContext.Default.CloseSessionResponse, token))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _sessions.TryRemove(session.SessionId, out _);
+        }
     }
 
     private async Task<T> WithTimeoutAsync<T>(string operation, CancellationToken cancellationToken, Func<CancellationToken, Task<T>> action)

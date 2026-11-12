@@ -97,6 +97,7 @@ internal sealed class SessionUpdateConverter : DiscriminatedUnionConverter<Sessi
         "plan" => root.Deserialize(AcpJsonContext.Default.Plan),
         "available_commands_update" => root.Deserialize(AcpJsonContext.Default.AvailableCommandsUpdate),
         "current_mode_update" => root.Deserialize(AcpJsonContext.Default.CurrentModeUpdate),
+        "config_option_update" => root.Deserialize(AcpJsonContext.Default.ConfigOptionUpdate),
         _ => null,
     };
 
