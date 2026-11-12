@@ -21,6 +21,10 @@ public partial class App
             return CliCommandResult.Continue;
         }
 
+        // A few commands mean something else in an ACP pane (/clear, /model, /compact, folder changes).
+        if (IsAcpPane && await TryHandleAcpCommandAsync(command, parsed.Arguments))
+            return CliCommandResult.Continue;
+
         // Handle special commands
         if (command == "update")
         {
@@ -277,7 +281,7 @@ public partial class App
         if (command == "command" || command.StartsWith("command "))
         {
             var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
-            await Shell.HandleShellCommandAsync(shellCmd);
+            await RunShellLineAsync(shellCmd);
             return CliCommandResult.Continue;
         }
 

@@ -389,8 +389,12 @@ public class AcpAgentCommandsTests : IDisposable
         public int Stops;
         public string? OpenError { get; set; }
         public string? SwitchError { get; set; }
-        public Task<string?> OpenPaneAsync(string agentName) { Opened.Add(agentName); return Task.FromResult(OpenError); }
-        public Task<string?> SwitchAsync(string agentName) { Switched.Add(agentName); return Task.FromResult(SwitchError); }
+        public List<string> Resumed { get; } = [];
+        public int SessionListings;
+        public string? SessionsError { get; set; }
+        public Task<string?> OpenPaneAsync(string agentName, bool resume = false) { Opened.Add(agentName); if (resume) Resumed.Add("open:" + agentName); return Task.FromResult(OpenError); }
+        public Task<string?> SwitchAsync(string agentName, bool resume = false) { Switched.Add(agentName); if (resume) Resumed.Add("switch:" + agentName); return Task.FromResult(SwitchError); }
+        public Task<string?> SessionsAsync() { SessionListings++; return Task.FromResult(SessionsError); }
         public Task<string?> StopAsync() { Stops++; return Task.FromResult<string?>(null); }
         public Task<string?> RestartAsync() { Restarts++; return Task.FromResult<string?>(null); }
     }
@@ -409,6 +413,50 @@ public class AcpAgentCommandsTests : IDisposable
 
         Assert.Equal(["CLAUDE"], host.Switched);
         Assert.Empty(host.Opened);
+    }
+
+    [Theory]
+    [InlineData("claude --resume", "switch:claude")]
+    [InlineData("--resume claude", "switch:claude")]
+    [InlineData("claude --new-panel --resume", "open:claude")]
+    public async Task ResumeFlag_IsPassedToTheHost(string arguments, string expected)
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+        var host = new FakeHost();
+
+        await RunWith(arguments, host);
+
+        Assert.Equal([expected], host.Resumed);
+    }
+
+    [Fact]
+    public async Task WithoutTheResumeFlag_NothingIsResumed()
+    {
+        _catalog.Stored["claude"] = new AcpAgentConfig { Command = _host };
+        var host = new FakeHost();
+
+        await RunWith("claude", host);
+
+        Assert.Empty(host.Resumed);
+    }
+
+    [Fact]
+    public async Task Sessions_AsksTheHost_AndPrintsItsError()
+    {
+        var host = new FakeHost { SessionsError = "no list support" };
+
+        await RunWith("sessions", host);
+
+        Assert.Equal(1, host.SessionListings);
+        Assert.Contains("no list support", _err.ToString());
+    }
+
+    [Fact]
+    public async Task Sessions_WithoutAPane_SaysWhereItWorks()
+    {
+        await RunWith("sessions", host: null);
+
+        Assert.Contains("inside an ACP agent pane", _err.ToString());
     }
 
     [Theory]

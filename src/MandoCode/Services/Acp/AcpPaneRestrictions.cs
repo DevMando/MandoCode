@@ -15,12 +15,10 @@ public static class AcpPaneRestrictions
     /// <summary>Command name (no slash) → why it is unavailable in an ACP pane.</summary>
     private static readonly IReadOnlyDictionary<string, string> Commands = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["model"] = ModelLoop,
         ["setup"] = ModelLoop,
         ["retry"] = ModelLoop,
         ["config"] = ModelLoop,
         ["agent-settings"] = ModelLoop,
-        ["compact"] = ModelLoop,
         ["force-skill"] = ModelLoop,
         ["plan"] = ModelLoop,
         ["plan-resume"] = ModelLoop,

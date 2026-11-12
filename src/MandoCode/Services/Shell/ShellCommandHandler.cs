@@ -17,13 +17,33 @@ public class ShellCommandHandler
         _projectRoot = projectRoot;
     }
 
-    public string ChangeDirectory(string target)
+    /// <summary>The existing folder <paramref name="target"/> names (relative to the project root, <c>~</c> expanded); throws when there is none.</summary>
+    public string ResolveDirectory(string target)
     {
         target = target.Trim().Trim('"');
         if (target == "~" || target.StartsWith("~/") || target.StartsWith("~\\"))
             target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), target.Length > 2 ? target[2..] : "");
         var directory = Path.GetFullPath(target, _projectRoot.ProjectRoot);
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException($"No such directory: {target}");
+        return directory;
+    }
+
+    /// <summary>True for <c>cd</c> / <c>cd &lt;dir&gt;</c>, the only shell line that changes the project root; a bare <c>cd</c> means the home folder.</summary>
+    public static bool TryParseCd(string command, out string target)
+    {
+        target = "";
+        var cmd = command.Trim();
+        if (cmd != "cd" && !cmd.StartsWith("cd ", StringComparison.Ordinal))
+            return false;
+        target = cmd.Length > 2 ? cmd[3..].Trim() : "";
+        if (string.IsNullOrWhiteSpace(target))
+            target = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return true;
+    }
+
+    public string ChangeDirectory(string target)
+    {
+        var directory = ResolveDirectory(target);
         _projectRoot.ProjectRoot = directory;
         _fileProvider.RefreshCache();
         return directory;

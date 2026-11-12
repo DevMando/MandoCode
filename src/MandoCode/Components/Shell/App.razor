@@ -1389,7 +1389,7 @@
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
             {
-                await Shell.HandleShellCommandAsync(input.TrimStart()[1..].Trim());
+                await RunShellLineAsync(input.TrimStart()[1..].Trim());
                 continue;
             }
 

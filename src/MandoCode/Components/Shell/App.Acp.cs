@@ -78,6 +78,8 @@ public partial class App
             return false;
         }
 
+        var resume = TakeResumeRequest();
+        _acpHistory = resume is null ? null : new AcpHistoryCollector();
         var runtime = new AcpAgentRuntime(
             name, entry, ProjectRoot.ProjectRoot,
             new AcpAgentLauncher(new FileTrustStore()),
@@ -94,17 +96,23 @@ public partial class App
                 // Debug only (MANDOCODE_ACP_DEBUG_EXT): on screen, never in a file.
                 using var output = TuiConsole.Enter(Pane!.Session);
                 Print(new Text($"[acp extension] {method}: {content}", new Style(Color.Grey)));
-            });
+            },
+            resume: resume,
+            history: _acpHistory is { } history ? history.Add : null);
         _acp = runtime;
         Pane.Services.GetRequiredService<AcpRuntimeHolder>().Runtime = runtime;
         runtime.Changed += OnAcpChanged;
+        runtime.SessionStarted += RememberAcpSession;
 
         _acpStartCts?.Dispose();
         _acpStartCts = new CancellationTokenSource();
         UpdateAcpHeader();
         try
         {
-            return await AcpPaneStartup.RunAsync(runtime, new StartupSink(this, name), _acpStartCts.Token);
+            var started = await AcpPaneStartup.RunAsync(runtime, new StartupSink(this, name), _acpStartCts.Token);
+            if (started)
+                AnnounceSession(runtime);
+            return started;
         }
         finally
         {
@@ -206,7 +214,7 @@ public partial class App
     /// <c>/agent-acp &lt;name&gt;</c>: this pane runs the external agent from now on. The native session stays alive
     /// underneath, and nothing is carried over in either direction (a fresh start).
     /// </summary>
-    private async Task<string?> SwitchToAcpAsync(string agentName)
+    private async Task<string?> SwitchToAcpAsync(string agentName, bool resume = false)
     {
         if (Pane is null) return "Agent panes are not available here.";
         if (HasActiveWork) return BusyMessage;
@@ -218,7 +226,7 @@ public partial class App
             await TearDownAcpAsync();
         }
 
-        AcpPaneMode.Enter(Pane, agentName);
+        AcpPaneMode.Enter(Pane, agentName, resume);
         _acpMessages.Clear();
         Print(new Text(
             $"── This pane now runs the ACP agent '{agentName}' (fresh start: the native conversation is kept but not shared). /agent-acp stop returns to it. ──",
@@ -359,7 +367,7 @@ public partial class App
     /// <summary>What <c>/agent-acp &lt;name&gt;</c> and <c>/agent-acp restart</c> do in this pane.</summary>
     private sealed class PaneHost(App app) : IAcpPaneHost
     {
-        public async Task<string?> OpenPaneAsync(string agentName)
+        public async Task<string?> OpenPaneAsync(string agentName, bool resume = false)
         {
             if (app.Pane is null) return "Agent panes are not available here.";
             string? result = null;
@@ -367,14 +375,16 @@ public partial class App
             {
                 var workspace = app.Pane.Workspace;
                 var before = workspace.Panes.Count;
-                var pane = workspace.Add(acpAgent: agentName);
+                var pane = workspace.Add(acpAgent: agentName, acpResume: resume);
                 if (workspace.Panes.Count == before || pane.AcpAgentName != agentName)
                     result = "Four agent panes are already open. Close one first.";
             });
             return result;
         }
 
-        public Task<string?> SwitchAsync(string agentName) => app.SwitchToAcpAsync(agentName);
+        public Task<string?> SwitchAsync(string agentName, bool resume = false) => app.SwitchToAcpAsync(agentName, resume);
+
+        public Task<string?> SessionsAsync() => app.ListAcpSessionsAsync();
 
         public Task<string?> StopAsync() => app.StopAcpAsync();
 

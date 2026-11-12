@@ -1,6 +1,5 @@
 using System.Text.Json;
 using MandoCode.Acp;
-using MandoCode.Acp.JsonRpc;
 using MandoCode.Acp.Transport;
 using MandoCode.Acp.Protocol;
 using MandoCode.Models;

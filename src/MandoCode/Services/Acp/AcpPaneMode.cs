@@ -9,10 +9,11 @@ namespace MandoCode.Services.Acp;
 public static class AcpPaneMode
 {
     /// <summary>Marks the pane as running the ACP agent <paramref name="agentName"/>. The caller starts the agent.</summary>
-    public static void Enter(AgentPane pane, string agentName)
+    public static void Enter(AgentPane pane, string agentName, bool resume = false)
     {
         pane.Runtime = AgentRuntime.Acp;
         pane.AcpAgentName = agentName;
+        pane.AcpResume = resume;
         pane.AcpHeader = null;
         pane.Services.GetRequiredService<AcpRuntimeHolder>().IsAcpPane = true;
         pane.Workspace.Refresh();

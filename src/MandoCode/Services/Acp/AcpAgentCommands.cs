@@ -20,13 +20,16 @@ public interface IAcpAgentCatalog
 public interface IAcpPaneHost
 {
     /// <summary>Opens a new pane running the agent. Null on success, otherwise what to tell the user.</summary>
-    Task<string?> OpenPaneAsync(string agentName);
+    Task<string?> OpenPaneAsync(string agentName, bool resume = false);
 
     /// <summary>
     /// Switches the current pane to the agent (closing the ACP agent it already runs, if any). The native session stays
     /// alive underneath. Null on success, otherwise what to tell the user (for example when the pane is busy).
     /// </summary>
-    Task<string?> SwitchAsync(string agentName);
+    Task<string?> SwitchAsync(string agentName, bool resume = false);
+
+    /// <summary>Prints the agent's sessions for this pane's folder. Null on success, otherwise what to tell the user.</summary>
+    Task<string?> SessionsAsync();
 
     /// <summary>Closes the current pane's ACP session and returns it to the native agent. Null on success, otherwise what to tell the user.</summary>
     Task<string?> StopAsync();
@@ -42,11 +45,11 @@ public interface IAcpPaneHost
 public sealed class AcpAgentCommands
 {
     public const string Usage =
-        "Usage: /agent-acp [list] | <name> [--new-panel] | restart | stop | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+        "Usage: /agent-acp [list] | <name> [--new-panel] [--resume] | restart | stop | sessions | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
 
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {
-        "list", "status", "add", "test", "remove", "enable", "disable", "restart", "stop",
+        "list", "status", "add", "test", "remove", "enable", "disable", "restart", "stop", "sessions",
     };
 
     private readonly IAcpAgentCatalog _catalog;
@@ -112,6 +115,12 @@ public sealed class AcpAgentCommands
             case "disable":
                 SetDisabled(rest, disabled: true, output, error);
                 break;
+            case "sessions":
+                if (_host is null)
+                    error.WriteLine("Sessions are listed inside an ACP agent pane.");
+                else if (await _host.SessionsAsync() is { } sessionsError)
+                    error.WriteLine(sessionsError);
+                break;
             case "restart":
                 if (_host is null)
                     error.WriteLine("Restart works inside an ACP agent pane.");
@@ -134,6 +143,7 @@ public sealed class AcpAgentCommands
     private async Task OpenAsync(List<string> tokens, TextWriter error, TextWriter output)
     {
         var newPanel = false;
+        var resume = false;
         var names = new List<string>();
         foreach (var token in tokens)
         {
@@ -141,6 +151,8 @@ public sealed class AcpAgentCommands
                 names.Add(token);
             else if (token.Equals("--new-panel", StringComparison.Ordinal))
                 newPanel = true;
+            else if (token.Equals("--resume", StringComparison.Ordinal))
+                resume = true;
             else
             {
                 error.WriteLine($"Unknown option '{token}'.");
@@ -169,12 +181,12 @@ public sealed class AcpAgentCommands
             error.WriteLine("Opening an agent pane is not available here.");
         else if (newPanel)
         {
-            if (await _host.OpenPaneAsync(name) is { } openError)
+            if (await _host.OpenPaneAsync(name, resume) is { } openError)
                 error.WriteLine(openError);
             else
                 output.WriteLine($"Opened ACP agent '{name}' in a new pane.");
         }
-        else if (await _host.SwitchAsync(name) is { } switchError)
+        else if (await _host.SwitchAsync(name, resume) is { } switchError)
             error.WriteLine(switchError);
     }
 

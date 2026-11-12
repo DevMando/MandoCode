@@ -34,6 +34,18 @@ public sealed class AcpTranscriptAdapter
     private IReadOnlyList<PlanEntry>? _plan;
     private bool _planChanged;
 
+    /// <summary>Forgets tool calls, shown diffs and the plan: a new conversation starts with a clean slate.</summary>
+    public void Reset()
+    {
+        lock (_gate)
+        {
+            _tools.Clear();
+            _shownDiffs.Clear();
+            _plan = null;
+            _planChanged = false;
+        }
+    }
+
     /// <param name="renderOperation">Builds the display for a file operation (<c>OperationDisplayRenderer.BuildRenderable</c>).</param>
     public AcpTranscriptAdapter(Func<OperationDisplayEvent, IRenderable> renderOperation, string projectRoot)
     {

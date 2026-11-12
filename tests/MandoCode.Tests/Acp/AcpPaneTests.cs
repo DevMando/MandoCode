@@ -942,12 +942,13 @@ public class AcpPaneWorkspaceTests
         var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
         static bool Hidden(AcpRuntimeHolder h, string command) => h.IsAcpPane && AcpPaneRestrictions.IsCommandBlocked(command);
 
-        Assert.False(Hidden(holder, "model"));
+        Assert.False(Hidden(holder, "plan"));
         AcpPaneMode.Enter(pane, "claude");
-        Assert.True(Hidden(holder, "model"));
+        Assert.True(Hidden(holder, "plan"));
+        Assert.False(Hidden(holder, "model"));   // answered from the agent's own settings
         Assert.False(Hidden(holder, "agent-acp"));
         await AcpPaneMode.LeaveAsync(pane);
-        Assert.False(Hidden(holder, "model"));
+        Assert.False(Hidden(holder, "plan"));
     }
 
     [Fact]
@@ -1016,11 +1017,11 @@ public class AcpPaneWorkspaceTests
     }
 
     [Theory]
-    [InlineData("model", true)]
-    [InlineData("/model", true)]
+    [InlineData("model", false)]
+    [InlineData("/model", false)]
     [InlineData("plan fix the bug", true)]
     [InlineData("plan-resume", true)]
-    [InlineData("compact", true)]
+    [InlineData("compact", false)]
     [InlineData("context-snap-create", true)]
     [InlineData("force-skill x", true)]
     [InlineData("setup", true)]
