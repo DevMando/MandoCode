@@ -18,20 +18,6 @@ public static class SlashCommands
         _ => true
     };
     /// <summary>
-    /// Commands that configure or drive MandoCode's own model loop (Ollama, plans, context). An ACP agent pane
-    /// runs an external agent, so these are hidden there and answer with an explanation if typed anyway.
-    /// <paramref name="command"/> is the dispatch text without the slash (as in <c>CliCommand.DispatchText</c>) or with it.
-    /// </summary>
-    public static bool IsNativeOnly(string command)
-    {
-        var name = command.TrimStart('/').Split(' ', 2)[0].ToLowerInvariant();
-        return name is "model" or "setup" or "retry" or "compact" or "force-skill" or "config"
-            or "agent-settings" or "plan" or "plan-resume" or "plan-discard"
-            or "context-snap-create" or "context-snap-import"
-            || name.StartsWith("ollama-", StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// Command name → description. Keys include the leading slash.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> All = new Dictionary<string, string>

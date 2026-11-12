@@ -837,7 +837,7 @@ public class AcpPaneWorkspaceTests
         await using var services = Services();
         var pane = services.GetRequiredService<AgentWorkspace>().Add();
         var holder = pane.Services.GetRequiredService<AcpRuntimeHolder>();
-        static bool Hidden(AcpRuntimeHolder h, string command) => h.IsAcpPane && SlashCommands.IsNativeOnly(command);
+        static bool Hidden(AcpRuntimeHolder h, string command) => h.IsAcpPane && AcpPaneRestrictions.IsCommandBlocked(command);
 
         Assert.False(Hidden(holder, "model"));
         AcpPaneMode.Enter(pane, "claude");
@@ -874,6 +874,45 @@ public class AcpPaneWorkspaceTests
     }
 
     [Theory]
+    [InlineData("s", "/agent-settings")]
+    [InlineData("k", "/skills")]
+    [InlineData("m", "/mcp")]
+    [InlineData("h", "/history")]
+    [InlineData("c", "/context-snap-import")]
+    public async Task BlockedAltShortcuts_InAnAcpPane_SubmitTheExplainingCommand_AndOpenNothing(string key, string command)
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add(acpAgent: "claude");
+        var submitted = new List<string>();
+        var opened = new List<string>();
+        pane.SubmitCommand = text => { submitted.Add(text); return Task.CompletedTask; };
+        pane.ToggleSettings = () => { opened.Add("settings"); return Task.CompletedTask; };
+        pane.ToggleSnapshots = () => { opened.Add("snapshots"); return Task.CompletedTask; };
+
+        var handled = workspace.Key(pane, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = key, AltKey = true });
+
+        Assert.True(handled);
+        Assert.Empty(opened);
+        Assert.Equal([command], submitted);
+    }
+
+    [Fact]
+    public async Task AltS_InANativePane_StillOpensSettings()
+    {
+        await using var services = Services();
+        var workspace = services.GetRequiredService<AgentWorkspace>();
+        var pane = workspace.Add();
+        var opened = false;
+        pane.SubmitCommand = _ => Task.CompletedTask;
+        pane.ToggleSettings = () => { opened = true; return Task.CompletedTask; };
+
+        workspace.Key(pane, new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "s", AltKey = true });
+
+        Assert.True(opened);
+    }
+
+    [Theory]
     [InlineData("model", true)]
     [InlineData("/model", true)]
     [InlineData("plan fix the bug", true)]
@@ -886,11 +925,56 @@ public class AcpPaneWorkspaceTests
     [InlineData("ollama-pull", true)]
     [InlineData("ollama-serve", true)]
     [InlineData("config set x y", true)]
+    [InlineData("skills", true)]
+    [InlineData("mcp tools x", true)]
+    [InlineData("mcp-reload", true)]
+    [InlineData("history", true)]
+    [InlineData("agent-history", true)]
+    [InlineData("agent-settings", true)]
     [InlineData("help", false)]
+    [InlineData("copy", false)]
+    [InlineData("copy-code", false)]
+    [InlineData("change-directory", false)]
     [InlineData("agent-acp restart", false)]
     [InlineData("agent-new", false)]
     [InlineData("clear", false)]
     [InlineData("exit", false)]
     public void NativeOnlyCommands_AreIdentified(string command, bool nativeOnly) =>
-        Assert.Equal(nativeOnly, SlashCommands.IsNativeOnly(command));
+        Assert.Equal(nativeOnly, AcpPaneRestrictions.IsCommandBlocked(command));
+}
+
+public sealed class AcpPaneRestrictionsTests
+{
+    [Theory]
+    [InlineData("s", "/agent-settings")]
+    [InlineData("S", "/agent-settings")]
+    [InlineData("c", "/context-snap-import")]
+    [InlineData("k", "/skills")]
+    [InlineData("m", "/mcp")]
+    [InlineData("h", "/history")]
+    public void BlockedShortcuts_MapToTheCommandThatExplainsThem(string key, string command)
+    {
+        Assert.Equal(command, AcpPaneRestrictions.BlockedShortcutCommand(key));
+        Assert.True(AcpPaneRestrictions.IsCommandBlocked(command));   // one set: the shortcut and the typed command agree
+    }
+
+    [Theory]
+    [InlineData("n")]
+    [InlineData("w")]
+    [InlineData("e")]
+    [InlineData("g")]
+    [InlineData("d")]
+    public void WorkspaceAndFolderShortcuts_AreNotBlocked(string key) =>
+        Assert.Null(AcpPaneRestrictions.BlockedShortcutCommand(key));
+
+    [Fact]
+    public void TheMessage_NamesTheCommandAndTheReason()
+    {
+        var message = AcpPaneRestrictions.Message("/mcp tools x");
+        Assert.StartsWith("/mcp is not available in an ACP agent pane", message);
+        Assert.Contains("MCP", message);
+    }
+
+    [Fact]
+    public void ThePicker_ShowsNoAgentsGroup() => Assert.False(AcpPaneRestrictions.PickerShowsAgents);
 }

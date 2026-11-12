@@ -14,10 +14,10 @@ public partial class App
         var parsed = CliCommand.Parse(input);
         var command = parsed.DispatchText;
 
-        // Commands that configure or drive MandoCode's own model loop mean nothing in an ACP agent pane.
-        if (IsAcpPane && SlashCommands.IsNativeOnly(command))
+        // What an ACP agent pane does not offer is decided in one place (AcpPaneRestrictions).
+        if (IsAcpPane && MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command))
         {
-            TuiConsole.WriteLine($"/{command.Split(' ')[0]} is not available in an ACP agent pane: the external agent runs the conversation.");
+            TuiConsole.WriteLine(MandoCode.Services.Acp.AcpPaneRestrictions.Message(command));
             return CliCommandResult.Continue;
         }
 

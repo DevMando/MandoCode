@@ -172,6 +172,14 @@ public sealed class AgentWorkspace(IServiceScopeFactory scopes) : IDisposable, I
         }
         // Alt is the default; Meta variants also work when forwarded by a terminal.
         if (!key.MetaKey && !key.AltKey) return false;
+        // Shortcuts an ACP pane does not offer answer with the command's own explanation instead of opening a native panel.
+        if (pane.Runtime == AgentRuntime.Acp && !key.ShiftKey && !key.CtrlKey
+            && MandoCode.Services.Acp.AcpPaneRestrictions.BlockedShortcutCommand(key.Key) is { } blocked)
+        {
+            if (pane.Active && pane.IsBusy?.Invoke() != true && pane.IsAwaitingInput?.Invoke() != true && pane.SubmitCommand is not null)
+                _ = pane.SubmitCommand(blocked);
+            return true;
+        }
         if (Registry is not null)
         {
             if (key.ShiftKey && key.Key.Equals("n", StringComparison.OrdinalIgnoreCase)) { Registry.Add(); return true; }

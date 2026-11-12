@@ -53,7 +53,7 @@
         {
             var width = Math.Max(4, ContentWidth ?? Pane?.Width ?? Viewport.Width);
             var label = Composer.ViewingAgents ? "🤖 Agents" : "📁 Files";
-            var hint = Composer.AtPickerOpen ? Composer.ViewingAgents ? " — Press [Tab] for Files" : " — Press [Tab] for Agents" : "";
+            var hint = Composer.AtPickerOpen && Composer.AgentsAvailable ? Composer.ViewingAgents ? " — Press [Tab] for Files" : " — Press [Tab] for Agents" : "";
             var available = width - 4;
             var shownLabel = WorkspaceTabWindow.Fit(label, available).TrimEnd();
             var remaining = Math.Max(0, available - RazorConsole.Core.Input.TextSelectionState.CellWidth(shownLabel));
