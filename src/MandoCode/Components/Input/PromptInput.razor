@@ -384,6 +384,7 @@
         _composer.SetText("");
         _clipboardStatus = "";
         await OnSubmit.InvokeAsync(value);
+        StateHasChanged();
     }
     public void SetValue(string value) { _composer.SetText(value); StateHasChanged(); }
 }

@@ -28,7 +28,7 @@ public static class TranscriptExport
             foreach (var span in block.Spans)
             {
                 var css = new StringBuilder();
-                if (Style.TryParse(span.Style, out var style) && style is not null) {
+                if (Style.TryParse(span.Style, out var style)) {
                     if (style.Foreground != Color.Default) css.Append($"color:#{style.Foreground.R:x2}{style.Foreground.G:x2}{style.Foreground.B:x2};");
                     if (style.Background != Color.Default) css.Append($"background:#{style.Background.R:x2}{style.Background.G:x2}{style.Background.B:x2};");
                     if (style.Decoration.HasFlag(Decoration.Bold)) css.Append("font-weight:bold;");
