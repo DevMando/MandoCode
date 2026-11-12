@@ -48,7 +48,7 @@
         if (Pane is not null && Pane.FocusKey is null)
         {
             Pane.FocusKey = _focusKey;
-            if (Pane.Active) await Focus.FocusAsync(_focusKey);
+            if (Pane.Active) await Focus.FocusDeferredAsync(_focusKey);
         }
     }
     public void Scroll(string key)

@@ -16,7 +16,7 @@ public static class AnsiTranscriptText
         for (var index = 0; index < input.Length; index++)
         {
             if (input[index] != '\u001b') continue;
-            if (index > start) output.Append(input[start..index], new Style(foreground, background, decoration, link));
+            if (index > start) output.Append(input[start..index], new Style(foreground, background, decoration), link is null ? null : new Link(link));
             if (index + 1 < input.Length && input[index + 1] == '[')
             {
                 var end = index + 2;
@@ -70,7 +70,7 @@ public static class AnsiTranscriptText
             else index = Math.Min(index + 1, input.Length - 1);
             start = index + 1;
         }
-        if (start < input.Length) output.Append(input[start..], new Style(foreground, background, decoration, link));
+        if (start < input.Length) output.Append(input[start..], new Style(foreground, background, decoration), link is null ? null : new Link(link));
         return output;
     }
 }

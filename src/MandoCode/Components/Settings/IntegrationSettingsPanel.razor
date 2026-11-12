@@ -545,7 +545,7 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_input is null && _tools is null && !_installBrowser && (Pane is null || Pane.Active) && !Focus.IsFocused(FocusTarget))
-            await FocusPanel();
+        { await DeferredFocus.AfterRenderBatch(); await FocusPanel(); }
     }
 
     private async Task FocusPanel()

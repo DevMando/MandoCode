@@ -185,7 +185,7 @@ public sealed class AgentArchiveStore
         foreach (var entry in entries.Skip(start))
         {
             var spans = entry.Content.Render(options, 120).Where(s => !s.IsControlCode)
-                .Select(s => new ArchivedSpan(s.Text, s.Style?.ToMarkup() ?? "")).ToList();
+                .Select(s => new ArchivedSpan(s.Text, s.Style.ToMarkup())).ToList();
             blocks.Add(new(spans, entry.UserPrompt, entry.SpaceAfter)
             {
                 ToolGroup = entry.ToolActivity is not null ? entry.Id : entry.ToolOutput is { } output ? groups.GetValueOrDefault(output) : null,

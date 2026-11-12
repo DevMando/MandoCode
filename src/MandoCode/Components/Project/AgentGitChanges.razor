@@ -157,7 +157,7 @@
  }
  protected override async Task OnAfterRenderAsync(bool firstRender)
  {
-  if ((Pane is null || Pane.Active) && (firstRender || (ExplorerFocus is { Active: true, PromptFocused: false } && !Focus.IsFocused(_focusKey)))) await FocusPanel();
+  if ((Pane is null || Pane.Active) && (firstRender || (ExplorerFocus is { Active: true, PromptFocused: false } && !Focus.IsFocused(_focusKey)))) { await DeferredFocus.AfterRenderBatch(); await FocusPanel(); }
  }
  private async Task FocusPanel()
  {

@@ -4,6 +4,14 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
+**Updated terminal rendering with RazorConsole 0.7.0.** The CLI now includes RazorConsole's upstream fix for focus events raised while the interface is being drawn. MandoCode keeps the deferred focus safeguard introduced in v0.16.2, which prevents the repeated prompt borders seen on some launches.
+
+**Highlights**
+
+- Upgrade the terminal UI framework while preserving the startup rendering fix.
+- Keep transcript formatting, hyperlinks, and emoji shortcuts compatible with the updated rendering dependencies.
+- Clear the clipboard attachment message reliably after sending a prompt.
+
 ### Added
 
 - External agents over the Agent Client Protocol (ACP v1, stdio), phases 1–2 of the ACP client. `/agent-acp <name>` switches the current pane to an agent (for example Claude Code through an ACP adapter; `--new-panel` opens a new pane, `stop` returns to the native agent, and the native session stays alive underneath without sharing context); `/agent-acp list|status|restart|add|test|remove|enable|disable` manage the `acpAgents` entries of `~/.mandocode/config.json`, and `mandocode --acp-probe <name>` checks a connection. The protocol layer is the new `MandoCode.Acp` library (own thin implementation, no third-party ACP package).
@@ -14,7 +22,40 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Changed
 
+- Upgrade RazorConsole.Core from 0.6.0 to 0.7.0. Retain `DeferredFocus` for startup and panels so focus requests made from `OnAfterRenderAsync` continue to wait until their render batch completes.
+- Adapt transcript rendering, saved-agent history, HTML exports, and emoji expansion to the updated Spectre.Console APIs. Hyperlinks now use the separate link API, and styles use the new value type.
+- Update Markdig to 1.5.1 and Microsoft.Extensions.FileSystemGlobbing to 10.0.14 to satisfy the new dependency requirements on both supported .NET targets.
+
+### Fixed
+
+- Refresh the prompt after submission so the clipboard attachment message clears reliably.
+
+### Test coverage
+
+- Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
+- Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
+- All 1,248 tests pass on net10.0 and net8.0. Verify startup, typing, and resizing in a real pseudo-terminal on both builds, with no reported rendering errors. Confirm the CLI tool package builds successfully.
+
+## [0.16.2] - 2026-11-11
+
+**The startup screen no longer fills with repeated prompt borders.** On some launches the first agent drew its prompt as rows of bottom borders and could not take input; the workaround was to open a second agent and close the first. The 0.16.1 startup change did not address this. RazorConsole remains at 0.6.0. A screenshot of the failure is in [#138](https://github.com/DevMando/MandoCode/pull/138).
+
+**Highlights**
+
+- Fix the corrupted startup prompt that left the first agent unusable.
+- Focus requests raised while a component finishes rendering now run after the render batch completes.
+
+### Fixed
+
+- Stop the prompt, and any panel that takes focus as it opens, from being inserted into the interface twice. A focus request made from `OnAfterRenderAsync` dispatched its focus events inside the render batch still in progress, and RazorConsole 0.6.0 then applied that batch a second time. Whether this happened depended on thread timing, so it appeared on some launches and not others. These requests now go through `DeferredFocus`, which waits for the batch to finish. Focus changes from key and click handlers are unchanged. RazorConsole 0.7.0 corrects the dispatch itself; this release does not upgrade to it.
+
+### Changed
+
 - Group CLI components into feature folders for shell, workspaces, conversations, input, project browsing, sessions, settings, onboarding, and activity. Keep component namespaces and behavior unchanged, and document where new components belong.
+
+### Test coverage
+
+- The full suite passes on net10.0 and net8.0 (1,247 tests each). No automated regression covers this failure: it was reproduced, and the fix confirmed, by launching the built CLI in a pseudo-terminal with the timing forced.
 
 ## [0.16.1] - 2026-10-21
 

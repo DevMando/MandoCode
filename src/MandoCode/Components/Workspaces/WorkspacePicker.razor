@@ -37,7 +37,7 @@
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) await Focus.FocusAsync(_hook);
+        if (firstRender) await Focus.FocusDeferredAsync(_hook);
     }
     protected override void OnParametersSet()
     {

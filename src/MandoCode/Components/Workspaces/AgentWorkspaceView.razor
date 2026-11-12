@@ -48,7 +48,7 @@
         {
             _lastFocusVersion = Workspace.FocusVersion;
             _lastFocusKey = key;
-            await Focus.FocusAsync(key);
+            await Focus.FocusDeferredAsync(key);
         }
     }
     public void Dispose() { Workspace.Changed -= Changed; Viewport.OnResized -= Changed; }
