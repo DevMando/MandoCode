@@ -24,7 +24,9 @@ internal static class Plain
         });
         console.Profile.Width = 200;
         console.Write(renderable);
-        return writer.ToString().Replace("\r\n", "\n").TrimEnd();
+        // Some hosts (CI on Linux) still emit style escapes despite Ansi = No; strip them so the text is comparable.
+        var text = System.Text.RegularExpressions.Regex.Replace(writer.ToString(), "\u001b\\[[0-9;]*m", "");
+        return text.Replace("\r\n", "\n").TrimEnd();
     }
 }
 
