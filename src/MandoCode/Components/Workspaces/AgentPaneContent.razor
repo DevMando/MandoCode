@@ -86,7 +86,9 @@
                 if (_shutdown.IsCancellationRequested) break;
                 await InvokeAsync(() =>
                 {
-                    _git = root == rootAccessor.ProjectRoot ? status : null;
+                    var next = root == rootAccessor.ProjectRoot ? status : null;
+                    if (_git == next) return;
+                    _git = next;
                     StateHasChanged();
                 });
             } while (await timer.WaitForNextTickAsync(_shutdown.Token));
