@@ -15,6 +15,29 @@ namespace MandoCode.Tests;
 public class WorkspaceRenderingPerformanceTests
 {
     [Fact]
+    public async Task WorkspaceSwitchPublishesOneCompletedTransition()
+    {
+        await using var services = Acp.AcpTestHost.Services();
+        var registry = services.GetRequiredService<WorkspaceRegistry>();
+        var first = registry.Active;
+        first.Add();
+        var second = registry.Add();
+        var version = first.FocusVersion;
+        var notifications = 0;
+        registry.Changed += () =>
+        {
+            notifications++;
+            Assert.Same(first, registry.Active);
+            Assert.True(first.IsVisible);
+            Assert.False(second.IsVisible);
+            Assert.Equal(version + 1, first.FocusVersion);
+        };
+        registry.Switch(first);
+        Assert.Equal(1, notifications);
+        Assert.True(first.SelectedPane!.Active);
+    }
+
+    [Fact]
     public async Task ClosingAnAlreadyClosedPickerDoesNotRefocusOrRedraw()
     {
         await using var services = Acp.AcpTestHost.Services();

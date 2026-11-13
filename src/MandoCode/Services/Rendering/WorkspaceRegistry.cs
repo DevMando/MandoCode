@@ -60,12 +60,21 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
     public void Switch(AgentWorkspace workspace)
     {
         if (workspace.IsClosed || !_entries.Contains(workspace)) return;
-        IsWorkspacePickerOpen = false;
-        var previous = Active;
-        Active = workspace;
-        previous.Refresh();
-        if (workspace.SelectedPane is { } pane) workspace.Focus(pane);
-        Notify();
+        var alreadyChanging = _changing;
+        _changing = true;
+        try
+        {
+            IsWorkspacePickerOpen = false;
+            var previous = Active;
+            Active = workspace;
+            previous.Refresh();
+            if (workspace.SelectedPane is { } pane) workspace.Focus(pane);
+        }
+        finally
+        {
+            _changing = alreadyChanging;
+            Notify();
+        }
     }
     public void Cycle(int direction)
     {
