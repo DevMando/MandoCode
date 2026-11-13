@@ -26,6 +26,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Changed
 
+- Show ACP tool calls as persistent, expandable activity rows with status updates in place, concise summaries, and bounded command/output details. Attach completed diffs to their call and show terminal-output limitations only inside the details. Preserve permission denial and mark unfinished calls honestly when a turn ends or is interrupted. Native tool groups retain their existing behavior.
 - Present successful ACP connections in a compact card with the agent's display name, selected model, current mode and its advertised description, session origin, and commands to change mode or return to the native conversation.
 - Simplify ACP pane headers to the agent's human-readable title, selected model when advertised, and an ACP indicator. Keep adapter versions in diagnostics, and leave the project folder and approval mode out of the header to match native pane presentation.
 - Upgrade RazorConsole.Core from 0.6.0 to 0.7.0. Retain `DeferredFocus` for startup and panels so focus requests made from `OnAfterRenderAsync` continue to wait until their render batch completes.
