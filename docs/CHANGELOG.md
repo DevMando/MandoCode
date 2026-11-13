@@ -38,6 +38,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Fixed
 
+- Batch synchronized terminal frames into one output write, reducing fragmented row-by-row delivery during large workspace transitions. Preserve terminal size and encoding, pass non-frame output through, bound buffering, and release interrupted frames at shutdown.
 - Enable synchronized terminal frames to reduce visible top-to-bottom repainting on terminals supporting synchronized output. Publish one completed workspace-switch notification instead of three intermediate redraw requests, preserving pane focus and background sessions.
 - Reuse unchanged conversation snapshots and transcript groups during focus, scrolling, and status updates. Avoid copying and regrouping the full history on these refreshes while keeping streamed output, tool expansion, late agent replies, and cleared conversations current.
 - Reduce unnecessary multi-agent redraws: selecting an agent no longer re-focuses the previous pane when the workspace picker is already closed. Poll top-level status only when visible indicators or tips change, let the root forward workspace and resize updates once, and avoid rebuilding pane content for unchanged Git status. Preserve background streaming, focus safeguards, and inactive-pane dimming.

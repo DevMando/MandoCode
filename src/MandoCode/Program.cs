@@ -106,6 +106,7 @@ class Program
 
         using (var host = hostBuilder.Build())
         using (var outputScope = host.Services.CreateScope())
+        using (var frames = FrameBufferedOutput.Attach(Spectre.Console.AnsiConsole.Console))
         using (var tuiOutput = TuiConsole.Begin(outputScope.ServiceProvider.GetRequiredService<TuiSession>()))
             await host.RunAsync();
         try { toolUpdate.Launch(); }
