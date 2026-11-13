@@ -74,6 +74,8 @@ class Program
                 options.RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout;
                 options.ConsoleLiveDisplayOptions.UseAlternateScreenBuffer = true;
                 options.ConsoleLiveDisplayOptions.EnableMouseEvents = true;
+                // Present a complete frame together on terminals supporting mode 2026.
+                options.ConsoleLiveDisplayOptions.EnableSynchronizedUpdates = true;
                 options.EnableTerminalResizing = true;
             });
 
