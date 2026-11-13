@@ -11,6 +11,8 @@ Schema: pinned to the release tag `v1.16.0` of `agentclientprotocol/agent-client
 
 ## Quick start
 
+For Codex, see [Codex adapter setup and validation](acp-codex.md), or run `/agent-acp add codex` for setup guidance.
+
 1. Install an ACP adapter yourself, at a pinned version, for example for Claude Code the adapter validated below. No `npx`.
 2. Add it (your own paths): `/agent-acp add claude node "C:\path\to\adapter\dist\index.js"`, or edit `acpAgents` in
    `~/.mandocode/config.json`.
