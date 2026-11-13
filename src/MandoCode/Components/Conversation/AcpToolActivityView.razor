@@ -1,0 +1,66 @@
+@namespace MandoCode.Components
+@using MandoCode.Services.Acp
+@using RazorConsole.Core.Input
+@using Spectre.Console
+@inject RazorConsole.Core.Rendering.ITerminalViewport Viewport
+
+<WorkspaceButton Parts="@Parts" OnClick="Toggle" />
+@if (_expanded)
+{
+    <ConversationEntry Entry="Entry" />
+}
+
+@code {
+    [Parameter, EditorRequired] public AcpToolActivity Activity { get; set; } = default!;
+    [Parameter, EditorRequired] public TuiEntry Entry { get; set; } = default!;
+    [CascadingParameter] public AgentPane? Pane { get; set; }
+    private bool _expanded;
+
+    private IReadOnlyList<ButtonTextPart> Parts
+    {
+        get
+        {
+            var snapshot = Activity.Snapshot;
+            var action = snapshot.Kind switch
+            {
+                "execute" => "Run command", "read" => "Read file", "edit" => "Edit file",
+                "search" => "Search", "delete" => "Delete file", "move" => "Move file",
+                "fetch" => "Fetch", _ => "Tool call"
+            };
+            var statusColor = snapshot.Status switch
+            {
+                "Completed" => Color.Green,
+                "Failed" => Color.Red,
+                "Awaiting approval" or "Permission denied" or "Cancelled" or "Interrupted" or "Unfinished" => Color.Gold1,
+                _ => Color.Grey
+            };
+            var title = snapshot.Title.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            var summary = action + (title == "Tool call" || title == action ? "" : " · " + title);
+            var budget = Math.Max(8, (Pane?.Width ?? Viewport.Width) - TextSelectionState.CellWidth(snapshot.Status) - 10);
+            return [new((_expanded ? "▾ " : "▸ ") + AcpTranscriptAdapter.IconFor(snapshot.Kind) + " ", Color.Grey),
+                new(Clip(summary, budget), Color.Grey85), new(" · " + snapshot.Status, statusColor)];
+        }
+    }
+
+    private static string Clip(string text, int width)
+    {
+        if (TextSelectionState.CellWidth(text) <= width) return text;
+        var result = new System.Text.StringBuilder();
+        var elements = System.Globalization.StringInfo.GetTextElementEnumerator(text);
+        var cells = 0;
+        while (elements.MoveNext())
+        {
+            var element = elements.GetTextElement();
+            cells += TextSelectionState.CellWidth(element);
+            if (cells > width - 1) break;
+            result.Append(element);
+        }
+        return result.Append('…').ToString();
+    }
+
+    private void Toggle()
+    {
+        if (Pane is not null && !Pane.Active) Pane.Workspace.Focus(Pane);
+        _expanded = !_expanded;
+    }
+}

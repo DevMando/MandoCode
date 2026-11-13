@@ -2,7 +2,11 @@
 @foreach (var entry in Entries)
 {
     <Rows @key="entry.Id">
-    @if (entry.AgentActivity is { } exchange)
+    @if (entry.AcpTool is { } acpTool)
+    {
+        <AcpToolActivityView @key="entry.Id" Activity="acpTool" Entry="entry" />
+    }
+    else if (entry.AgentActivity is { } exchange)
     {
         <WorkspaceButton @key="entry.Id" Parts="@ExchangeParts(exchange)" OnClick="@(() => OnAgentToggle.InvokeAsync(exchange))" />
         @if (exchange.Expanded && Details.TryGetValue(exchange, out var details))

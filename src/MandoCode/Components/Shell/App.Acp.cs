@@ -18,6 +18,7 @@ public partial class App
     private readonly List<ChatMsg> _acpMessages = [];
     private bool _nativeInitialized;
     private AcpTranscriptAdapter? _acpTranscript;
+    private AcpToolActivityStore? _acpTools;
     private CancellationTokenSource? _acpStartCts;
 
     private bool IsAcpPane => Pane?.Runtime == AgentRuntime.Acp;
@@ -133,6 +134,7 @@ public partial class App
         var root = ProjectRoot.ProjectRoot;
         var renderer = (Pane.Services).GetRequiredService<OperationDisplayRenderer>();
         var transcript = _acpTranscript = new AcpTranscriptAdapter(renderer.BuildRenderable, root);
+        var tools = _acpTools = new AcpToolActivityStore(session.UpdateAcpTool);
 
         var files = new AcpFileSystemHandler(root, change =>
         {
@@ -153,9 +155,10 @@ public partial class App
             decided: (toolCallId, allowed) =>
             {
                 using var output = TuiConsole.Enter(session);
-                if (transcript.NotePermission(toolCallId, allowed) is { } note)
-                    Print(note);
-            });
+                transcript.NotePermission(toolCallId, allowed);
+                tools.Permission(toolCallId, allowed);
+            },
+            requested: call => { tools.Apply(call); tools.Permission(call.ToolCallId, null); });
 
         return new AcpClientHandler(prompter, files);
     }
@@ -345,6 +348,15 @@ public partial class App
 
     private sealed class PaneSink(App app) : IAcpTurnSink
     {
+        public void BeginToolActivities() => app._acpTools?.BeginTurn();
+        public bool ToolCall(MandoCode.Acp.Protocol.ToolCallBase call)
+        {
+            if (app._acpTools is not { } tools) return false;
+            tools.Apply(call);
+            return true;
+        }
+        public void ToolDetail(string id, IRenderable detail) => app._acpTools?.Detail(id, detail);
+        public void EndToolActivities(string status) => app._acpTools?.EndTurn(status);
         public void Preview(string? tail) => app.Spinner.UpdatePreview(tail);
 
         public void Activity(string label) => (app.Pane?.Session ?? TuiConsole.Current)?.SetActivity(label);

@@ -27,6 +27,10 @@ public interface IAcpTurnSink
     void Notice(string text);
 
     void Error(string text);
+    void BeginToolActivities() { }
+    bool ToolCall(ToolCallBase call) => false;
+    void ToolDetail(string id, IRenderable detail) => Block(detail);
+    void EndToolActivities(string status) { }
 }
 
 /// <param name="StopReason">The agent's stop reason; null when the turn failed.</param>
@@ -61,6 +65,23 @@ public sealed class AcpTurnDriver
 
     public async Task<AcpTurnOutcome> RunAsync(IAcpAgentRuntime runtime, IReadOnlyList<ContentBlock> prompt, CancellationToken cancellation)
     {
+        _sink.BeginToolActivities();
+        var finalStatus = "Interrupted";
+        try
+        {
+            var outcome = await RunCoreAsync(runtime, prompt, cancellation).ConfigureAwait(false);
+            finalStatus = cancellation.IsCancellationRequested || outcome.Cancelled ? "Cancelled"
+                : outcome.Error is not null ? "Interrupted" : "Unfinished";
+            return outcome;
+        }
+        finally
+        {
+            _sink.EndToolActivities(cancellation.IsCancellationRequested ? "Cancelled" : finalStatus);
+        }
+    }
+
+    private async Task<AcpTurnOutcome> RunCoreAsync(IAcpAgentRuntime runtime, IReadOnlyList<ContentBlock> prompt, CancellationToken cancellation)
+    {
         if (runtime.Status != AcpRuntimeStatus.Ready)
         {
             var message = $"The agent is not running. {AcpErrorMessages.RestartHint}";
@@ -69,6 +90,7 @@ public sealed class AcpTurnDriver
         }
 
         IAcpTurn turn;
+        _transcript?.BeginTurn();
         try
         {
             turn = runtime.Prompt(prompt);
@@ -79,7 +101,6 @@ public sealed class AcpTurnDriver
             return new AcpTurnOutcome(null, ex.Message, "", RuntimeClosed: false);
         }
 
-        _transcript?.BeginTurn();
         var reply = new StringBuilder();
         var pending = new StringBuilder();
         string? activity = null;
@@ -135,13 +156,15 @@ public sealed class AcpTurnDriver
                             SetActivity(string.IsNullOrWhiteSpace(call.Title) ? "Working…" : call.Title!);
                         }
 
+                        var structured = _sink.ToolCall(call);
                         if (_transcript is not null)
                         {
-                            var blocks = _transcript.Apply(call);
+                            var blocks = _transcript.Apply(call, includeToolText: !structured);
                             if (blocks.Count > 0 && call is not ToolCall)
                                 Settle();
                             foreach (var block in blocks)
-                                _sink.Block(block);
+                                if (structured) _sink.ToolDetail(call.ToolCallId, block);
+                                else _sink.Block(block);
                         }
 
                         break;

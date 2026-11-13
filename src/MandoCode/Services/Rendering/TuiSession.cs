@@ -58,6 +58,15 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
         }
     }
     public void BeginToolTurn() { lock (_sync) _toolActivity = null; }
+    public void UpdateAcpTool(MandoCode.Services.Acp.AcpToolActivity activity, bool added)
+    {
+        lock (_sync)
+        {
+            if (added)
+                AddEntry(new(Interlocked.Increment(ref _nextId), activity) { AcpTool = activity, AgentOutput = _capturedExchange.Value });
+            Interlocked.Increment(ref _revision);
+        }
+    }
     public IDisposable CaptureToolOutput(bool invoked, bool success = true)
     {
         lock (_sync)
@@ -211,6 +220,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
 }
 public sealed record TuiEntry(long Id, IRenderable Content)
 {
+    public MandoCode.Services.Acp.AcpToolActivity? AcpTool { get; init; }
     public AgentExchange? AgentActivity { get; init; }
     public AgentExchange? AgentOutput { get; init; }
     public ToolActivity? ToolActivity { get; init; }
