@@ -86,6 +86,7 @@ public sealed class WorkspaceRegistry : IDisposable, IAsyncDisposable
     }
     public void ClosePicker()
     {
+        if (!IsWorkspacePickerOpen) return;
         IsWorkspacePickerOpen = false;
         if (Active.SelectedPane is { } pane) Active.Focus(pane);
         else Notify();

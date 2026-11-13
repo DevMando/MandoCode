@@ -80,6 +80,7 @@
     private readonly WorkspaceTabWindow _tabs = new();
     private AgentWorkspace[] _openWorkspaces = [];
     private bool _pickerWasOpen;
+    private (int Awaiting, bool Explorer, bool AgentTips, string Tip) _lastStatus;
     private string ExplorerTip => Registry.Active.SelectedPane?.IsHistoryOpen?.Invoke() == true
         ? "Tab switches list/conversation · Up/Down or Page Up/Page Down navigates · Home/End jumps · Type to search the list · Left/Right selects actions · Enter activates · Esc closes."
         : Registry.Active.SelectedPane?.IsGitChangesOpen?.Invoke() == true
@@ -109,6 +110,7 @@
         Viewport.OnResized += Changed;
         if (Registry.Active.Panes.Count == 0) Registry.Active.Add();
         UpdateTabs();
+        _lastStatus = CaptureStatus();
         _ = RefreshStatusAsync();
     }
     private void UpdateTabs()
@@ -118,7 +120,20 @@
         _openWorkspaces = Registry.Workspaces.ToArray();
         _tabs.Update(_openWorkspaces, Registry.Active, Viewport.Width - LabelWidth - ArrowWidth - ActionsWidth);
     }
-    private void Changed() => _ = InvokeAsync(() => { UpdateTabs(); _revision++; StateHasChanged(); });
+    private void Changed() => _ = InvokeAsync(() => { UpdateTabs(); _lastStatus = CaptureStatus(); _revision++; StateHasChanged(); });
+    private (int Awaiting, bool Explorer, bool AgentTips, string Tip) CaptureStatus()
+    {
+        var awaiting = 0;
+        var panes = Registry.Active.Panes;
+        for (var index = 0; index < panes.Count; index++)
+            if (panes[index].IsAwaitingInput?.Invoke() == true) awaiting |= 1 << index;
+        var explorer = ShowExplorerTip;
+        return (awaiting, explorer, ShowAgentTips, explorer ? ExplorerTip : "");
+    }
+    private void PollStatus()
+    {
+        if (CaptureStatus() != _lastStatus) Changed();
+    }
     private void ScrollTabs(int direction) { _tabs.Scroll(direction, _openWorkspaces.Length); Changed(); }
     private void ClosePicker()
     {
@@ -129,7 +144,7 @@
     private async Task RefreshStatusAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(300));
-        try { while (await timer.WaitForNextTickAsync(_shutdown.Token)) Changed(); }
+        try { while (await timer.WaitForNextTickAsync(_shutdown.Token)) await InvokeAsync(PollStatus); }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
     public void Dispose() { Registry.Changed -= Changed; Viewport.OnResized -= Changed; Registry.IsWorkspacePickerOpen = false; _shutdown.Cancel(); _shutdown.Dispose(); }
