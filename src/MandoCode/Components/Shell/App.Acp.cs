@@ -385,6 +385,13 @@ public partial class App
 
         public Task<string?> StopAsync() => app.StopAcpAsync();
 
+        public async Task<string?> ModeAsync(string arguments)
+        {
+            if (!app.IsAcpPane) return "Mode selection works inside an ACP agent pane. Open one with /agent-acp <name>.";
+            await app.RunAcpModeAsync(arguments);
+            return null;
+        }
+
         public async Task<string?> RestartAsync()
         {
             if (!app.IsAcpPane) return "Restart works inside an ACP agent pane. Open one with /agent-acp <name>.";

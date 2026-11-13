@@ -86,6 +86,30 @@ public class AcpPaneAppTests
     // ─────────── /transcript-save ───────────
 
     [Fact]
+    public async Task AgentModeCommandChangesTheAdvertisedSettingInTheSameSession()
+    {
+        await using var h = Harness.Create();
+        h.Runtime.ConfigOptions = [JsonSerializer.Deserialize("""
+            {"id":"mode","name":"Mode","category":"mode","type":"select","currentValue":"agent",
+             "options":[{"value":"read-only","name":"Read-only"},{"value":"agent","name":"Auto review"}]}
+            """, AcpJsonContext.Default.SessionConfigOption)!];
+        await h.Run("/agent-acp mode read-only");
+        Assert.Equal(("mode", "read-only"), Assert.Single(h.Runtime.ConfigChanges));
+        Assert.Equal(0, h.Runtime.NewConversations);
+        Assert.Contains("Agent mode set", h.Output);
+    }
+
+    [Fact]
+    public async Task AgentModeCommandIsRefusedDuringActiveWork()
+    {
+        await using var h = Harness.Create();
+        SetField(h.App, "_requestCts", new CancellationTokenSource());
+        await h.Run("/agent-acp mode read-only");
+        Assert.Empty(h.Runtime.ConfigChanges);
+        Assert.Contains("current request to finish", h.Output);
+    }
+
+    [Fact]
     public async Task TranscriptSave_NamesTheAcpAgent_NotTheOllamaModel()
     {
         await using var h = Harness.Create();

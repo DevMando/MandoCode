@@ -36,6 +36,7 @@ public interface IAcpPaneHost
 
     /// <summary>Restarts the agent of the current pane. Null on success, otherwise what to tell the user.</summary>
     Task<string?> RestartAsync();
+    Task<string?> ModeAsync(string arguments) => Task.FromResult<string?>("Mode selection is not available here.");
 }
 
 /// <summary>
@@ -45,11 +46,11 @@ public interface IAcpPaneHost
 public sealed class AcpAgentCommands
 {
     public const string Usage =
-        "Usage: /agent-acp [list] | <name> [--new-panel] [--resume] | restart | stop | sessions | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
+        "Usage: /agent-acp [list] | <name> [--new-panel] [--resume] | mode [name] | restart | stop | sessions | status [name] | add <name> <command> [args...] | test <name> | remove <name> | enable <name> | disable <name>";
 
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {
-        "list", "status", "add", "test", "remove", "enable", "disable", "restart", "stop", "sessions",
+        "list", "status", "add", "test", "remove", "enable", "disable", "restart", "stop", "sessions", "mode",
     };
 
     private readonly IAcpAgentCatalog _catalog;
@@ -94,6 +95,12 @@ public sealed class AcpAgentCommands
         var rest = tokens.Skip(1).ToList();
         switch (verb)
         {
+            case "mode":
+                if (_host is null)
+                    error.WriteLine("Mode selection works inside an ACP agent pane.");
+                else if (await _host.ModeAsync(string.Join(" ", rest)) is { } modeError)
+                    error.WriteLine(modeError);
+                break;
             case "status":
                 Status(rest, output, error);
                 break;

@@ -25,6 +25,14 @@ public sealed class FakeRuntime : IAcpAgentRuntime
     public AcpRuntimeStatus Status { get; set; } = AcpRuntimeStatus.Ready;
     public string? AgentTitle => "fake-adapter 1.2.3";
     public string? CurrentMode => "default";
+    public SessionModeState? Modes { get; set; }
+    public List<string> ModeChanges { get; } = [];
+    public Task SetModeAsync(string modeId, CancellationToken cancellationToken)
+    {
+        if (ConfigChangeFails is { } failure) throw failure;
+        ModeChanges.Add(modeId);
+        return Task.CompletedTask;
+    }
     public IReadOnlyList<string> StartupWarnings { get; } = [];
     public PromptCapabilities PromptCapabilities { get; } = new();
     public event Action? Changed { add { } remove { } }

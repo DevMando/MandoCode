@@ -42,6 +42,7 @@ public interface IAcpAgentRuntime : IAsyncDisposable
     string? AgentDisplayName => AgentTitle;
 
     string? CurrentMode { get; }
+    SessionModeState? Modes => null;
 
     /// <summary>Non-fatal things that happened while starting (for example a refused <c>session/set_mode</c>).</summary>
     IReadOnlyList<string> StartupWarnings { get; }
@@ -79,6 +80,8 @@ public interface IAcpAgentRuntime : IAsyncDisposable
 
     /// <summary>Sets a select option; throws <see cref="JsonRpcException"/> when the agent refuses it.</summary>
     Task SetConfigOptionAsync(string configId, string value, CancellationToken cancellationToken);
+    Task SetModeAsync(string modeId, CancellationToken cancellationToken) =>
+        Task.FromException(new NotSupportedException("This agent does not expose session modes."));
 
     /// <summary>The agent's sessions for this pane's folder (needs <see cref="AcpSessionSupport.CanList"/>).</summary>
     Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(CancellationToken cancellationToken);
@@ -144,6 +147,7 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         ? (string.IsNullOrWhiteSpace(info.Title) ? info.Name : info.Title)
         : null;
     public string? CurrentMode => _session?.CurrentModeId;
+    public SessionModeState? Modes => _session?.Modes;
     public IReadOnlyList<string> StartupWarnings { get { lock (_gate) return _warnings.ToArray(); } }
     public PromptCapabilities PromptCapabilities => _session?.AgentCapabilities.PromptCapabilities ?? new PromptCapabilities();
     public string? SessionId => _session?.SessionId;
@@ -342,6 +346,15 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
         if (Status != AcpRuntimeStatus.Ready || session is null)
             throw new InvalidOperationException("The agent is not running.");
         await session.SetConfigOptionAsync(configId, value, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SetModeAsync(string modeId, CancellationToken cancellationToken)
+    {
+        if (Status != AcpRuntimeStatus.Ready || _session is not { } session)
+            throw new InvalidOperationException("The agent is not running.");
+        if (session.IsBusy)
+            throw new InvalidOperationException("Wait for the current request to finish before changing the agent mode.");
+        await session.SetModeAsync(modeId, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(CancellationToken cancellationToken)
