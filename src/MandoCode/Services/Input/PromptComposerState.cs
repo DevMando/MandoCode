@@ -12,6 +12,9 @@ public sealed class PromptComposerState(InputStateMachine machine)
     public bool IsOpen => Suggestions.Mode != AutocompleteMode.None && Suggestions.DropdownItems.Count > 0;
     public CliAgentDirectory? Agents { get; set; }
     public bool ViewingAgents { get; private set; }
+    /// <summary>True when the pane cannot reach MandoCode's agents (an ACP pane): the picker lists files only.</summary>
+    public Func<bool>? AgentsHidden { get; set; }
+    public bool AgentsAvailable => AgentsHidden?.Invoke() != true;
     public AgentPane[] AgentSuggestions { get; private set; } = [];
     public int AgentSelected { get; private set; }
     private string? _dismissedAt;
@@ -36,7 +39,7 @@ public sealed class PromptComposerState(InputStateMachine machine)
         (ViewingAgents || FilesLoading || IsOpen || !at.Fragment.EndsWith('/'));
     public bool ToggleAgentView()
     {
-        if (!AtPickerOpen) return false;
+        if (!AtPickerOpen || !AgentsAvailable) return false;
         ViewingAgents = !ViewingAgents;
         Refresh();
         return true;
@@ -51,14 +54,19 @@ public sealed class PromptComposerState(InputStateMachine machine)
     }
     public void Refresh()
     {
-        if (AtFragment is { } at && Agents is not null)
+        if (AtFragment is { } at && Agents is not null && AgentsAvailable)
         {
             var selected = AgentSuggestions.ElementAtOrDefault(AgentSelected)?.PersistKey;
             AgentSuggestions = Agents.Match(at.Fragment);
             var retained = Array.FindIndex(AgentSuggestions, p => p.PersistKey == selected);
             AgentSelected = retained >= 0 ? retained : 0;
         }
-        else { ViewingAgents = false; AgentSuggestions = []; _dismissedAt = null; }
+        else
+        {
+            ViewingAgents = false; AgentSuggestions = [];
+            // Hidden agents keep the dismissal: only a missing @ fragment resets it.
+            if (AtFragment is null) _dismissedAt = null;
+        }
         if (!ViewingAgents) machine.UpdateText(Buffer.Text[..Buffer.Cursor]);
     }
     public void InsertAgent(int index)
@@ -90,7 +98,7 @@ public sealed class PromptComposerState(InputStateMachine machine)
     }
     public bool HandleKey(string key)
     {
-        if (key == "Tab" && AtPickerOpen) return ToggleAgentView();
+        if (key == "Tab" && AtPickerOpen && AgentsAvailable) return ToggleAgentView();
         if (AtPickerOpen && ViewingAgents)
         {
             switch (key)

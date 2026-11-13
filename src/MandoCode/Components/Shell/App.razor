@@ -60,7 +60,7 @@
 
 @* Keep the banner visible, but hide startup details while setup owns the screen.
    HomeView keeps that visibility rule together instead of repeating it for each detail. *@
-@if (!_setupActive)
+@if (!_setupActive && !IsAcpPane)
 {
     <HomeView
               SupportsVision="@AI.SupportsImageInput"
@@ -140,7 +140,9 @@
                        PageSize="@ApprovalPreviewPageSize" />
     }
     <ApprovalSelect Options="@_approvalMenuOptions"
+                    InitialIndex="@ApprovalMenu.InitialIndex"
                     OnSubmit="HandleApprovalMenuSubmit"
+                    OnCancel="HandleApprovalMenuCancel"
                     OnScroll="HandleApprovalPreviewScroll" />
 }
 
@@ -391,6 +393,12 @@
         {
             await InvokeAsync(() =>
             {
+                if (IsAcpPane)
+                {
+                    request.Accepted.TrySetResult(false);
+                    request.Completion.TrySetResult(new(false, "This agent is currently running an external ACP agent and cannot take requests from other agents."));
+                    return;
+                }
                 if (_paneStopped || Pane?.IsBusy?.Invoke() != false || Pane.IsAwaitingInput?.Invoke() == true ||
                     _inputTcs is null || _inputTcs.Task.IsCompleted || request.Cancellation.IsCancellationRequested)
                 {
@@ -1382,13 +1390,20 @@
             // Shell escape: !<cmd> runs a shell command inline
             if (input.TrimStart().StartsWith('!'))
             {
-                await Shell.HandleShellCommandAsync(input.TrimStart()[1..].Trim());
+                await RunShellLineAsync(input.TrimStart()[1..].Trim());
                 continue;
             }
 
             if (InputStateMachine.IsCommand(input))
             {
                 if (await ExecuteSlashCommandAsync(input) == CliCommandResult.Exit) return;
+                continue;
+            }
+
+            // An ACP pane talks to an external agent: none of the Ollama checks below apply to it.
+            if (IsAcpPane)
+            {
+                await ProcessAcpRequestAsync(input);
                 continue;
             }
 
@@ -1542,6 +1557,12 @@
         ApprovalMenu.Submit(value ?? string.Empty);
     }
 
+    /// <summary>Escape in an approval menu: only menus that opted in (ACP permission requests) are dismissed.</summary>
+    private void HandleApprovalMenuCancel()
+    {
+        if (ApprovalMenu.CancelOnEscape) ApprovalMenu.Cancel();
+    }
+
     /// <summary>
     /// Re-projects the coordinator's options into ApprovalSelect's Option type and
     /// re-renders. Done here (on state change) rather than inline in markup so the option
@@ -1640,6 +1661,8 @@
     private DateTimeOffset? _archiveClosedAt;
     private bool SaveAgentHistory(bool closed)
     {
+        // Only the native conversation is archived: ACP turns live in _acpMessages, so /history can never restore an
+        // external agent as a native one, while the native conversation of a switched pane is still saved.
         if (Pane is null || !Config.AllowPersistence || _messages.Count == 0) return true;
         var store = Pane.Services.GetRequiredService<AgentArchiveStore>();
         try
@@ -1965,9 +1988,14 @@
         }
     }
 
+    /// <summary>The last assistant reply of this pane's own conversation: the ACP conversation in an ACP pane, the native one otherwise.</summary>
+    private string? LastAssistantReply =>
+        IsAcpPane ? _acpMessages.LastOrDefault(m => m.Role == "assistant")?.Text : _lastAiResponse;
+
     private void HandleCopyCommand()
     {
-        if (string.IsNullOrEmpty(_lastAiResponse))
+        var reply = LastAssistantReply;
+        if (string.IsNullOrEmpty(reply))
         {
             AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
             AnsiConsole.WriteLine();
@@ -1975,16 +2003,17 @@
         }
 
         // OSC 52: copy to system clipboard via terminal escape code
-        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(_lastAiResponse));
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(reply));
         TuiConsole.WriteTerminalControl($"\u001b]52;c;{base64}\u0007");
 
-        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({_lastAiResponse.Length} chars)[/]");
+        AnsiConsole.MarkupLine($"[green]Copied to clipboard[/] [dim]({reply.Length} chars)[/]");
         AnsiConsole.WriteLine();
     }
 
     private void HandleCopyCodeCommand()
     {
-        if (string.IsNullOrEmpty(_lastAiResponse))
+        var reply = LastAssistantReply;
+        if (string.IsNullOrEmpty(reply))
         {
             AnsiConsole.MarkupLine("[yellow]Nothing to copy — no AI response yet.[/]");
             AnsiConsole.WriteLine();
@@ -1993,7 +2022,7 @@
 
         // Extract fenced code blocks
         var codeBlockPattern = @"```(?:\w*)\r?\n([\s\S]*?)```";
-        var matches = Regex.Matches(_lastAiResponse, codeBlockPattern);
+        var matches = Regex.Matches(reply, codeBlockPattern);
 
         if (matches.Count == 0)
         {

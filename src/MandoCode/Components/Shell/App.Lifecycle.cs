@@ -13,6 +13,7 @@ public partial class App
     {
         _paneStopped = true;
         _requestCts?.Cancel();
+        _acpStartCts?.Cancel();
         _snapshotCompletion?.TrySetResult();
         _setupCompletion?.TrySetResult(new(false, true, null));
         _historyTcs?.TrySetResult();
@@ -137,6 +138,7 @@ public partial class App
         McpGate = agentServices.GetRequiredService<McpApprovalGate>();
         PromptGate = agentServices.GetRequiredService<ApprovalPromptGate>();
         UpdateCheck = agentServices.GetRequiredService<UpdateCheckService>();
+        agentServices.GetRequiredService<Services.Acp.AcpRuntimeHolder>().IsAcpPane = IsAcpPane;
     }
 
     /// <summary>Register the component's pane callbacks as owned leases. An old component
@@ -162,6 +164,7 @@ public partial class App
             () => Pane.SubmitCommand, value => Pane.SubmitCommand = value, HandleVdomSubmit);
 
         // Other agents read a snapshot of the transcript on the renderer dispatcher.
+        // While a pane runs an ACP agent, AskPeerAsync refuses: peer requests are a native-agent feature.
         _paneCallbacks.Bind<Func<CliPeerRequest, Task<CliPeerAnswer>>>(
             () => Pane.AskPeer, value => Pane.AskPeer = value, AskPeerAsync);
         _paneCallbacks.Bind<Func<Task<IReadOnlyList<ChatMsg>>>>(
@@ -190,7 +193,7 @@ public partial class App
     private async Task<IReadOnlyList<ChatMsg>> ReadPaneConversationAsync()
     {
         IReadOnlyList<ChatMsg> conversation = [];
-        await InvokeAsync(() => conversation = _messages
+        await InvokeAsync(() => conversation = (IsAcpPane ? _acpMessages : _messages)
             .Select(message => new ChatMsg { Role = message.Role, Text = message.Text })
             .ToArray());
         return conversation;
@@ -209,8 +212,23 @@ public partial class App
 
         if (firstRender && !_connectionChecked)
         {
-            await InitializeConnectionAsync();
-            _startupComplete = true;
+            // An ACP pane connects in the background, so this returns at once and the prompt mounts at once.
+            // The finally keeps an unexpected startup exception from leaving a pane that never takes input.
+            if (IsAcpPane)
+            {
+                try { await InitializeAcpAsync(); }
+                finally
+                {
+                    _connectionChecked = true;
+                    _startupComplete = true;
+                }
+            }
+            else
+            {
+                _nativeInitialized = true;
+                await InitializeConnectionAsync();
+                _startupComplete = true;
+            }
         }
 
         // Connection status becomes available before model validation and MCP finish.

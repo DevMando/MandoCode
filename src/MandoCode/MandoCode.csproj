@@ -65,6 +65,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ACP (Agent Client Protocol) client: protocol + transport, no UI dependencies. -->
+    <ProjectReference Include="..\MandoCode.Acp\MandoCode.Acp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Audio\**\*.mp3" />
   </ItemGroup>
 

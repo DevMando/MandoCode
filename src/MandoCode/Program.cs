@@ -47,6 +47,14 @@ class Program
             return;
         }
 
+        // ACP agent probe — launches a configured agent (after the same trust question as /agent-acp),
+        // runs initialize + session/new and prints the result.
+        if (args.Length > 0 && args[0].ToLower() == "--acp-probe")
+        {
+            Environment.ExitCode = await RunAcpProbeAsync(args.Skip(1).ToArray());
+            return;
+        }
+
         // Get project root from the first POSITIONAL arg (flags like --continue/-c are not
         // folder names) or use the current directory. App.razor applies the same filtering
         // when it re-reads the raw command line.
@@ -135,6 +143,9 @@ class Program
 
         // Register SpinnerService per agent
         services.AddScoped<SpinnerService>();
+
+        // An ACP pane's external agent lives in the pane's scope, so closing the pane ends its process tree
+        services.AddScoped<Services.Acp.AcpRuntimeHolder>();
 
         // Register UpdateCheckService — background NuGet "newer version available" nag
         services.AddScoped<UpdateCheckService>();
@@ -255,7 +266,11 @@ class Program
             var fileProvider = provider.GetRequiredService<FileAutocompleteProvider>();
             var commands = SlashCommands.All.ToDictionary(kv => kv.Key, kv => kv.Value);
             var config = provider.GetRequiredService<MandoCodeConfig>();
-            return new InputStateMachine(commands, fileProvider, command => SlashCommands.IsAvailable(command, config));
+            var acp = provider.GetRequiredService<Services.Acp.AcpRuntimeHolder>();
+            return new InputStateMachine(commands, fileProvider,
+                command => SlashCommands.IsAvailable(command, config)
+                           && !(acp.IsAcpPane && (MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command)
+                                                  || !MandoCode.Services.Acp.AcpPaneRestrictions.IsListed(command, acp.Runtime))));
         });
 
         // Retain rich markdown/tool renderables inside the widget conversation.
@@ -277,6 +292,21 @@ class Program
     /// Preflight check printed in plain text so it works in any terminal. Returns the
     /// suggested process exit code (0 = all good, 1 = at least one problem).
     /// </summary>
+    static async Task<int> RunAcpProbeAsync(string[] probeArgs)
+    {
+        var parsed = Services.Acp.AcpConnectionProbe.Parse(probeArgs, Environment.CurrentDirectory, Console.Error);
+        if (parsed is not { } request)
+            return Services.Acp.AcpConnectionProbe.ExitUsage;
+
+        // acpAgents come from the user's own config only.
+        var config = MandoCodeConfig.Load();
+        return await Services.Acp.AcpConnectionProbe.RunAsync(
+            request.Name, config.AcpAgents, request.WorkingDirectory,
+            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()),
+            Services.Acp.AcpConnectionProbe.ConsoleConfirm(Console.Out, Console.ReadLine),
+            Console.Out, Console.Error);
+    }
+
     static async Task<int> RunDoctorAsync()
     {
         var problems = 0;

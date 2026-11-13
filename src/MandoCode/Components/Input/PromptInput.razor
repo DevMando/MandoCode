@@ -42,7 +42,7 @@
     <Box Width="@PromptWidth">
     <Panel Border="BoxBorder.Double" BorderColor="@InputColor(Color.Green)" Expand="true" Title="@Label">
         <TextArea Buffer="_composer.Buffer" Editable="true" Width="@InputWidth" Height="@InputHeight"
-                  WordWrap="true" Placeholder="@(ModelPicker is null ? Placeholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
+                  WordWrap="true" Placeholder="@(ModelPicker is null ? EffectivePlaceholder : "filter models · ↑/↓ select · Enter confirm · Esc cancel")" PlaceholderForeground="@InputColor(Color.Grey)"
                   CharacterStyle="@(_ => new Style(InputColor(new Color(255, 200, 80))))"
                   Hook="@_hook" CanSubmit="@(!Disabled && ModelPicker is null)" ManageTab="@(ExplorerFocus?.Active == true || ModelPicker is not null || _composer.IsOpen || _emojiOpen || _composer.AtPickerOpen)"
                   OnPreviewKey="PreviewKey" OnChanged="HandleChanged" OnSubmit="HandleSubmit" />
@@ -86,6 +86,9 @@
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
     [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis · Alt+V paste image";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
+    // An ACP pane offers files only in the @ picker and no image paste (AcpPaneRestrictions).
+    private bool IsAcpPane => Pane?.Runtime == AgentRuntime.Acp;
+    private string EffectivePlaceholder => IsAcpPane && ChatFeaturesEnabled ? "type / for commands, @ for files, : for emojis" : Placeholder;
     [Parameter] public bool AllowEmpty { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
     [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
@@ -210,6 +213,7 @@
             if (Pane is not null && key is not null) Pane.PresentationState[key] = new ComposerDraft(_composer, InitialValue, ModelPicker, PersistenceKey);
         }
         if (ChatFeaturesEnabled && Pane is not null) _composer.Agents = new CliAgentDirectory(Pane);
+        _composer.AgentsHidden = () => IsAcpPane;
         if (ChatFeaturesEnabled && Pane?.Workspace.Registry is { } registry) registry.Changed += FilesChanged;
         else if (ChatFeaturesEnabled && Pane is not null) Pane.Workspace.Changed += FilesChanged;
     }
@@ -271,7 +275,15 @@
     {
         if (Pane is { Active: false }) return true;
         if (key.Key is not ("ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")) _cursorNavigation.Reset();
-        if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null) return await PasteClipboardImage(key.AltKey);
+        if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null)
+        {
+            if (IsAcpPane)
+            {
+                _clipboardStatus = $"Image paste is unavailable in an ACP pane: {MandoCode.Services.Acp.AcpPaneRestrictions.ImagePasteReason}.";
+                _clipboardError = true; StateHasChanged(); return true;
+            }
+            return await PasteClipboardImage(key.AltKey);
+        }
         if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return true;
         if (_pastingImage) return true;
         if (!Disabled && ModelPicker is null && _pasteGuard.IsPasteKey(key))

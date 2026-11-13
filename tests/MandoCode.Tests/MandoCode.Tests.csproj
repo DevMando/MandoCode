@@ -23,6 +23,14 @@
   <ItemGroup>
     <!-- Reference the main project so we can test its classes -->
     <ProjectReference Include="..\..\src\MandoCode\MandoCode.csproj" />
+    <ProjectReference Include="..\..\src\MandoCode.Acp\MandoCode.Acp.csproj" />
+    <!-- Scriptable fake ACP agent, launched as a real subprocess by the transport tests. -->
+    <ProjectReference Include="..\MandoCode.Acp.MockAgent\MandoCode.Acp.MockAgent.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Vendored official ACP schema, used by the schema-drift test. -->
+    <None Include="Acp\schema\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

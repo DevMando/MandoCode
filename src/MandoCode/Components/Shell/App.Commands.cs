@@ -14,6 +14,17 @@ public partial class App
         var parsed = CliCommand.Parse(input);
         var command = parsed.DispatchText;
 
+        // What an ACP agent pane does not offer is decided in one place (AcpPaneRestrictions).
+        if (IsAcpPane && MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command))
+        {
+            TuiConsole.WriteLine(MandoCode.Services.Acp.AcpPaneRestrictions.Message(command));
+            return CliCommandResult.Continue;
+        }
+
+        // A few commands mean something else in an ACP pane (/clear, /model, /compact, folder changes).
+        if (IsAcpPane && await TryHandleAcpCommandAsync(command, parsed.Arguments))
+            return CliCommandResult.Continue;
+
         // Handle special commands
         if (command == "update")
         {
@@ -128,7 +139,8 @@ public partial class App
         {
             var args = parsed.Arguments;
             await CliReferenceCommands.SaveTranscriptAsync(Pane?.Session ?? TuiConsole.Current,
-                Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot, Config.GetEffectiveModelName(), args);
+                Pane?.Name ?? "MandoCode", ProjectRoot.ProjectRoot,
+                IsAcpPane ? $"ACP · {_acp?.AgentTitle ?? Pane!.AcpAgentName}" : Config.GetEffectiveModelName(), args);
             return CliCommandResult.Continue;
         }
         if (command is "context-snap-create" or "context-snap-import") { await CaptureSnapshot(); await ShowSnapshots(command == "context-snap-create"); return CliCommandResult.Continue; }
@@ -174,6 +186,11 @@ public partial class App
                 }
                 await InvokeAsync(StateHasChanged);
             }
+            return CliCommandResult.Continue;
+        }
+        if (command == "agent-acp" || command.StartsWith("agent-acp ", StringComparison.Ordinal))
+        {
+            await HandleAcpAgentCommandAsync(parsed.Arguments);
             return CliCommandResult.Continue;
         }
         if (command == "ollama-pull") { await ShowOllamaPull(); return CliCommandResult.Continue; }
@@ -265,7 +282,7 @@ public partial class App
         if (command == "command" || command.StartsWith("command "))
         {
             var shellCmd = command.Length > 7 ? command[8..].Trim() : "";
-            await Shell.HandleShellCommandAsync(shellCmd);
+            await RunShellLineAsync(shellCmd);
             return CliCommandResult.Continue;
         }
 
@@ -311,4 +328,23 @@ public partial class App
         TuiConsole.WriteLine();
         return CliCommandResult.Continue;
     }
+
+    private async Task HandleAcpAgentCommandAsync(string arguments)
+    {
+        using var output = Pane is null ? null : TuiConsole.Enter(Pane.Session);
+        var configs = Pane is null
+            ? new[] { Config }
+            : (Pane.Workspace.Registry?.Workspaces.SelectMany(w => w.Panes) ?? Pane.Workspace.Panes)
+                .Select(p => p.Services.GetRequiredService<MandoCodeConfig>()).ToArray();
+        var commands = new Services.Acp.AcpAgentCommands(
+            new Services.Acp.ConfigAcpAgentCatalog(Config, configs),
+            new Services.Acp.AcpAgentLauncher(new Services.Acp.FileTrustStore()),
+            host: new PaneHost(this));
+
+        await commands.ExecuteAsync(arguments, ProjectRoot.ProjectRoot, ConfirmAcpLaunchAsync, Console.Out, Console.Out);
+    }
+
+    private Task<bool> ConfirmAcpLaunchAsync(Services.Acp.AcpLaunchPlan plan) =>
+        new Services.Acp.AcpTrustPrompt(PromptGate, ApprovalMenu, () => KeyCoordinator.Suppress(), TuiConsole.WriteLine)
+            .ConfirmAsync(plan);
 }

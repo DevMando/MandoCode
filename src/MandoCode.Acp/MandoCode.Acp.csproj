@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>MandoCode.Acp</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Analyzer-only: keeps the protocol layer free of reflection-based System.Text.Json
+         calls so a Native AOT build stays possible. AOT publishing itself is not required. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MandoCode.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -46,10 +46,23 @@ public sealed class ApprovalSelectCoordinator
     /// </summary>
     public event Action? StateChanged;
 
+    /// <summary>
+    /// True while the open menu is one Escape may dismiss (see <see cref="RequestAsync"/>'s <c>cancelOnEscape</c>).
+    /// Menus that do not opt in ignore Escape, as before.
+    /// </summary>
+    public bool CancelOnEscape { get; private set; }
+
+    /// <summary>The entry the cursor starts on (a menu that shows a current value starts on it).</summary>
+    public int InitialIndex { get; private set; }
+
+    /// <param name="cancelOnEscape">When true, Escape closes the menu and the awaiter gets <see cref="Cancelled"/>.</param>
+    /// <param name="initialIndex">The entry the cursor starts on; out-of-range values fall back to the first entry.</param>
     public Task<string> RequestAsync(
         IReadOnlyList<Option> options,
         IReadOnlyList<PreviewLine>? preview = null,
-        string? previewTitle = null)
+        string? previewTitle = null,
+        bool cancelOnEscape = false,
+        int initialIndex = 0)
     {
         TaskCompletionSource<string> tcs;
         lock (_gate)
@@ -64,6 +77,8 @@ public sealed class ApprovalSelectCoordinator
             Options = options;
             Preview = preview ?? Array.Empty<PreviewLine>();
             PreviewTitle = previewTitle;
+            CancelOnEscape = cancelOnEscape;
+            InitialIndex = initialIndex >= 0 && initialIndex < options.Count ? initialIndex : 0;
             IsActive = true;
         }
 
@@ -82,9 +97,23 @@ public sealed class ApprovalSelectCoordinator
             Options = Array.Empty<Option>();
             Preview = Array.Empty<PreviewLine>();
             PreviewTitle = null;
+            CancelOnEscape = false;
+            InitialIndex = 0;
         }
 
         StateChanged?.Invoke();
         tcs?.TrySetResult(value);
+    }
+
+    /// <summary>What a request resolves to when the menu was dismissed instead of answered.</summary>
+    public const string Cancelled = "";
+
+    /// <summary>Dismisses the open menu: the awaiter gets <see cref="Cancelled"/>. Does nothing when no menu is open.</summary>
+    public void Cancel()
+    {
+        bool active;
+        lock (_gate) active = _tcs is not null;
+        if (active)
+            Submit(Cancelled);
     }
 }
