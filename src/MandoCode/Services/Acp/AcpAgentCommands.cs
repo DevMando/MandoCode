@@ -198,6 +198,7 @@ public sealed class AcpAgentCommands
             output.WriteLine("Add one: /agent-acp add <name> <command> [args...]");
             output.WriteLine(@"  Node adapter: /agent-acp add myagent node ""C:\path\to\adapter\dist\index.js""");
             output.WriteLine("  Claude Code: /agent-acp add claude (shows how to set it up)");
+            output.WriteLine("  Codex: /agent-acp add codex (shows how to set it up)");
             return;
         }
 
@@ -269,6 +270,18 @@ public sealed class AcpAgentCommands
 
     private void Add(List<string> tokens, TextWriter output, TextWriter error)
     {
+        if (tokens.Count == 1 && tokens[0].Equals("codex", StringComparison.OrdinalIgnoreCase))
+        {
+            output.WriteLine("Set up Codex through the Codex ACP adapter:");
+            output.WriteLine("  npm install --prefix <adapter-folder> --save-exact @agentclientprotocol/codex-acp@2.6.0");
+            output.WriteLine("Then register the installed adapter (use absolute paths):");
+            output.WriteLine(@"  /agent-acp add codex node ""<adapter-folder>\node_modules\@agentclientprotocol\codex-acp\dist\index.js""");
+            output.WriteLine("Check the installed package's bin entry if its layout differs.");
+            output.WriteLine("Sign in separately with `codex login`; MandoCode never handles your credentials.");
+            output.WriteLine("The adapter includes a compatible Codex dependency; CODEX_PATH can select another executable.");
+            output.WriteLine("After adding it: /agent-acp test codex, then /agent-acp codex.");
+            return;
+        }
         if (tokens.Count == 1 && tokens[0].Equals("claude", StringComparison.OrdinalIgnoreCase))
         {
             // No preset: the adapter package, its pinned version and the way it finds the Claude Code binary
