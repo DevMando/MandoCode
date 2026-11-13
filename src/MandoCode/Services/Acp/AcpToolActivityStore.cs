@@ -38,6 +38,7 @@ public sealed class AcpToolActivityStore(Action<AcpToolActivity, bool> publish)
                 ToolCallStatuses.Pending => "Pending",
                 _ => old.Status
             };
+            if (old.Status == "Awaiting approval" && status is "Pending" or "Running") status = old.Status;
             var output = old.Output.ToList();
             void AddOutput(string text)
             {

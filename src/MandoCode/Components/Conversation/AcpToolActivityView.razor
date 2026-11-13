@@ -36,9 +36,16 @@
             };
             var title = snapshot.Title.Replace('\r', ' ').Replace('\n', ' ').Trim();
             var summary = action + (title == "Tool call" || title == action ? "" : " · " + title);
-            var budget = Math.Max(8, (Pane?.Width ?? Viewport.Width) - TextSelectionState.CellWidth(snapshot.Status) - 10);
+            var width = Math.Max(12, (Pane?.Width ?? Viewport.Width) - 4);
+            var status = width < 40 ? snapshot.Status switch
+            {
+                "Awaiting approval" => "Approval",
+                "Permission denied" => "Denied",
+                _ => snapshot.Status
+            } : snapshot.Status;
+            var budget = Math.Max(1, width - TextSelectionState.CellWidth(status) - 8);
             return [new((_expanded ? "▾ " : "▸ ") + AcpTranscriptAdapter.IconFor(snapshot.Kind) + " ", Color.Grey),
-                new(Clip(summary, budget), Color.Grey85), new(" · " + snapshot.Status, statusColor)];
+                new(Clip(summary, budget), Color.Grey85), new(" · " + status, statusColor)];
         }
     }
 
