@@ -38,10 +38,12 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Fixed
 
+- Reduce unnecessary multi-agent redraws: selecting an agent no longer re-focuses the previous pane when the workspace picker is already closed. Poll top-level status only when visible indicators or tips change, let the root forward workspace and resize updates once, and avoid rebuilding pane content for unchanged Git status. Preserve background streaming, focus safeguards, and inactive-pane dimming.
 - Refresh the prompt after submission so the clipboard attachment message clears reliably.
 
 ### Test coverage
 
+- Add rendering regressions for no-op picker closure, one focus transition per agent-tab selection, quiet idle polling, one body repaint per pane on focus changes, and continued awaiting-input updates. A two-pane test that previously rebuilt agent bodies six extra times over 750 ms now performs no extra idle rebuilds.
 - Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
 - Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
 - The RazorConsole upgrade passed its then-current suite of 1,248 tests on net10.0 and net8.0, plus startup, typing, resizing, and CLI packaging checks.
