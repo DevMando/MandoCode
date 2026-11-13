@@ -40,8 +40,8 @@ entry path with `node`. The live validation below was performed on Windows only.
 
 ## Commands and boundaries
 
-- `/agent-acp mode` opens the agent's mode picker, with its descriptions and current selection. For example, Codex can offer Read-only, Workspace access, Auto review, and Full access. These are agent-defined permission and behavior modes, not MandoCode's native approval settings.
-- `/agent-acp mode read-only` selects an advertised mode directly. Changes keep the conversation and are refused while the pane has active work. The selection applies to this session; it does not rewrite global Codex configuration.
+- `/agent-acp-mode` opens the agent's mode picker, with its descriptions and current selection. For example, Codex can offer Read-only, Workspace access, Auto review, and Full access. These are agent-defined permission and behavior modes, not MandoCode's native approval settings.
+- `/agent-acp-mode read-only` selects an advertised mode directly. Changes keep the conversation and are refused while the pane has active work. The selection applies to this session; it does not rewrite global Codex configuration.
 - `/model` uses the adapter's advertised model configuration. Available models depend on the account and adapter.
 - `/compact` appears when the adapter advertises that command.
 - `/clear` starts another ACP conversation and preserves the native MandoCode conversation.

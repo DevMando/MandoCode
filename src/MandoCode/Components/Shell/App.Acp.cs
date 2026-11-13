@@ -50,13 +50,14 @@ public partial class App
         public void Connecting(string agentName)
         {
             app.Spinner.Start($"Connecting to {name}...");
-            TuiConsole.WriteLine($"Connecting to {name}... (you can type already; the prompt is sent once the agent is ready)");
+            Print(new Text($"Connecting to {name}… You can type while the agent starts.", new Style(Color.Grey)));
         }
 
         public void Connected(string description, IReadOnlyList<string> warnings)
         {
             app.Spinner.Stop();
-            TuiConsole.WriteLine($"Connected to {description}.");
+            if (app._acp is { } runtime) Print(AcpConnectionCard.Build(runtime));
+            else TuiConsole.WriteLine($"Connected to {description}.");
             foreach (var warning in warnings)
                 Print(new Text("Warning: " + warning, new Style(Color.Yellow)));
         }
@@ -384,13 +385,6 @@ public partial class App
         public Task<string?> SessionsAsync() => app.ListAcpSessionsAsync();
 
         public Task<string?> StopAsync() => app.StopAcpAsync();
-
-        public async Task<string?> ModeAsync(string arguments)
-        {
-            if (!app.IsAcpPane) return "Mode selection works inside an ACP agent pane. Open one with /agent-acp <name>.";
-            await app.RunAcpModeAsync(arguments);
-            return null;
-        }
 
         public async Task<string?> RestartAsync()
         {

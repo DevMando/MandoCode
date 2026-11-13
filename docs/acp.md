@@ -109,7 +109,7 @@ failure it prints the exit code and the stderr tail. Exit codes: `0` ok, `1` fai
 
 ## The ACP pane
 
-Use `/agent-acp mode` to pick from the connected agent's advertised permission and behavior modes, or `/agent-acp mode <name>` to select one directly. The menu marks the current mode and shows descriptions when supplied. It prefers the agent's mode configuration option and falls back to `session/set_mode` for agents exposing session modes only. Changing modes keeps the conversation and is refused during active work. Unsupported agents receive an explanation; MandoCode does not invent modes or enforce the external agent's permissions.
+Use `/agent-acp-mode` to pick from the connected agent's advertised permission and behavior modes, or `/agent-acp-mode <name>` to select one directly. The menu marks the current mode and shows descriptions when supplied. It prefers the agent's mode configuration option and falls back to `session/set_mode` for agents exposing session modes only. Changing modes keeps the conversation and is refused during active work. Unsupported agents receive an explanation; MandoCode does not invent modes or enforce the external agent's permissions.
 
 `/agent-acp <name>` switches the current pane to the agent; `/agent-acp <name> --new-panel` opens it in a new pane
 instead (the other panes are unchanged; at most four panes exist, and a fifth is refused with a message). A pane that

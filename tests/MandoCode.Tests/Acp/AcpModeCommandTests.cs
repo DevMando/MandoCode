@@ -8,6 +8,28 @@ namespace MandoCode.Tests.Acp;
 
 public class AcpModeCommandTests
 {
+    [Fact]
+    public void ConnectionCardShowsCurrentModeAndHowToChangeIt()
+    {
+        var rendered = Plain.Of(AcpConnectionCard.Build(Configured()));
+        Assert.Contains("Auto review", rendered);
+        Assert.Contains("Review actions automatically", rendered);
+        Assert.Contains("/agent-acp-mode", rendered);
+        Assert.Contains("/agent-acp stop", rendered);
+        Assert.Contains("context is not shared", rendered);
+    }
+
+    [Fact]
+    public void ConnectionCardDoesNotInventAnUnreportedMode()
+    {
+        var runtime = new FakeRuntime { Modes = new SessionModeState
+        {
+            AvailableModes = [new SessionMode { Id = "default", Name = "Standard permissions" }]
+        }};
+        var rendered = Plain.Of(AcpConnectionCard.Build(runtime));
+        Assert.Contains("Standard permissions", rendered);
+        Assert.DoesNotContain("Auto review", rendered);
+    }
     private static FakeRuntime Configured() => new()
     {
         ConfigOptions = [JsonSerializer.Deserialize("""

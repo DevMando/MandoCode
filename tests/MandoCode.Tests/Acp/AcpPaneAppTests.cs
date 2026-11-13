@@ -93,7 +93,7 @@ public class AcpPaneAppTests
             {"id":"mode","name":"Mode","category":"mode","type":"select","currentValue":"agent",
              "options":[{"value":"read-only","name":"Read-only"},{"value":"agent","name":"Auto review"}]}
             """, AcpJsonContext.Default.SessionConfigOption)!];
-        await h.Run("/agent-acp mode read-only");
+        await h.Run("/agent-acp-mode read-only");
         Assert.Equal(("mode", "read-only"), Assert.Single(h.Runtime.ConfigChanges));
         Assert.Equal(0, h.Runtime.NewConversations);
         Assert.Contains("Agent mode set", h.Output);
@@ -104,7 +104,7 @@ public class AcpPaneAppTests
     {
         await using var h = Harness.Create();
         SetField(h.App, "_requestCts", new CancellationTokenSource());
-        await h.Run("/agent-acp mode read-only");
+        await h.Run("/agent-acp-mode read-only");
         Assert.Empty(h.Runtime.ConfigChanges);
         Assert.Contains("current request to finish", h.Output);
     }

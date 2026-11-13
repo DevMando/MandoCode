@@ -26,8 +26,8 @@ public static class AcpPaneMode
     /// agent's earlier session could be continued is reported once the agent is ready.
     /// </summary>
     public static string EnterMessage(string agentName, bool resume) => resume
-        ? $"── This pane now runs the ACP agent '{agentName}' (the native conversation is kept but not shared; continuing the agent's last session if it can). /agent-acp stop returns to it. ──"
-        : $"── This pane now runs the ACP agent '{agentName}' (fresh start: the native conversation is kept but not shared). /agent-acp stop returns to it. ──";
+        ? $"Starting {agentName} via ACP · Requesting the previous session"
+        : $"Starting {agentName} via ACP · fresh start";
 
     /// <summary>Ends the pane's ACP session (the agent's process tree is killed) and hands the pane back to the native agent.</summary>
     public static async Task LeaveAsync(AgentPane pane)
