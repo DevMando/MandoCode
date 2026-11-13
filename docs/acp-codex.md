@@ -73,10 +73,12 @@ with Codex before claiming those flows have been tested against this adapter.
 
 ### Automated test results
 
+- Final full-suite validation: 1,919 passed, one skipped, and zero failed on each of net8.0 and net10.0. The skip is the existing symlink-creation test on this Windows machine; the junction guard has separate coverage.
+- All 95 targeted activity, permission, transcript, and export checks pass on both frameworks, including expansion across live updates and tool-call identity across turns and panes.
 - All 64 agent-command tests pass on both net8.0 and net10.0, including the two new Codex tests.
 - The first full run had 1,893 passes, one skip, and one failure on each target: a Windows
   file-access error in the concurrent config-save test on net8.0, and a command-notification
   timeout on net10.0. These are not Codex-specific tests; their cause remains unresolved.
 - The notification test passed in isolation. Unchanged main passed its config-save tests and
-  its complete net10.0 suite (1,892 passes, one skip). A clean full-suite result for this branch
-  is still required before merging; the live Codex smoke check does not substitute for that.
+  its complete net10.0 suite (1,892 passes, one skip). The final branch run above is clean;
+  the earlier failures are retained here as validation history rather than attributed to a known fix.

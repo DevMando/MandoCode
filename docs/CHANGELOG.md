@@ -4,10 +4,13 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**Updated terminal rendering with RazorConsole 0.7.0.** The CLI now includes RazorConsole's upstream fix for focus events raised while the interface is being drawn. MandoCode keeps the deferred focus safeguard introduced in v0.16.2, which prevents the repeated prompt borders seen on some launches.
+**External agents with clearer session controls and tool activity.** Run coding agents through ACP, including Codex through its tested adapter. See the connected agent, model, and mode at startup, change the session mode with `/agent-acp-mode`, and expand individual tool calls to inspect their details. The CLI also includes RazorConsole 0.7.0's upstream focus fix and retains MandoCode's startup rendering safeguard.
 
 **Highlights**
 
+- Run Codex through the existing ACP client, with documented setup and authentication handled by Codex.
+- Choose the external agent's permission and behavior mode without starting another conversation.
+- Follow ACP tool calls through compact, expandable rows that update in place.
 - Upgrade the terminal UI framework while preserving the startup rendering fix.
 - Keep transcript formatting, hyperlinks, and emoji shortcuts compatible with the updated rendering dependencies.
 - Clear the clipboard attachment message reliably after sending a prompt.
@@ -41,7 +44,9 @@ All notable changes to MandoCode will be documented in this file.
 
 - Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
 - Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
-- All 1,248 tests pass on net10.0 and net8.0. Verify startup, typing, and resizing in a real pseudo-terminal on both builds, with no reported rendering errors. Confirm the CLI tool package builds successfully.
+- The RazorConsole upgrade passed its then-current suite of 1,248 tests on net10.0 and net8.0, plus startup, typing, resizing, and CLI packaging checks.
+- Add coverage for ACP mode selection, sparse and interleaved tool updates, permission decisions, cancellation and interruption, reused call ids, bounded output, attached diffs, and expansion that stays open during updates. The 95 targeted activity, permission, transcript, and export checks pass on both supported frameworks.
+- Final full-suite validation passes on net10.0 and net8.0: 1,919 tests passed and one existing symlink-creation test skipped on each framework. Verify Codex adapter initialization, session creation, a streamed reply, and a session-scoped mode change on Windows.
 
 ## [0.16.2] - 2026-11-11
 
