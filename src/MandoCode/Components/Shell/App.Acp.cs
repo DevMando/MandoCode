@@ -175,12 +175,11 @@ public partial class App
     {
         if (Pane is null || !IsAcpPane) return;
 
-        var parts = new List<string> { "ACP" };
-        if (Pane.Workspace.Panes.Count == 1) parts.Add(Pane.Name);
-        parts.Add(_acp?.AgentTitle ?? (_acp?.Status == AcpRuntimeStatus.Starting ? "connecting…" : "(not connected)"));
-        if (_acp?.CurrentMode is { } mode) parts.Add("mode: " + mode);
-        var folder = Path.GetFileName(ProjectRoot.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        parts.Add(string.IsNullOrEmpty(folder) ? ProjectRoot.ProjectRoot : folder);
+        var parts = new List<string>();
+        parts.Add(_acp?.AgentDisplayName ?? (_acp?.Status == AcpRuntimeStatus.Starting ? "Connecting…" : "Not connected"));
+        if (_acp is { } runtime && AcpPaneCommands.ModelOption(runtime) is { CurrentSelection: { } modelValue } modelOption)
+            parts.Add(modelOption.Choices().FirstOrDefault(choice => choice.Value == modelValue)?.Name ?? modelValue);
+        parts.Add("ACP");
         if (_acp is { Status: AcpRuntimeStatus.Failed or AcpRuntimeStatus.Closed } || _acp is null) parts.Add("stopped");
 
         Pane.AcpHeader = string.Join(" · ", parts);

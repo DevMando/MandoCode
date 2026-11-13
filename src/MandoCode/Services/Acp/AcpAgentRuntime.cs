@@ -38,6 +38,9 @@ public interface IAcpAgentRuntime : IAsyncDisposable
     /// <summary>The agent's own name and version from <c>initialize</c> (for the adapter this is the adapter's version).</summary>
     string? AgentTitle { get; }
 
+    /// <summary>Human-readable agent identity for the pane header, without adapter version details.</summary>
+    string? AgentDisplayName => AgentTitle;
+
     string? CurrentMode { get; }
 
     /// <summary>Non-fatal things that happened while starting (for example a refused <c>session/set_mode</c>).</summary>
@@ -137,6 +140,9 @@ public sealed class AcpAgentRuntime : IAcpAgentRuntime
 
     public string AgentName { get; }
     public string? AgentTitle => Volatile.Read(ref _title);
+    public string? AgentDisplayName => _client?.Initialized?.AgentInfo is { } info
+        ? (string.IsNullOrWhiteSpace(info.Title) ? info.Name : info.Title)
+        : null;
     public string? CurrentMode => _session?.CurrentModeId;
     public IReadOnlyList<string> StartupWarnings { get { lock (_gate) return _warnings.ToArray(); } }
     public PromptCapabilities PromptCapabilities => _session?.AgentCapabilities.PromptCapabilities ?? new PromptCapabilities();

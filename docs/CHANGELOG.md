@@ -25,6 +25,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Changed
 
+- Simplify ACP pane headers to the agent's human-readable title, selected model when advertised, and an ACP indicator. Keep adapter versions in diagnostics, and leave the project folder and approval mode out of the header to match native pane presentation.
 - Upgrade RazorConsole.Core from 0.6.0 to 0.7.0. Retain `DeferredFocus` for startup and panels so focus requests made from `OnAfterRenderAsync` continue to wait until their render batch completes.
 - Adapt transcript rendering, saved-agent history, HTML exports, and emoji expansion to the updated Spectre.Console APIs. Hyperlinks now use the separate link API, and styles use the new value type.
 - Update Markdig to 1.5.1 and Microsoft.Extensions.FileSystemGlobbing to 10.0.14 to satisfy the new dependency requirements on both supported .NET targets.
