@@ -38,6 +38,7 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Fixed
 
+- Reuse unchanged conversation snapshots and transcript groups during focus, scrolling, and status updates. Avoid copying and regrouping the full history on these refreshes while keeping streamed output, tool expansion, late agent replies, and cleared conversations current.
 - Reduce unnecessary multi-agent redraws: selecting an agent no longer re-focuses the previous pane when the workspace picker is already closed. Poll top-level status only when visible indicators or tips change, let the root forward workspace and resize updates once, and avoid rebuilding pane content for unchanged Git status. Preserve background streaming, focus safeguards, and inactive-pane dimming.
 - Refresh the prompt after submission so the clipboard attachment message clears reliably.
 
