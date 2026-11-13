@@ -20,9 +20,14 @@
     private int _offset;
     private bool _following = true;
     private TuiEntry[] _visibleEntries = [];
+    private IReadOnlyList<TuiEntry>? _partitionedEntries;
     private IReadOnlyDictionary<AgentExchange, TuiEntry[]> _details = new Dictionary<AgentExchange, TuiEntry[]>();
     protected override void OnParametersSet()
     {
+        // Session snapshots reuse their entries until an entry is added or cleared.
+        // Focus, scrolling, and live activity still render, without regrouping history.
+        if (ReferenceEquals(_partitionedEntries, Entries)) return;
+        _partitionedEntries = Entries;
         _visibleEntries = Entries.Where(e => e.AgentOutput is null).ToArray();
         _details = Entries.Where(e => e.AgentOutput is not null).GroupBy(e => e.AgentOutput!).ToDictionary(g => g.Key, g => g.ToArray());
     }

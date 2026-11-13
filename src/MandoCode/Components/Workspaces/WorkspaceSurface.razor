@@ -3,7 +3,7 @@
 {
     @* grid selects the renderer's Spectre fallback, which emits zero cells when hidden. *@
     <div class="@(Workspace.IsVisible ? "workspace-surface" : "grid")" data-workspace-hidden="@(!Workspace.IsVisible ? "true" : "false")">
-        <AgentWorkspaceView Workspace="Workspace" ReservedHeight="ReservedHeight" AgentBody="AgentBody" />
+        <AgentWorkspaceView Workspace="Workspace" ReservedHeight="ReservedHeight" AgentBody="AgentBody" ObserveChanges="false" />
     </div>
 }
 @code {

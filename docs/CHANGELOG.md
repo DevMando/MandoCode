@@ -4,13 +4,14 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**External agents with clearer session controls and tool activity.** Run coding agents through ACP, including Codex through its tested adapter. See the connected agent, model, and mode at startup, change the session mode with `/agent-acp-mode`, and expand individual tool calls to inspect their details. The CLI also includes RazorConsole 0.7.0's upstream focus fix and retains MandoCode's startup rendering safeguard.
+**External agents, clearer session controls, and smoother workspace switching.** Run coding agents through ACP, including Codex through its tested adapter. See the connected agent, model, and mode at startup, change the session mode with `/agent-acp-mode`, and expand individual tool calls to inspect their details. Reduce visible top-to-bottom repainting when switching workspaces, including from multiple agent panes to a blank conversation. The CLI also includes RazorConsole 0.7.0's upstream focus fix and retains MandoCode's startup rendering safeguard.
 
 **Highlights**
 
 - Run Codex through the existing ACP client, with documented setup and authentication handled by Codex.
 - Choose the external agent's permission and behavior mode without starting another conversation.
 - Follow ACP tool calls through compact, expandable rows that update in place.
+- Switch agents and workspaces with fewer unnecessary redraws and completed terminal frames delivered together.
 - Upgrade the terminal UI framework while preserving the startup rendering fix.
 - Keep transcript formatting, hyperlinks, and emoji shortcuts compatible with the updated rendering dependencies.
 - Clear the clipboard attachment message reliably after sending a prompt.
@@ -38,15 +39,22 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Fixed
 
+- Batch synchronized terminal frames into one output write, reducing fragmented row-by-row delivery during large workspace transitions. Preserve terminal size and encoding, pass non-frame output through, bound buffering, and release interrupted frames at shutdown.
+- Enable synchronized terminal frames to reduce visible top-to-bottom repainting on terminals supporting synchronized output. Publish one completed workspace-switch notification instead of three intermediate redraw requests, preserving pane focus and background sessions.
+- Reuse unchanged conversation snapshots and transcript groups during focus, scrolling, and status updates. Avoid copying and regrouping the full history on these refreshes while keeping streamed output, tool expansion, late agent replies, and cleared conversations current.
+- Reduce unnecessary multi-agent redraws: selecting an agent no longer re-focuses the previous pane when the workspace picker is already closed. Poll top-level status only when visible indicators or tips change, let the root forward workspace and resize updates once, and avoid rebuilding pane content for unchanged Git status. Preserve background streaming, focus safeguards, and inactive-pane dimming.
 - Refresh the prompt after submission so the clipboard attachment message clears reliably.
 
 ### Test coverage
 
+- Verify frame batching through the actual RazorConsole live canvas: a large-to-blank transition produces identical ANSI output in one underlying writer call. Cover fragmented frame markers, interrupted-frame shutdown, bounded buffering, and output restoration. All 59 selected rendering, workspace, and routing checks pass on both net8.0 and net10.0.
+- Cover reuse of long conversation snapshots, updated streaming status, cleared history, retained expansion, and late agent replies. During this rendering work, a full-suite run passed 1,924 tests with one skip on net10.0; net8.0 passed 1,923 with one skip and hit the previously observed ACP command-notification timeout. The final frame-batching change was validated with the targeted checks above. The user also confirmed that batching resolved the visible workspace repaint sweep in their terminal.
+- Add rendering regressions for no-op picker closure, one focus transition per agent-tab selection, quiet idle polling, one body repaint per pane on focus changes, and continued awaiting-input updates. A two-pane test that previously rebuilt agent bodies six extra times over 750 ms now performs no extra idle rebuilds.
 - Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
 - Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
 - The RazorConsole upgrade passed its then-current suite of 1,248 tests on net10.0 and net8.0, plus startup, typing, resizing, and CLI packaging checks.
 - Add coverage for ACP mode selection, sparse and interleaved tool updates, permission decisions, cancellation and interruption, reused call ids, bounded output, attached diffs, and expansion that stays open during updates. The 95 targeted activity, permission, transcript, and export checks pass on both supported frameworks.
-- Final full-suite validation passes on net10.0 and net8.0: 1,919 tests passed and one existing symlink-creation test skipped on each framework. Verify Codex adapter initialization, session creation, a streamed reply, and a session-scoped mode change on Windows.
+- The earlier Codex ACP full-suite validation passed on net10.0 and net8.0: 1,919 tests passed and one existing symlink-creation test skipped on each framework. Verify Codex adapter initialization, session creation, a streamed reply, and a session-scoped mode change on Windows.
 
 ## [0.16.2] - 2026-11-11
 

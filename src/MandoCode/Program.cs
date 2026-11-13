@@ -74,6 +74,8 @@ class Program
                 options.RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout;
                 options.ConsoleLiveDisplayOptions.UseAlternateScreenBuffer = true;
                 options.ConsoleLiveDisplayOptions.EnableMouseEvents = true;
+                // Present a complete frame together on terminals supporting mode 2026.
+                options.ConsoleLiveDisplayOptions.EnableSynchronizedUpdates = true;
                 options.EnableTerminalResizing = true;
             });
 
@@ -104,6 +106,7 @@ class Program
 
         using (var host = hostBuilder.Build())
         using (var outputScope = host.Services.CreateScope())
+        using (var frames = FrameBufferedOutput.Attach(Spectre.Console.AnsiConsole.Console))
         using (var tuiOutput = TuiConsole.Begin(outputScope.ServiceProvider.GetRequiredService<TuiSession>()))
             await host.RunAsync();
         try { toolUpdate.Launch(); }

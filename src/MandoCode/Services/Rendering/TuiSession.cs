@@ -10,6 +10,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
 {
     private readonly object _sync = new();
     private readonly List<TuiEntry> _entries = new();
+    private TuiEntry[]? _entrySnapshot;
     private readonly Dictionary<long, IRenderable> _entryContent = new();
     private readonly Dictionary<long, IRenderable> _registered = new();
     private static long _nextId;
@@ -100,7 +101,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     public long Revision => Interlocked.Read(ref _revision);
     public TuiSnapshot Snapshot()
     {
-        lock (_sync) return new(_entries.ToArray(), _running, _activity, _preview) { Spinner = _spinner, LoadingMessage = _loadingMessage, Elapsed = _elapsed };
+        lock (_sync) return new(_entrySnapshot ??= _entries.ToArray(), _running, _activity, _preview) { Spinner = _spinner, LoadingMessage = _loadingMessage, Elapsed = _elapsed };
     }
     public void Append(IRenderable content)
     {
@@ -156,6 +157,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     private void AddEntry(TuiEntry entry)
     {
         _entries.Add(entry);
+        _entrySnapshot = null;
         _entryContent[entry.Id] = entry.Content;
     }
     public long Register(IRenderable content)
@@ -165,7 +167,7 @@ public sealed class TuiSession(TimeProvider? timeProvider = null)
     public void Unregister(long id) { lock (_sync) _registered.Remove(id); }
     public void Clear()
     {
-        lock (_sync) { _entries.Clear(); _entryContent.Clear(); _exchanges.Clear(); Interlocked.Increment(ref _revision); }
+        lock (_sync) { _entries.Clear(); _entrySnapshot = null; _entryContent.Clear(); _exchanges.Clear(); Interlocked.Increment(ref _revision); }
     }
     private bool _fixedLoadingMessage;
     public void SetRunning(bool running, string? activity = null, string? message = null)
