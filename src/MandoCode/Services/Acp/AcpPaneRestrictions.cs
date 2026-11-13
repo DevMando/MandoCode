@@ -77,6 +77,7 @@ public static class AcpPaneRestrictions
         described["/clear"] = "Start a new ACP conversation in this agent (the native conversation is untouched)";
         described["/model"] = "Pick the agent's model";
         described["/compact"] = "Ask the agent to compact its conversation";
+        described["/agent-acp-mode"] = "Choose the agent's permissions and behavior mode";
         return described;
     }
 

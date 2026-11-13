@@ -4,16 +4,21 @@ All notable changes to MandoCode will be documented in this file.
 
 ## [Unreleased]
 
-**Updated terminal rendering with RazorConsole 0.7.0.** The CLI now includes RazorConsole's upstream fix for focus events raised while the interface is being drawn. MandoCode keeps the deferred focus safeguard introduced in v0.16.2, which prevents the repeated prompt borders seen on some launches.
+**External agents with clearer session controls and tool activity.** Run coding agents through ACP, including Codex through its tested adapter. See the connected agent, model, and mode at startup, change the session mode with `/agent-acp-mode`, and expand individual tool calls to inspect their details. The CLI also includes RazorConsole 0.7.0's upstream focus fix and retains MandoCode's startup rendering safeguard.
 
 **Highlights**
 
+- Run Codex through the existing ACP client, with documented setup and authentication handled by Codex.
+- Choose the external agent's permission and behavior mode without starting another conversation.
+- Follow ACP tool calls through compact, expandable rows that update in place.
 - Upgrade the terminal UI framework while preserving the startup rendering fix.
 - Keep transcript formatting, hyperlinks, and emoji shortcuts compatible with the updated rendering dependencies.
 - Clear the clipboard attachment message reliably after sending a prompt.
 
 ### Added
 
+- `/agent-acp-mode` opens a picker for the connected agent's permission and behavior modes, including the current selection and agent-provided descriptions. Select a mode directly with `/agent-acp-mode <name>`. Changes preserve the current conversation, apply only to the ACP session, and are refused during active work. Agents without advertised modes receive an explanation.
+- Codex ACP setup guidance through `/agent-acp add codex`, using the pinned `@agentclientprotocol/codex-acp` 2.6.0 adapter and the existing ACP pane implementation. Document installation, external authentication, command boundaries, and the verified connection and streamed reply on Windows. Setup guidance does not install software or change configuration automatically.
 - External agents over the Agent Client Protocol (ACP v1, stdio), phases 1–2 of the ACP client. `/agent-acp <name>` switches the current pane to an agent (for example Claude Code through an ACP adapter; `--new-panel` opens a new pane, `stop` returns to the native agent, and the native session stays alive underneath without sharing context); `/agent-acp list|status|restart|add|test|remove|enable|disable` manage the `acpAgents` entries of `~/.mandocode/config.json`, and `mandocode --acp-probe <name>` checks a connection. The protocol layer is the new `MandoCode.Acp` library (own thin implementation, no third-party ACP package).
 - Agents are started without a shell from a real executable (`.exe`/ELF; `.cmd`, `npx` and shells are refused), after confirming the full command; the confirmation is remembered per command hash and asked again when the entry changes. `acpAgents` is read only from the user config, and `ANTHROPIC_API_KEY` is not passed to the agent by default.
 - The ACP pane streams the reply, shows tool calls, plans and diffs, and relays the agent's permission questions as a menu (Escape cancels). It serves `fs/read_text_file` and `fs/write_text_file` inside the project folder, refusing symlinks and junctions that lead outside it, with atomic writes. Escape cancels a turn; an agent that ignores the cancel is shut down with its whole process tree.
@@ -24,6 +29,9 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Changed
 
+- Show ACP tool calls as persistent, expandable activity rows with status updates in place, concise summaries, and bounded command/output details. Attach completed diffs to their call and show terminal-output limitations only inside the details. Preserve permission denial and mark unfinished calls honestly when a turn ends or is interrupted. Native tool groups retain their existing behavior.
+- Present successful ACP connections in a compact card with the agent's display name, selected model, current mode and its advertised description, session origin, and commands to change mode or return to the native conversation.
+- Simplify ACP pane headers to the agent's human-readable title, selected model when advertised, and an ACP indicator. Keep adapter versions in diagnostics, and leave the project folder and approval mode out of the header to match native pane presentation.
 - Upgrade RazorConsole.Core from 0.6.0 to 0.7.0. Retain `DeferredFocus` for startup and panels so focus requests made from `OnAfterRenderAsync` continue to wait until their render batch completes.
 - Adapt transcript rendering, saved-agent history, HTML exports, and emoji expansion to the updated Spectre.Console APIs. Hyperlinks now use the separate link API, and styles use the new value type.
 - Update Markdig to 1.5.1 and Microsoft.Extensions.FileSystemGlobbing to 10.0.14 to satisfy the new dependency requirements on both supported .NET targets.
@@ -36,7 +44,9 @@ All notable changes to MandoCode will be documented in this file.
 
 - Explicitly enable hyperlink support in Markdown rendering tests so their clickable-link assertions run consistently in local terminals and CI.
 - Add a component check that focusing and redrawing the prompt repeatedly leaves one prompt in the render tree and keeps keyboard focus on it.
-- All 1,248 tests pass on net10.0 and net8.0. Verify startup, typing, and resizing in a real pseudo-terminal on both builds, with no reported rendering errors. Confirm the CLI tool package builds successfully.
+- The RazorConsole upgrade passed its then-current suite of 1,248 tests on net10.0 and net8.0, plus startup, typing, resizing, and CLI packaging checks.
+- Add coverage for ACP mode selection, sparse and interleaved tool updates, permission decisions, cancellation and interruption, reused call ids, bounded output, attached diffs, and expansion that stays open during updates. The 95 targeted activity, permission, transcript, and export checks pass on both supported frameworks.
+- Final full-suite validation passes on net10.0 and net8.0: 1,919 tests passed and one existing symlink-creation test skipped on each framework. Verify Codex adapter initialization, session creation, a streamed reply, and a session-scoped mode change on Windows.
 
 ## [0.16.2] - 2026-11-11
 

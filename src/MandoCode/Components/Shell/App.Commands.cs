@@ -14,6 +14,13 @@ public partial class App
         var parsed = CliCommand.Parse(input);
         var command = parsed.DispatchText;
 
+        if (parsed.Name == "agent-acp-mode")
+        {
+            if (IsAcpPane) await RunAcpModeAsync(parsed.Arguments);
+            else TuiConsole.WriteLine("/agent-acp-mode works inside an ACP agent pane. Open one with /agent-acp <name>.");
+            return CliCommandResult.Continue;
+        }
+
         // What an ACP agent pane does not offer is decided in one place (AcpPaneRestrictions).
         if (IsAcpPane && MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command))
         {

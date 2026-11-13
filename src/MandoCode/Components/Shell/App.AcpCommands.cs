@@ -61,6 +61,18 @@ public partial class App
         UpdateAcpHeader();
     }
 
+    private async Task RunAcpModeAsync(string arguments)
+    {
+        if (HasActiveWork)
+        {
+            Say("Wait for the current request to finish before changing the agent mode.");
+            return;
+        }
+        if (ReadyAcpRuntime() is not { } runtime) return;
+        await AcpPaneCommands.ModeAsync(runtime, arguments, AcpChoices, text => Say(text, Color.Grey), CancellationToken.None);
+        UpdateAcpHeader();
+    }
+
     private async Task RunAcpCompactAsync()
     {
         if (ReadyAcpRuntime() is not { } runtime)

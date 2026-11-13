@@ -11,6 +11,8 @@ Schema: pinned to the release tag `v1.16.0` of `agentclientprotocol/agent-client
 
 ## Quick start
 
+For Codex, see [Codex adapter setup and validation](acp-codex.md), or run `/agent-acp add codex` for setup guidance.
+
 1. Install an ACP adapter yourself, at a pinned version, for example for Claude Code the adapter validated below. No `npx`.
 2. Add it (your own paths): `/agent-acp add claude node "C:\path\to\adapter\dist\index.js"`, or edit `acpAgents` in
    `~/.mandocode/config.json`.
@@ -106,6 +108,8 @@ failure it prints the exit code and the stderr tail. Exit codes: `0` ok, `1` fai
 `3` launch not approved. In a non-interactive shell an unapproved agent is simply declined.
 
 ## The ACP pane
+
+Use `/agent-acp-mode` to pick from the connected agent's advertised permission and behavior modes, or `/agent-acp-mode <name>` to select one directly. The menu marks the current mode and shows descriptions when supplied. It prefers the agent's mode configuration option and falls back to `session/set_mode` for agents exposing session modes only. Changing modes keeps the conversation and is refused during active work. Unsupported agents receive an explanation; MandoCode does not invent modes or enforce the external agent's permissions.
 
 `/agent-acp <name>` switches the current pane to the agent; `/agent-acp <name> --new-panel` opens it in a new pane
 instead (the other panes are unchanged; at most four panes exist, and a fifth is refused with a message). A pane that
@@ -212,9 +216,12 @@ When the agent advertises the capabilities, MandoCode remembers the last session
 
 ### Tool calls, plans and diffs
 
-- `tool_call` / `tool_call_update`: one line per call (`<icon by kind> <title> · <path>:<line>`) and one line for the
-  final status (`completed`, or `failed` with the first line of the agent's message). State is kept by `toolCallId`, so
-  an update that carries only a status works. `terminal` content is shown as "terminal output not supported".
+- `tool_call` / `tool_call_update`: one expandable row per call, identified by `toolCallId` within the pane and turn.
+  Its current status updates in place. Click the row, or focus it and press Enter/Space, to inspect the full title,
+  bounded input and available text output, and completed diffs. Expansion remains open as the same call updates.
+  Long row summaries are clipped to fit the pane. Reused ids in later turns create separate rows.
+- Terminal references cannot be resolved to terminal output yet. When present, expanded details say
+  "Terminal output unavailable in this client." This does not override the agent-reported completion status.
 - `plan`: the whole checklist is replaced on every update; the current one is printed when the turn ends, and the
   activity line shows `Plan done/total` meanwhile.
 - Diffs (`diff` content of a tool call, and files written through `fs/write_text_file`) go through the same renderer as
@@ -224,10 +231,11 @@ When the agent advertises the capabilities, MandoCode remembers the last session
 
 ### Writes that are not decided yet
 
-A call that changes things (edit, delete, move, execute) shows `Awaiting permission…` while it is `pending` and
-`Writing…` / `Running…` while it is `in_progress`. The proposed diff is shown only when the call completes; a call that
-fails, or that you refuse, never shows a write. A refusal is shown at once as `permission denied`. The detail after
-`failed:` is the first real line of the agent's message (code fences around it are dropped); with none, only `failed`.
+Calls show Pending or Running from the agent's updates. Awaiting approval is shown only when a real permission
+question opens. A refusal is shown immediately as Permission denied and cannot be overwritten by a late completion.
+Proposed diffs are shown in expanded details only after the call completes; failed or refused calls do not show
+their proposals as completed writes. Failed calls retain the available agent output in their details.
+When a turn ends, still-active rows become Cancelled, Interrupted, or Unfinished rather than claiming success.
 
 ### Permissions
 

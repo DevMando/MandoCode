@@ -18,6 +18,7 @@ public partial class App
     private readonly List<ChatMsg> _acpMessages = [];
     private bool _nativeInitialized;
     private AcpTranscriptAdapter? _acpTranscript;
+    private AcpToolActivityStore? _acpTools;
     private CancellationTokenSource? _acpStartCts;
 
     private bool IsAcpPane => Pane?.Runtime == AgentRuntime.Acp;
@@ -50,13 +51,14 @@ public partial class App
         public void Connecting(string agentName)
         {
             app.Spinner.Start($"Connecting to {name}...");
-            TuiConsole.WriteLine($"Connecting to {name}... (you can type already; the prompt is sent once the agent is ready)");
+            Print(new Text($"Connecting to {name}… You can type while the agent starts.", new Style(Color.Grey)));
         }
 
         public void Connected(string description, IReadOnlyList<string> warnings)
         {
             app.Spinner.Stop();
-            TuiConsole.WriteLine($"Connected to {description}.");
+            if (app._acp is { } runtime) Print(AcpConnectionCard.Build(runtime));
+            else TuiConsole.WriteLine($"Connected to {description}.");
             foreach (var warning in warnings)
                 Print(new Text("Warning: " + warning, new Style(Color.Yellow)));
         }
@@ -132,6 +134,7 @@ public partial class App
         var root = ProjectRoot.ProjectRoot;
         var renderer = (Pane.Services).GetRequiredService<OperationDisplayRenderer>();
         var transcript = _acpTranscript = new AcpTranscriptAdapter(renderer.BuildRenderable, root);
+        var tools = _acpTools = new AcpToolActivityStore(session.UpdateAcpTool);
 
         var files = new AcpFileSystemHandler(root, change =>
         {
@@ -152,9 +155,10 @@ public partial class App
             decided: (toolCallId, allowed) =>
             {
                 using var output = TuiConsole.Enter(session);
-                if (transcript.NotePermission(toolCallId, allowed) is { } note)
-                    Print(note);
-            });
+                transcript.NotePermission(toolCallId, allowed);
+                tools.Permission(toolCallId, allowed);
+            },
+            requested: call => { tools.Apply(call); tools.Permission(call.ToolCallId, null); });
 
         return new AcpClientHandler(prompter, files);
     }
@@ -175,12 +179,11 @@ public partial class App
     {
         if (Pane is null || !IsAcpPane) return;
 
-        var parts = new List<string> { "ACP" };
-        if (Pane.Workspace.Panes.Count == 1) parts.Add(Pane.Name);
-        parts.Add(_acp?.AgentTitle ?? (_acp?.Status == AcpRuntimeStatus.Starting ? "connecting…" : "(not connected)"));
-        if (_acp?.CurrentMode is { } mode) parts.Add("mode: " + mode);
-        var folder = Path.GetFileName(ProjectRoot.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        parts.Add(string.IsNullOrEmpty(folder) ? ProjectRoot.ProjectRoot : folder);
+        var parts = new List<string>();
+        parts.Add(_acp?.AgentDisplayName ?? (_acp?.Status == AcpRuntimeStatus.Starting ? "Connecting…" : "Not connected"));
+        if (_acp is { } runtime && AcpPaneCommands.ModelOption(runtime) is { CurrentSelection: { } modelValue } modelOption)
+            parts.Add(modelOption.Choices().FirstOrDefault(choice => choice.Value == modelValue)?.Name ?? modelValue);
+        parts.Add("ACP");
         if (_acp is { Status: AcpRuntimeStatus.Failed or AcpRuntimeStatus.Closed } || _acp is null) parts.Add("stopped");
 
         Pane.AcpHeader = string.Join(" · ", parts);
@@ -345,6 +348,15 @@ public partial class App
 
     private sealed class PaneSink(App app) : IAcpTurnSink
     {
+        public void BeginToolActivities() => app._acpTools?.BeginTurn();
+        public bool ToolCall(MandoCode.Acp.Protocol.ToolCallBase call)
+        {
+            if (app._acpTools is not { } tools) return false;
+            tools.Apply(call);
+            return true;
+        }
+        public void ToolDetail(string id, IRenderable detail) => app._acpTools?.Detail(id, detail);
+        public void EndToolActivities(string status) => app._acpTools?.EndTurn(status);
         public void Preview(string? tail) => app.Spinner.UpdatePreview(tail);
 
         public void Activity(string label) => (app.Pane?.Session ?? TuiConsole.Current)?.SetActivity(label);

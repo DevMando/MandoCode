@@ -75,6 +75,7 @@ public static class SlashCommands
         { "/mcp", $"Manage shared MCP servers: add, edit, test, and enable or disable ({Keybindings.McpServers})" },
         { "/mcp tools", "List tools exposed by connected MCP servers (usage: /mcp tools <server>)" },
         { "/agent-acp", "External ACP agents: /agent-acp <name> switches this pane to one (--new-panel opens a new pane, --resume continues the last session); also stop, sessions, list, status, restart, add, test, remove, enable, disable" },
+        { "/agent-acp-mode", "Choose the ACP agent's permissions and behavior mode" },
         { "/mcp-reload", "Restart all MCP servers and re-register their tools" },
         { "/exit", "Exit MandoCode" }
     };

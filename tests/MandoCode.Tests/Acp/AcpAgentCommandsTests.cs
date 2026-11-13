@@ -147,6 +147,28 @@ public class AcpAgentCommandsTests : IDisposable
     }
 
     [Fact]
+    public async Task Add_Codex_WithoutACommand_ShowsPinnedAdapterGuidanceWithoutSaving()
+    {
+        await Run("add codex");
+
+        Assert.Empty(_catalog.Stored);
+        Assert.Equal(0, _catalog.Saves);
+        Assert.Contains("@agentclientprotocol/codex-acp@2.6.0", _out.ToString());
+        Assert.Contains("/agent-acp add codex node", _out.ToString());
+        Assert.Contains("codex login", _out.ToString());
+        Assert.DoesNotContain("npx", _out.ToString());
+        Assert.Equal("", _err.ToString());
+    }
+
+    [Fact]
+    public async Task Add_Codex_WithACommand_PreservesTheConfiguredExecutable()
+    {
+        await Run($"add codex {Quoted(_host)}");
+
+        Assert.Equal(_host, _catalog.Stored["codex"].Command);
+    }
+
+    [Fact]
     public async Task Add_Claude_WithoutACommand_ShowsGuidanceAndInventsNothing()
     {
         await Run("add claude");

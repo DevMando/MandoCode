@@ -82,7 +82,7 @@ public sealed class AcpTranscriptAdapter
     };
 
     /// <summary>Applies a <c>tool_call</c> / <c>tool_call_update</c> and returns what to add to the transcript.</summary>
-    public IReadOnlyList<IRenderable> Apply(ToolCallBase update)
+    public IReadOnlyList<IRenderable> Apply(ToolCallBase update, bool includeToolText = true)
     {
         var blocks = new List<IRenderable>();
         lock (_gate)
@@ -99,7 +99,7 @@ public sealed class AcpTranscriptAdapter
             if (!state.Announced)
             {
                 state.Announced = true;
-                blocks.Add(new Text(Headline(state), new Style(Color.Grey)));
+                if (includeToolText) blocks.Add(new Text(Headline(state), new Style(Color.Grey)));
             }
 
             // A diff is what the agent proposes, not what happened: it is shown once the call has completed
@@ -114,7 +114,7 @@ public sealed class AcpTranscriptAdapter
                 && PhaseText(state) is { } phase && phase != state.Phase)
             {
                 state.Phase = phase;
-                blocks.Add(new Text("  ⎿ " + phase, new Style(Color.Grey)));
+                if (includeToolText) blocks.Add(new Text("  ⎿ " + phase, new Style(Color.Grey)));
             }
 
             foreach (var content in update.Content ?? [])
@@ -123,7 +123,7 @@ public sealed class AcpTranscriptAdapter
                 {
                     case TerminalToolCallContent when !state.TerminalNoted:
                         state.TerminalNoted = true;
-                        blocks.Add(new Text("  ⎿ " + TerminalNotSupported, new Style(Color.Grey)));
+                        if (includeToolText) blocks.Add(new Text("  ⎿ " + TerminalNotSupported, new Style(Color.Grey)));
                         break;
 
                     // Text, images, unknown variants: the call's title and status are what the transcript shows.
@@ -135,14 +135,14 @@ public sealed class AcpTranscriptAdapter
                 state.FinalShown = true;
                 if (state.Status == ToolCallStatuses.Failed)
                 {
-                    blocks.Add(new Text("  ⎿ failed" + FailureDetail(update), new Style(Color.Red)));
+                    if (includeToolText) blocks.Add(new Text("  ⎿ failed" + FailureDetail(update), new Style(Color.Red)));
                 }
                 else
                 {
                     foreach (var diff in state.PendingDiffs)
                         if (ShowDiff(diff.Path, diff.OldText, diff.NewText) is { } rendered)
                             blocks.Add(rendered);
-                    blocks.Add(new Text("  ⎿ completed", new Style(Color.Grey)));
+                    if (includeToolText) blocks.Add(new Text("  ⎿ completed", new Style(Color.Grey)));
                 }
 
                 state.PendingDiffs.Clear();

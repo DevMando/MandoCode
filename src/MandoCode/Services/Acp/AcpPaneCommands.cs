@@ -48,6 +48,65 @@ public static class AcpPaneCommands
     public static bool AgentOffersCompact(IAcpAgentRuntime runtime) =>
         runtime.AvailableCommands.Any(c => string.Equals(c.Name, CompactCommand, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Change the agent's advertised mode within its current session.</summary>
+    public static async Task ModeAsync(
+        IAcpAgentRuntime runtime, string arguments, IAcpChoicePrompt prompt, Action<string> write, CancellationToken cancellationToken)
+    {
+        var option = runtime.ConfigOptions.FirstOrDefault(o => o.IsSelect && o.Category == ConfigOptionCategories.Mode);
+        var choices = option?.Choices() ?? [];
+        if (choices.Count == 0)
+        {
+            option = null;
+            choices = runtime.Modes?.AvailableModes.Select(mode => new ConfigChoice(mode.Id, mode.Name, null, null)).ToArray() ?? [];
+        }
+        if (choices.Count == 0)
+        {
+            write("This agent does not expose modes. Change its permissions in the agent's own configuration.");
+            return;
+        }
+
+        var current = option?.CurrentSelection ?? runtime.CurrentMode;
+        string ModeLabel(ConfigChoice choice) => Label(choice, current)
+            + (string.IsNullOrWhiteSpace(choice.Description) ? "" : " · " + choice.Description);
+        ConfigChoice? picked;
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            picked = Match(choices, arguments.Trim());
+            if (picked is null)
+            {
+                write($"'{arguments.Trim()}' is not one of this agent's modes. Available: {string.Join(", ", choices.Select(c => c.Value))}.");
+                return;
+            }
+        }
+        else
+        {
+            var entries = choices.Select(choice => new AcpChoice(ModeLabel(choice), choice.Value == current ? Color.Green : Color.White))
+                .Append(new AcpChoice(CancelLabel, new Color(255, 200, 80))).ToList();
+            var initial = Math.Max(0, choices.ToList().FindIndex(choice => choice.Value == current));
+            var answer = await prompt.ChooseAsync("Agent mode: the external agent enforces these permissions.", entries, initial).ConfigureAwait(false);
+            if (answer is null || answer == CancelLabel) return;
+            picked = choices.FirstOrDefault(choice => ModeLabel(choice) == answer);
+            if (picked is null) return;
+        }
+        if (picked.Value == current)
+        {
+            write($"The agent already uses {picked.Name}.");
+            return;
+        }
+        try
+        {
+            if (option is not null)
+                await runtime.SetConfigOptionAsync(option.Id, picked.Value, cancellationToken).ConfigureAwait(false);
+            else
+                await runtime.SetModeAsync(picked.Value, cancellationToken).ConfigureAwait(false);
+            write($"Agent mode set to {picked.Name}. The conversation is unchanged; the agent enforces its permissions.");
+        }
+        catch (Exception ex) when (ex is JsonRpcException or InvalidOperationException or NotSupportedException)
+        {
+            write($"The agent did not accept that mode: {ex.Message}");
+        }
+    }
+
     public const string NoCompactMessage =
         "This agent does not announce a /compact command, so there is nothing to compact. Use /clear to start a new ACP conversation.";
 

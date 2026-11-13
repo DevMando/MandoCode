@@ -19,6 +19,7 @@ public sealed class AcpPermissionPrompter
     private readonly Func<string?> _currentMode;
     private readonly Func<IDisposable>? _pauseActivity;
     private readonly Action<string, bool>? _decided;
+    private readonly Action<ToolCallUpdate>? _requested;
 
     /// <param name="writeLine">Prints one plain-text line (never parsed as markup).</param>
     /// <param name="pauseActivity">Stops the spinner while the question is open; disposing resumes it.</param>
@@ -29,9 +30,11 @@ public sealed class AcpPermissionPrompter
         Action<string> writeLine,
         Func<string?> currentMode,
         Func<IDisposable>? pauseActivity = null,
-        Action<string, bool>? decided = null)
+        Action<string, bool>? decided = null,
+        Action<ToolCallUpdate>? requested = null)
     {
         _decided = decided;
+        _requested = requested;
         _gate = gate;
         _menu = menu;
         _suppressKeys = suppressKeys;
@@ -61,6 +64,8 @@ public sealed class AcpPermissionPrompter
         {
             if (cancellationToken.IsCancellationRequested)
                 return cancelled;
+
+            _requested?.Invoke(request.ToolCall);
 
             var labels = UniqueLabels(request.Options);
             foreach (var line in Describe(request, _currentMode()))
