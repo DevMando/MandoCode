@@ -134,7 +134,7 @@ public class AcpTrustPromptTests : IDisposable
         /// <summary>Answers the menu the way the VDOM component would, once it is shown.</summary>
         public async Task Answer(string choice)
         {
-            var deadline = DateTime.UtcNow.AddSeconds(5);
+            var deadline = DateTime.UtcNow.Add(AcpTestTimeouts.Guard);
             while (!Menu.IsActive && DateTime.UtcNow < deadline)
                 await Task.Delay(5);
             Assert.True(Menu.IsActive, "the menu was never shown");
