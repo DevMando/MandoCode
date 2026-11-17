@@ -576,10 +576,10 @@ public class AcpClientTests : IAsyncDisposable
 
     private static async Task WaitFor(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow.Add(AcpTestTimeouts.Guard);
         while (!condition() && DateTime.UtcNow < deadline)
             await Task.Delay(10);
-        Assert.True(condition(), "condition not met within 5s");
+        Assert.True(condition(), $"condition not met within {AcpTestTimeouts.GuardSeconds}s");
     }
 
     // ───────────── modes ─────────────

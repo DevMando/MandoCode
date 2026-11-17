@@ -418,7 +418,7 @@ public class AcpToolsAndPermissionsTests : IDisposable
 
         async Task AnswerShown()
         {
-            var deadline = DateTime.UtcNow.AddSeconds(5);
+            var deadline = DateTime.UtcNow.Add(AcpTestTimeouts.Guard);
             while (!_menu.IsActive && DateTime.UtcNow < deadline)
                 await Task.Delay(5);
             Assert.True(_menu.IsActive);
@@ -469,7 +469,7 @@ public class AcpToolsAndPermissionsTests : IDisposable
         };
 
         var answer = prompter.RequestAsync(request, CancellationToken.None).AsTask();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow.Add(AcpTestTimeouts.Guard);
         while (!_menu.IsActive && DateTime.UtcNow < deadline)
             await Task.Delay(5);
 

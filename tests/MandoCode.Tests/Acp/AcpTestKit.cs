@@ -78,7 +78,7 @@ internal sealed class FakeAgentPeer : IDisposable
     /// <summary>Reads the next line the client wrote, parsed as JSON.</summary>
     public async Task<JsonElement> ReadMessageAsync()
     {
-        var line = await _reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await _reader.ReadLineAsync().WaitAsync(AcpTestTimeouts.Guard);
         Assert.NotNull(line);
         Assert.DoesNotContain('\n', line);
         using var doc = JsonDocument.Parse(line!);
@@ -86,7 +86,7 @@ internal sealed class FakeAgentPeer : IDisposable
     }
 
     public async Task<string?> ReadRawLineAsync() =>
-        await _reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await _reader.ReadLineAsync().WaitAsync(AcpTestTimeouts.Guard);
 
     public void SendLine(string json) => SendRaw(json + "\n");
 
@@ -123,11 +123,22 @@ internal sealed class FakeAgentPeer : IDisposable
     }
 }
 
+/// <summary>
+/// Hang-guard for the in-memory ACP tests. It only bounds a test that would otherwise never finish, so passing
+/// tests never wait on it. It is deliberately generous: the full suite runs ~1,900 tests in parallel and a cold
+/// Windows runner can take well over 5s to schedule the first handshake read (CI flake, 2026-11-13).
+/// </summary>
+internal static class AcpTestTimeouts
+{
+    public const int GuardSeconds = 30;
+    public static readonly TimeSpan Guard = TimeSpan.FromSeconds(GuardSeconds);
+}
+
 internal static class TaskExtensions
 {
-    public static async Task<T> Within<T>(this Task<T> task, int seconds = 5) =>
+    public static async Task<T> Within<T>(this Task<T> task, int seconds = AcpTestTimeouts.GuardSeconds) =>
         await task.WaitAsync(TimeSpan.FromSeconds(seconds));
 
-    public static async Task Within(this Task task, int seconds = 5) =>
+    public static async Task Within(this Task task, int seconds = AcpTestTimeouts.GuardSeconds) =>
         await task.WaitAsync(TimeSpan.FromSeconds(seconds));
 }
