@@ -6,7 +6,7 @@ Run the full CLI suite before submitting changes:
 dotnet test tests/MandoCode.Tests/MandoCode.Tests.csproj -c Release
 ```
 
-This runs both net10.0 and net8.0. A green result does not replace an interactive terminal check for resize, native clipboard access, or terminal-specific keyboard sequences.
+This runs the net10.0 suite. A green result does not replace an interactive terminal check for resize, native clipboard access, or terminal-specific keyboard sequences.
 
 ## Test tiers
 
@@ -50,7 +50,6 @@ Run repeated component checks locally:
 
 ```powershell
 ./scripts/verify-component-stability.ps1 -Framework net10.0 -Iterations 5
-./scripts/verify-component-stability.ps1 -Framework net8.0 -Iterations 5
 ```
 
 Each iteration runs in a new test process and preserves a separate TRX result under ignored `artifacts/`. A failure stops the script; hang diagnostics bound stalled runs. Passing repeated runs reduces uncertainty but does not prove the absence of intermittent failures.
@@ -59,7 +58,6 @@ For startup release checks, focus repetitions on the startup lifecycle regressio
 
 ```powershell
 ./scripts/verify-component-stability.ps1 -Framework net10.0 -Iterations 25 -TestFilter "FullyQualifiedName~StartupRenderingTests" -ResultsDirectory artifacts/startup-stability/net10.0
-./scripts/verify-component-stability.ps1 -Framework net8.0 -Iterations 25 -TestFilter "FullyQualifiedName~StartupRenderingTests" -ResultsDirectory artifacts/startup-stability/net8.0
 ```
 
 These tests cover renders during incomplete initialization, closing an agent during the startup delay, and retaining one prompt/input owner across refreshes. They do not reproduce every Windows Terminal or Visual Studio launch condition. Before release, also perform 10–20 cold launches from each, type immediately, and create/close agents with Alt+N/Alt+W. Include a slow or unavailable Ollama endpoint and enabled MCP servers, and check narrow/wide windows. Record any duplicated borders, missing focus, or failed submission rather than treating the new-agent workaround as a pass.
@@ -72,7 +70,7 @@ python scripts/verify-targeted-mutations.py
 
 It temporarily breaks four behaviors: prompt visibility, replacement callback ownership, argument casing, and queued approval cancellation. It requires an actual failing test result, rather than treating a compiler failure as a detected mutation. Every source file is restored byte-for-byte in a finally block. Do not run concurrent builds, tests, or edits while this probe is operating; forcibly terminating the process can interrupt restoration. The final report is written to `artifacts/mutation-results.json`. Rebuild after running the probe because the last compiled assembly contains a mutation. These four probes are a focused confidence check, not a suite-wide mutation score.
 
-The GitHub workflow runs the full suite and three component repetitions for each combination of Windows/Linux and net10.0/net8.0. It retains TRX results even after failure. Workflow execution requires pushing these changes; local Windows results do not establish Linux compatibility.
+The GitHub workflow runs the full suite and three component repetitions on Windows and Linux with net10.0. It retains TRX results even after failure. Workflow execution requires pushing these changes; local Windows results do not establish Linux compatibility.
 
 ## Interactive terminal smoke checklist
 

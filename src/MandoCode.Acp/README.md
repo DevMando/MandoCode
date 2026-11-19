@@ -5,7 +5,7 @@ over stdio (newline-delimited JSON-RPC 2.0).
 
 - No third-party ACP libraries; DTOs are hand-written against the official JSON schema.
 - `System.Text.Json` source generation (`AcpJsonContext`), no reflection-based serialization.
-- Targets `net8.0` and `net10.0`; depends only on the BCL (no NuGet packages).
+- Targets `net10.0`; depends only on the BCL (no NuGet packages).
 
 ## Schema
 

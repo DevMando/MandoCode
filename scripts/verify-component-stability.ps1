@@ -1,6 +1,6 @@
 param(
     [ValidateRange(1, 100)] [int] $Iterations = 5,
-    [ValidateSet("net10.0", "net8.0")] [string] $Framework = "net10.0",
+    [ValidateSet("net10.0")] [string] $Framework = "net10.0",
     [string] $ResultsDirectory = "",
     [string] $TestFilter = "Category=Component"
 )

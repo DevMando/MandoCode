@@ -34,6 +34,8 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Changed
 
+- **The next release requires .NET 10.** Remove the .NET 8 CLI and ACP library builds, test target, and CI jobs following Microsoft's November 10, 2026 end of support. The NuGet tool package now includes only `net10.0` assets. Install the .NET 10 SDK before updating; previously published versions are unchanged. Update development, test, and release guidance to match.
+
 - Show ACP tool calls as persistent, expandable activity rows with status updates in place, concise summaries, and bounded command/output details. Attach completed diffs to their call and show terminal-output limitations only inside the details. Preserve permission denial and mark unfinished calls honestly when a turn ends or is interrupted. Native tool groups retain their existing behavior.
 - Present successful ACP connections in a compact card with the agent's display name, selected model, current mode and its advertised description, session origin, and commands to change mode or return to the native conversation.
 - Simplify ACP pane headers to the agent's human-readable title, selected model when advertised, and an ACP indicator. Keep adapter versions in diagnostics, and leave the project folder and approval mode out of the header to match native pane presentation.
