@@ -752,6 +752,27 @@ public class WorkspaceRegistryTests
             Assert.Contains("Alt+Shift+N", System.Net.WebUtility.HtmlDecode(root.ToHtmlString()));
         });
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AgentCommandDescriptions_RenderBracketedTextLiterally(bool selected)
+    {
+        await using var services = Services();
+        var rendererType = typeof(RazorConsole.Core.Focus.FocusManager).Assembly.GetType("RazorConsole.Core.Rendering.ConsoleRenderer")!;
+        var instance = ActivatorUtilities.CreateInstance(services, rendererType,
+            new ConsoleAppOptions { RenderingPipeline = RazorConsoleRenderingPipeline.WidgetLayout });
+        await using var renderer = (IAsyncDisposable)instance;
+        var mount = rendererType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(m => m.Name == "MountComponentAsync" && m.IsGenericMethodDefinition);
+        await (Task)mount.MakeGenericMethod(typeof(CommandSuggestionRow)).Invoke(instance,
+            new object[] { ParameterView.FromDictionary(new Dictionary<string, object?> {
+                ["Command"] = "/review", ["Description"] = "[acp-agent] Review [bold]changes[/]", ["Selected"] = selected
+            }), CancellationToken.None })!;
+        var snapshot = rendererType.GetMethod("RefreshSnapshot", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(instance, null)!;
+        var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
+        Assert.Contains("[acp-agent] Review [bold]changes[/]", Paint(services, root));
+    }
+
     private static IEnumerable<VNode> Flatten(VNode node) => new[] { node }.Concat(node.Children.SelectMany(Flatten));
     private static string Paint(IServiceProvider services, VNode node)
     {

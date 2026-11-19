@@ -13,6 +13,7 @@ public class InputStateMachine
 {
     private readonly Dictionary<string, string> _commands;
     private readonly Func<string, bool>? _commandAvailable;
+    private readonly Func<IReadOnlyDictionary<string, string>>? _commandSource;
     private readonly FileAutocompleteProvider? _fileProvider;
 
     // Input state
@@ -43,9 +44,11 @@ public class InputStateMachine
     public InputStateMachine(
         Dictionary<string, string> commands,
         FileAutocompleteProvider? fileProvider,
-        Func<string, bool>? commandAvailable = null)
+        Func<string, bool>? commandAvailable = null,
+        Func<IReadOnlyDictionary<string, string>>? commandSource = null)
     {
         _commands = commands;
+        _commandSource = commandSource;
         _commandAvailable = commandAvailable;
         _fileProvider = fileProvider;
         State.CommandDescriptions = commands;
@@ -172,7 +175,19 @@ public class InputStateMachine
         return input.TrimStart().Substring(1).Trim().ToLowerInvariant();
     }
 
-    public IEnumerable<string> GetAllCommands() => _commands.Keys.Where(cmd => _commandAvailable?.Invoke(cmd) != false);
+    public IEnumerable<string> GetAllCommands()
+    {
+        var commands = _commandSource?.Invoke();
+        if (commands is not null) State.CommandDescriptions = commands;
+        return (commands?.Keys ?? _commands.Keys).Where(cmd => _commandAvailable?.Invoke(cmd) != false);
+    }
+
+    /// <summary>Refresh a visible command popup after its session catalog changes.</summary>
+    public void RefreshCommandSuggestions()
+    {
+        UpdateAutocompleteAfterEdit();
+        SyncState();
+    }
 
     // ─── VDOM Text-Level API ──────────────────────────────────
 

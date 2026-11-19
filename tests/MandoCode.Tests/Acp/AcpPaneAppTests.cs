@@ -275,15 +275,40 @@ public class AcpPaneAppTests
     }
 
     [Fact]
-    public async Task OtherAgentCommands_AreNotForwarded()
+    public async Task UnadvertisedAgentCommands_AreNotForwarded()
     {
         await using var h = Harness.Create();
         h.Runtime.AvailableCommands = [new AvailableCommand { Name = "review", Description = "x" }];
 
-        await h.Run("/review");
+        await h.Run("/unadvertised");
 
         Assert.Empty(h.Runtime.Prompts);
         Assert.Contains("Unknown command", h.Output);
+    }
+
+    [Fact]
+    public async Task AdvertisedCommand_ForwardsOriginalArgumentsAsPrompt()
+    {
+        await using var h = Harness.Create();
+        h.Runtime.AvailableCommands = [new AvailableCommand { Name = "review", Description = "Review changes" }];
+        h.Runtime.Succeed(StopReasons.EndTurn);
+
+        await h.Run("/review Focus on ErrorHandling.cs  --detail");
+
+        Assert.Equal("/review Focus on ErrorHandling.cs  --detail",
+            Assert.IsType<TextContent>(Assert.Single(Assert.Single(h.Runtime.Prompts))).Text);
+    }
+
+    [Fact]
+    public async Task AgentCommand_CannotOverrideNativeClearOrBlockedPlan()
+    {
+        await using var h = Harness.Create();
+        h.Runtime.AvailableCommands = [new AvailableCommand { Name = "clear" }, new AvailableCommand { Name = "plan" }];
+        await h.Run("/clear");
+        await h.Run("/plan fix it");
+        Assert.Equal(1, h.Runtime.NewConversations);
+        Assert.Empty(h.Runtime.Prompts);
+        Assert.Contains("not available", h.Output);
     }
 
     [Theory]

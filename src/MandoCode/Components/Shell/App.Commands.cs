@@ -21,6 +21,13 @@ public partial class App
             return CliCommandResult.Continue;
         }
 
+        if (IsAcpPane && MandoCode.Services.Acp.AcpAgentCommandCatalog.CanForward(_acp, input))
+        {
+            if (HasActiveWork) TuiConsole.WriteLine(BusyMessage);
+            else await ProcessAcpRequestAsync(input);
+            return CliCommandResult.Continue;
+        }
+
         // What an ACP agent pane does not offer is decided in one place (AcpPaneRestrictions).
         if (IsAcpPane && MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command))
         {
