@@ -173,7 +173,15 @@ public partial class App
         }
     }
 
-    private void OnAcpChanged() => UpdateAcpHeader();
+    private void OnAcpChanged()
+    {
+        UpdateAcpHeader();
+        _ = InvokeAsync(() =>
+        {
+            StateMachine.RefreshCommandSuggestions();
+            StateHasChanged();
+        });
+    }
 
     private void UpdateAcpHeader()
     {

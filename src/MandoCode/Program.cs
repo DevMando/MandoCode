@@ -273,7 +273,10 @@ class Program
             return new InputStateMachine(commands, fileProvider,
                 command => SlashCommands.IsAvailable(command, config)
                            && !(acp.IsAcpPane && (MandoCode.Services.Acp.AcpPaneRestrictions.IsCommandBlocked(command)
-                                                  || !MandoCode.Services.Acp.AcpPaneRestrictions.IsListed(command, acp.Runtime))));
+                                                  || !MandoCode.Services.Acp.AcpPaneRestrictions.IsListed(command, acp.Runtime))),
+                commandSource: () => acp.IsAcpPane
+                    ? Services.Acp.AcpAgentCommandCatalog.Describe(acp.Runtime)
+                    : SlashCommands.All);
         });
 
         // Retain rich markdown/tool renderables inside the widget conversation.

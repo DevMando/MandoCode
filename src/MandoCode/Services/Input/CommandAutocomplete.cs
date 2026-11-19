@@ -392,7 +392,8 @@ public static class CommandAutocomplete
         for (int i = start; i < start + visible; i++)
         {
             var cmd = commands[i];
-            var rawDescription = Commands.ContainsKey(cmd) ? Commands[cmd] : "";
+            var descriptions = _stateMachine?.State.CommandDescriptions ?? Commands;
+            var rawDescription = descriptions.TryGetValue(cmd, out var description) ? description : "";
 
             var cmdField = FitVisible(cmd, cmdCol);
             var descField = FitVisible(rawDescription, descCol);

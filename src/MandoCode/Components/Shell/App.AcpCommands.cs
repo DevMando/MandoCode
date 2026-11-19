@@ -83,7 +83,7 @@ public partial class App
             return;
         }
 
-        // The agent's own command, sent as an ordinary prompt; no other agent command is forwarded.
+        // The agent's own command, sent as an ordinary prompt.
         await ProcessAcpRequestAsync("/" + AcpPaneCommands.CompactCommand);
     }
 

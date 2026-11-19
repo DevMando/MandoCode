@@ -184,7 +184,7 @@ A new ACP conversation in the same pane, agent process and folder: if the agent 
 session is closed, then `session/new` runs in the same process. The pane's ACP messages and their transcript are
 cleared, the agent's start mode applies again, and the permissions the agent kept for the old session are gone with
 it. The message says it is the ACP conversation that was cleared; **the native conversation and its history are not
-touched**. While a request is running `/clear` is refused (press Escape first). The agent's own commands are not forwarded.
+touched**. While a request is running `/clear` is refused (press Escape first). MandoCode's `/clear` takes precedence over an agent command with the same name.
 
 ### `/model` and `/compact`
 
@@ -192,7 +192,15 @@ touched**. While a request is running `/clear` is refused (press Escape first). 
   `/model <value or name>` sets it directly (`session/set_config_option`). An agent that offers no model option gets a
   plain message. Nothing is adapter specific.
 - `/compact` sends `/compact` to the agent as a prompt when it announced a `compact` command
-  (`available_commands_update`), otherwise it says the agent does not support it. No other agent command is forwarded.
+  (`available_commands_update`), otherwise it says the agent does not support it.
+
+### Agent-provided commands
+
+Other advertised agent commands appear in `/` suggestions with the connected agent’s display name (for example `[Codex]`, falling back to `[agent]` if no name is available) and are sent as ordinary prompts, including their arguments. Suggestions follow the current session and update when the agent changes its command list. MandoCode commands take precedence on name collisions (except `/compact`, which belongs to the ACP agent in an ACP pane); blocked native commands remain blocked. Unadvertised commands still receive the unknown-command message. The agent decides what each forwarded command does.
+
+For example, if an agent advertises `review`, `/review` appears with its description and an agent-name label such as `[Codex]`.
+Selecting it and entering `/review focus on error handling` sends that text to the connected agent.
+The available names depend on the agent.
 
 ### Changing the folder
 
