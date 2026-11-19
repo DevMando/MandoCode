@@ -53,8 +53,7 @@ public sealed class ToolUpdateService
         if (!Version.TryParse(version, out _) || version.Any(c => !char.IsAsciiDigit(c) && c != '.'))
             throw new ArgumentException("Expected a stable numeric version.", nameof(version));
         Directory.CreateDirectory(directory);
-        // --configfile is supported by both .NET 8 and .NET 10 SDKs. Isolate this
-        // update from project-specific/private feeds; the release was checked on NuGet.
+        // Isolate this update from project-specific/private feeds; the release was checked on NuGet.
         File.WriteAllText(Path.Combine(directory, "NuGet.Config"), "<configuration><packageSources><clear/><add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\"/></packageSources></configuration>");
         LogPath = Path.Combine(directory, "update.log");
         var script = Path.Combine(directory, OperatingSystem.IsWindows() ? "update.ps1" : "update.sh");

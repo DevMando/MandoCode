@@ -24,4 +24,4 @@ The CLI is composed from Razor components grouped by feature under `src/MandoCod
 
 ## Verification
 
-Run the CLI test project on both net10.0 and net8.0. Live-renderer tests cover multiple panes, focus, model menus, agent closure, and workspace switching; boundary tests cover nested panel policies, callback replacement, and verbatim command arguments. Verify the Desktop build when shared engine interfaces change. Interactive terminal testing is still valuable for resize, cursor behavior, and platform-specific clipboard integration.
+Run the CLI test project on net10.0. Live-renderer tests cover multiple panes, focus, model menus, agent closure, and workspace switching; boundary tests cover nested panel policies, callback replacement, and verbatim command arguments. Verify the Desktop build when shared engine interfaces change. Interactive terminal testing is still valuable for resize, cursor behavior, and platform-specific clipboard integration.

@@ -56,10 +56,9 @@ The conversation scrolls above a persistent multiline prompt, with searchable pi
 - **.NET 10 SDK**: [dotnet.microsoft.com/download/dotnet/10.0](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) *(the SDK includes the runtime, so install only the SDK)*
 - **Ollama**: [ollama.com/download](https://ollama.com/download) *(MandoCode walks you through setup on first run)*
 
-> **Already on .NET 8?** You're not blocked. MandoCode ships a .NET 8 build alongside the .NET 10
-> one, and `dotnet tool install -g MandoCode` picks the right one for your machine automatically.
-> That fallback goes away when .NET 8 reaches end of support in November 2026, so grab .NET 10 when
-> it's convenient. Run `mandocode --doctor` to see which runtime you're on.
+> **Next release requires .NET 10.** .NET 8 reached end of support on November 10, 2026,
+> and its fallback build has been removed. Install the .NET 10 SDK before updating.
+> Previously published versions are unchanged. Run `mandocode --doctor` to check your runtime.
 
 ## Install
 
