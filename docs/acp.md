@@ -196,7 +196,7 @@ touched**. While a request is running `/clear` is refused (press Escape first). 
 
 ### Agent-provided commands
 
-Other advertised agent commands appear in `/` suggestions with the connected agent’s display name (for example `[Codex]`, falling back to `[agent]` if no name is available) and are sent as ordinary prompts, including their arguments. Suggestions follow the current session and update when the agent changes its command list. MandoCode commands take precedence on name collisions (except `/compact`, which belongs to the ACP agent in an ACP pane); blocked native commands remain blocked. Unadvertised commands still receive the unknown-command message. The agent decides what each forwarded command does.
+Other advertised agent commands appear in `/` suggestions with the connected agent’s display name (for example `[Codex]`, falling back to `[acp-agent]` if no name is available) and are sent as ordinary prompts, including their arguments. Suggestions follow the current session and update when the agent changes its command list. MandoCode commands take precedence on name collisions (except `/compact`, which belongs to the ACP agent in an ACP pane); blocked native commands remain blocked. Unadvertised commands still receive the unknown-command message. The agent decides what each forwarded command does.
 
 For example, if an agent advertises `review`, `/review` appears with its description and an agent-name label such as `[Codex]`.
 Selecting it and entering `/review focus on error handling` sends that text to the connected agent.

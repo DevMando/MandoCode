@@ -42,8 +42,8 @@ public class AcpAgentCommandCatalogTests
     [Theory]
     [InlineData("Codex", "Codex")]
     [InlineData("Claude", "Claude")]
-    [InlineData(null, "agent")]
-    [InlineData("   ", "agent")]
+    [InlineData(null, "acp-agent")]
+    [InlineData("   ", "acp-agent")]
     public void CommandLabelUsesTheConnectedAgentsDisplayName(string? name, string expected)
     {
         var runtime = new FakeRuntime { AgentDisplayName = name,

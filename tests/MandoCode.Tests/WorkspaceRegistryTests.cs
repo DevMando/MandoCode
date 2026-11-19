@@ -766,11 +766,11 @@ public class WorkspaceRegistryTests
             .Single(m => m.Name == "MountComponentAsync" && m.IsGenericMethodDefinition);
         await (Task)mount.MakeGenericMethod(typeof(CommandSuggestionRow)).Invoke(instance,
             new object[] { ParameterView.FromDictionary(new Dictionary<string, object?> {
-                ["Command"] = "/review", ["Description"] = "[Codex] Review [bold]changes[/]", ["Selected"] = selected
+                ["Command"] = "/review", ["Description"] = "[acp-agent] Review [bold]changes[/]", ["Selected"] = selected
             }), CancellationToken.None })!;
         var snapshot = rendererType.GetMethod("RefreshSnapshot", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(instance, null)!;
         var root = (VNode)snapshot.GetType().GetProperty("Root")!.GetValue(snapshot)!;
-        Assert.Contains("[Codex] Review [bold]changes[/]", Paint(services, root));
+        Assert.Contains("[acp-agent] Review [bold]changes[/]", Paint(services, root));
     }
 
     private static IEnumerable<VNode> Flatten(VNode node) => new[] { node }.Concat(node.Children.SelectMany(Flatten));

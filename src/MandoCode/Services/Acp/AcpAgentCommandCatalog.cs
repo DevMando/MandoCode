@@ -27,7 +27,7 @@ public static class AcpAgentCommandCatalog
     public static IReadOnlyDictionary<string, string> Describe(IAcpAgentRuntime? runtime)
     {
         var descriptions = AcpPaneRestrictions.DescribeCommands(SlashCommands.All).ToDictionary(kv => kv.Key, kv => kv.Value);
-        var label = string.IsNullOrWhiteSpace(runtime?.AgentDisplayName) ? "agent" : runtime.AgentDisplayName.Trim();
+        var label = string.IsNullOrWhiteSpace(runtime?.AgentDisplayName) ? "acp-agent" : runtime.AgentDisplayName.Trim();
         foreach (var command in Forwardable(runtime))
         {
             var key = command.Name.Equals("compact", StringComparison.OrdinalIgnoreCase) ? "/compact" : "/" + command.Name;
