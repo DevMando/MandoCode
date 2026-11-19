@@ -241,23 +241,43 @@ public sealed class AcpTurnDriver
 }
 
 /// <summary>
-/// Builds the prompt blocks for a user message: the text itself plus a <c>resource_link</c> for every <c>@file</c> inside
+/// Builds prompt blocks: text, in-memory clipboard images when supported, and a <c>resource_link</c> for every <c>@file</c> inside
 /// the project. Mentions are read with the same parser as the native pane (<see cref="FileReferenceToken"/>, so
 /// <c>@"src/My Component.cs"</c> works) and judged by the same guard as the agent's own file requests: relative paths
 /// only inside the project folder, no <c>..</c> escapes, no link or junction that leads out.
 /// </summary>
 public static class AcpPromptBuilder
 {
-    public static IReadOnlyList<ContentBlock> Build(string input, string projectRoot)
+    // Base64 expands image payloads by about one third. Keep them below the transport's 32 MiB line budget.
+    public const int MaxTotalImageBytes = 16 * 1024 * 1024;
+
+    public static IReadOnlyList<ContentBlock> Build(string input, string projectRoot,
+        ClipboardImageStore? clipboard = null, bool supportsImages = false)
     {
         var blocks = new List<ContentBlock> { new TextContent(input) };
         var seen = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var guard = new AcpFileSystemHandler(projectRoot);
+        var imageBytes = 0;
 
         foreach (var mention in FileReferenceToken.Paths(input))
         {
             foreach (var candidate in Candidates(mention))
             {
+                if (ClipboardImageStore.IsReference(candidate))
+                {
+                    if (!seen.Add(candidate)) break;
+                    if (!supportsImages) throw new IOException("This ACP agent does not support image prompts. Remove the image reference to send text only.");
+                    if (clipboard is null || !clipboard.TryGet(candidate, out var png))
+                        throw new IOException("This clipboard image is no longer available in this pane. Copy it again and press Alt+V.");
+                    if (png.Length > AIService.MaxImageInputBytes)
+                        throw new IOException("The clipboard image exceeds the 4 MiB attachment limit.");
+                    imageBytes += png.Length;
+                    if (imageBytes > MaxTotalImageBytes)
+                        throw new IOException("Images exceed the 16 MiB total per prompt. Remove some image references and send them separately.");
+                    blocks.Add(new ImageContent { Data = Convert.ToBase64String(png), MimeType = "image/png" });
+                    break;
+                }
+
                 if (TryResolve(guard, projectRoot, candidate) is not { } link || !seen.Add(link.Canonical))
                     continue;
 

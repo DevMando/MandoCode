@@ -17,7 +17,7 @@ internal static class AcpTestHost
         public void StopApplication() { }
     }
 
-    public static ServiceProvider Services(string? projectRoot = null)
+    public static ServiceProvider Services(string? projectRoot = null, Action<IServiceCollection>? configure = null)
     {
         var registrations = new ServiceCollection().AddLogging();
         registrations.AddRazorConsoleServices();
@@ -25,6 +25,7 @@ internal static class AcpTestHost
         Program.RegisterAgentServices(registrations,
             new MandoCodeConfig { EnableThemeCustomization = false, UseAgentNames = false, AllowPersistence = false },
             projectRoot ?? Path.GetTempPath());
+        configure?.Invoke(registrations);
         return registrations.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
     }
 }

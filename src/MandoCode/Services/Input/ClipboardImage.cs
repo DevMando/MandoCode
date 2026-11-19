@@ -96,4 +96,8 @@ public sealed class ClipboardImageStore
         return reference;
     }
     public bool TryGet(string reference, out byte[] png) => _images.TryGetValue(reference, out png!);
+
+    internal static bool IsReference(string reference) => reference.Length == 46 &&
+        reference.StartsWith("clipboard-", StringComparison.Ordinal) && reference.EndsWith(".png", StringComparison.Ordinal) &&
+        Guid.TryParseExact(reference.AsSpan(10, 32), "N", out _);
 }

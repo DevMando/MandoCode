@@ -327,7 +327,8 @@ public partial class App
 
             Spinner.Start("Thinking...");
             var driver = new AcpTurnDriver(new PaneSink(this), AcpEntry, _acpTranscript);
-            var outcome = await driver.RunAsync(_acp, AcpPromptBuilder.Build(input, ProjectRoot.ProjectRoot), token);
+            var outcome = await driver.RunAsync(_acp, AcpPromptBuilder.Build(input, ProjectRoot.ProjectRoot,
+                Pane?.Services.GetService<ClipboardImageStore>(), _acp.PromptCapabilities.Image), token);
 
             _lastRequestError = outcome.Error;
             if (outcome.ReplyText.Length > 0)
