@@ -43,14 +43,15 @@ entry path with `node`. The live validation below was performed on Windows only.
 - `/agent-acp-mode` opens the agent's mode picker, with its descriptions and current selection. For example, Codex can offer Read-only, Workspace access, Auto review, and Full access. These are agent-defined permission and behavior modes, not MandoCode's native approval settings.
 - `/agent-acp-mode read-only` selects an advertised mode directly. Changes keep the conversation and are refused while the pane has active work. The selection applies to this session; it does not rewrite global Codex configuration.
 - `/model` uses the adapter's advertised model configuration. Available models depend on the account and adapter.
-- `/compact` appears when the adapter advertises that command.
+- `/compact` and other agent-provided commands appear when the adapter advertises them.
+- Alt+V attaches a clipboard image when the connected adapter advertises image prompt support.
 - `/clear` starts another ACP conversation and preserves the native MandoCode conversation.
 - `/copy` and `/copy-code` read the ACP conversation's last reply.
 - `/agent-acp stop` returns to the native conversation.
 - Folder changes follow the normal ACP restart and confirmation flow.
 
 Capability handling remains shared with other ACP agents. This setup does not add native
-agent mentions, image paste, context handoff, or the proposed MandoCode MCP bridge.
+agent mentions, context handoff, or the proposed MandoCode MCP bridge.
 The generic ACP restrictions still apply even if Codex itself advertises additional features.
 
 The adapter also supports API-key authentication. Existing `OPENAI_API_KEY` and `CODEX_API_KEY`

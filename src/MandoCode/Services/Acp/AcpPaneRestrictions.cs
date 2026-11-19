@@ -42,8 +42,13 @@ public static class AcpPaneRestrictions
         ["h"] = "/history",
     };
 
-    /// <summary>The Alt+V image paste: an ACP prompt carries text and file links only for now.</summary>
-    public const string ImagePasteReason = "images are not sent to ACP agents yet";
+    /// <summary>Image paste follows the connected agent's advertised prompt capabilities.</summary>
+    public static string? ImagePasteReason(IAcpAgentRuntime? runtime) =>
+        runtime is not { Status: AcpRuntimeStatus.Ready }
+            ? "Wait for the ACP agent to connect before attaching an image."
+            : !runtime.PromptCapabilities.Image
+                ? "This ACP agent does not support image prompts."
+                : null;
 
     /// <summary>The <c>@</c> picker lists files only; MandoCode's agents are not reachable from an external agent.</summary>
     public static bool PickerShowsAgents => false;
@@ -87,8 +92,6 @@ public static class AcpPaneRestrictions
 
     /// <summary>The command an Alt+<paramref name="key"/> shortcut stands for, when that shortcut is blocked here.</summary>
     public static string? BlockedShortcutCommand(string key) => Shortcuts.TryGetValue(key, out var command) ? command : null;
-
-    public static bool IsImagePasteBlocked(string key) => key.Equals("v", StringComparison.OrdinalIgnoreCase);
 
     private static string NameOf(string command) =>
         command.TrimStart('/').Split(' ', 2)[0].ToLowerInvariant();

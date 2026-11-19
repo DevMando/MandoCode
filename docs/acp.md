@@ -161,7 +161,7 @@ One set in the code (`AcpPaneRestrictions`) feeds autocomplete, the command disp
 | `/setup`, `/retry`, `/config`, `/agent-settings` (Alt+S), `/force-skill`, `/plan`, `/plan-resume`, `/plan-discard`, `/context-snap-create`, `/context-snap-import` (Alt+C), `/ollama-*` | The external agent runs the conversation; MandoCode's own model loop, plans and context snapshots do not apply. |
 | `/skills` (Alt+K), `/mcp` (Alt+M), `/mcp tools`, `/mcp-reload` | The agent does not use MandoCode's skills or MCP servers (`mcpServers` is empty). |
 | `/history` (Alt+H) | Saved history restores native agents, and ACP panes are not saved to it. |
-| Alt+V (paste image) | Images are not sent to ACP agents yet. |
+| Alt+V (paste image) | Attach a clipboard image when the connected agent advertises image prompt support. |
 | Agents group of the `@` picker | See above. |
 
 Typing a blocked command, or pressing its shortcut, prints `/<command> is not available in an ACP agent pane: <why>`.
@@ -193,6 +193,18 @@ touched**. While a request is running `/clear` is refused (press Escape first). 
   plain message. Nothing is adapter specific.
 - `/compact` sends `/compact` to the agent as a prompt when it announced a `compact` command
   (`available_commands_update`), otherwise it says the agent does not support it.
+
+### Clipboard image prompts
+
+When a connected agent advertises `promptCapabilities.image`, Alt+V attaches a clipboard image to the prompt.
+Add a message and press Enter to send both together; deleting the image's `@reference` removes the attachment.
+The image is sent as an ACP image block with base64 PNG data and an `image/png` MIME type. It stays in memory
+in that pane and is not written into the project. Existing `@file` references continue to use resource links.
+
+Each image is limited to 4 MiB, with a 16 MiB total image limit per prompt. Duplicate references attach an image
+once. An unavailable or expired clipboard reference produces an error asking you to paste it again. Image support
+is checked at send time as well as paste time. Unsupported agents receive an explanation; Ctrl+V text paste
+continues to work. On Windows, Ctrl+V also attaches clipboard images when the terminal forwards the key.
 
 ### Agent-provided commands
 
@@ -395,7 +407,7 @@ Deviations from the plan
 
 Known limitations
 - Markdown links in an agent's reply are shown as raw text (the transcript renderer does not turn them into links).
-- Images are not sent; `terminal/*` is not offered.
+- Clipboard images require the agent to advertise `promptCapabilities.image`; `terminal/*` is not offered.
 - Agents that cannot resume or load sessions always start fresh, and `/model` needs the agent to expose a model option.
 - Switching the folder (or `--resume`) affects one pane; restarting all ACP panes at once is a separate change.
 - MandoCode's agents are not reachable from an ACP agent, and no context is handed over between the two (a later phase).

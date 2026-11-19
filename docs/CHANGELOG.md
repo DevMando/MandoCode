@@ -18,6 +18,8 @@ All notable changes to MandoCode will be documented in this file.
 
 ### Added
 
+- Paste clipboard images into ACP prompts with Alt+V when the connected agent advertises image support. Send in-memory PNG image blocks with text, retain per-pane attachment references and size limits, and explain unsupported agents or expired images without sending an incomplete prompt.
+
 - ACP agent-provided commands appear in slash-command suggestions with the connected agent’s display name (for example `[Codex]`), descriptions, and input hints. Advertised commands and arguments are forwarded to the current agent as prompts; session updates replace the list, and MandoCode commands retain precedence on name collisions.
 
 - `/agent-acp-mode` opens a picker for the connected agent's permission and behavior modes, including the current selection and agent-provided descriptions. Select a mode directly with `/agent-acp-mode <name>`. Changes preserve the current conversation, apply only to the ACP session, and are refused during active work. Agents without advertised modes receive an explanation.

@@ -2,6 +2,7 @@
 @inject IServiceProvider Services
 @using MandoCode.Models
 @using MandoCode.Services
+@using MandoCode.Services.Acp
 @using Spectre.Console
 @using RazorConsole.Core.Renderables
 @implements IDisposable
@@ -86,9 +87,14 @@
     [Parameter] public Color LabelColor { get; set; } = Color.Green;
     [Parameter] public string Placeholder { get; set; } = "type / for commands, @ for files and agents, : for emojis · Alt+V paste image";
     [Parameter] public bool ChatFeaturesEnabled { get; set; } = true;
-    // An ACP pane offers files only in the @ picker and no image paste (AcpPaneRestrictions).
+    // An ACP pane offers files in the @ picker; clipboard images depend on the agent capabilities.
     private bool IsAcpPane => Pane?.Runtime == AgentRuntime.Acp;
-    private string EffectivePlaceholder => IsAcpPane && ChatFeaturesEnabled ? "type / for commands, @ for files, : for emojis" : Placeholder;
+    private IAcpAgentRuntime? AcpRuntime =>
+        ((Pane?.Services ?? Services).GetService(typeof(AcpRuntimeHolder)) as AcpRuntimeHolder)?.Runtime;
+    private string? ImageBlockReason => IsAcpPane ? AcpPaneRestrictions.ImagePasteReason(AcpRuntime) : null;
+    private string EffectivePlaceholder => IsAcpPane && ChatFeaturesEnabled
+        ? "type / for commands, @ for files, : for emojis" + (ImageBlockReason is null ? " · Alt+V paste image" : "")
+        : Placeholder;
     [Parameter] public bool AllowEmpty { get; set; }
     [Parameter] public string? PersistenceKey { get; set; }
     [Inject] private RazorConsole.Core.Focus.FocusManager Focus { get; set; } = default!;
@@ -114,6 +120,12 @@
     {
         if (Disabled || !ChatFeaturesEnabled || ModelPicker is not null || Pane is { Active: false }) return true;
         var services = Pane?.Services ?? Services;
+        bool BlockImage()
+        {
+            if (ImageBlockReason is not { } reason) return false;
+            _clipboardStatus = reason; _clipboardError = true; StateHasChanged(); return true;
+        }
+        if (explicitRequest && BlockImage()) return true;
         var reader = services.GetService(typeof(IClipboardImageReader)) as IClipboardImageReader ?? new WindowsClipboardImageReader();
         // Linux terminal paste remains native; an injected reader can provide clipboard support on any OS.
         if (!explicitRequest && !OperatingSystem.IsWindows() && reader is WindowsClipboardImageReader) return false;
@@ -130,6 +142,7 @@
                 if (text is not null) { _composer.Buffer.Insert(PromptPaste.Normalize(text)); _composer.Refresh(); _emojiOpen = false; _clipboardStatus = ""; return true; }
                 _clipboardStatus = explicitRequest ? "No Image in the clipboard. Copy an image, then press Alt+V" : ""; return explicitRequest;
             }
+            if (BlockImage()) return true;
             var images = services.GetService(typeof(ClipboardImageStore)) as ClipboardImageStore ?? _fallbackClipboard;
             _composer.InsertFileReference(images.Add(png));
             _clipboardStatus = "Clipboard image attached · Add a message, then Enter to send · Delete its @reference to remove";
@@ -277,11 +290,6 @@
         if (key.Key is not ("ArrowUp" or "UpArrow" or "ArrowDown" or "DownArrow")) _cursorNavigation.Reset();
         if (key.Key.Equals("v", StringComparison.OrdinalIgnoreCase) && (key.CtrlKey || key.AltKey) && ChatFeaturesEnabled && ModelPicker is null)
         {
-            if (IsAcpPane)
-            {
-                _clipboardStatus = $"Image paste is unavailable in an ACP pane: {MandoCode.Services.Acp.AcpPaneRestrictions.ImagePasteReason}.";
-                _clipboardError = true; StateHasChanged(); return true;
-            }
             return await PasteClipboardImage(key.AltKey);
         }
         if (AgentKeyboardRouter.TryHandleGlobal(Pane, key)) return true;

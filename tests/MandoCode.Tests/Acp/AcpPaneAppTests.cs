@@ -299,6 +299,30 @@ public class AcpPaneAppTests
             Assert.IsType<TextContent>(Assert.Single(Assert.Single(h.Runtime.Prompts))).Text);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ClipboardImageIsDeliveredOnlyWhenCurrentAgentSupportsIt(bool supported)
+    {
+        await using var h = Harness.Create();
+        var png = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10, 1 };
+        var reference = h.Pane.Services.GetRequiredService<ClipboardImageStore>().Add(png);
+        h.Runtime.PromptCapabilities.Image = supported;
+        h.Runtime.Succeed(StopReasons.EndTurn);
+        await (Task)typeof(App).GetMethod("ProcessAcpRequestAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(h.App, ["Describe @" + reference])!;
+        if (supported)
+        {
+            var image = Assert.Single(Assert.Single(h.Runtime.Prompts).OfType<ImageContent>());
+            Assert.Equal(png, Convert.FromBase64String(image.Data));
+        }
+        else
+        {
+            Assert.Empty(h.Runtime.Prompts);
+            Assert.Contains("does not support image prompts", h.Output);
+        }
+    }
+
     [Fact]
     public async Task AgentCommand_CannotOverrideNativeClearOrBlockedPlan()
     {
